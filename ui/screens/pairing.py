@@ -1,43 +1,61 @@
 """
-Pairing Screen - First Boot Cloud Connection Setup
+Pairing Screen - First Boot Cloud Connection Setup (2026 Redesign)
 
 Shown automatically when the device is NOT paired with the cloud.
 The technician enters ONLY the 6-digit pairing code (from admin panel).
 The cloud URL is fixed in config/settings.py.
 
-After successful pairing, navigates to the home screen.
+Design:
+- Clean, centered layout with large pairing code input
+- Prominent CONNECT button (64dp tall, teal)
+- OFFLINE MODE as secondary option
+- Status messages with color-coded feedback
+- Device info in a subtle footer
 """
 
 from kivy.uix.screenmanager import Screen
+from kivy.uix.boxlayout import BoxLayout
+from kivy.uix.widget import Widget
+from kivy.uix.label import Label
 from kivy.lang import Builder
 from kivy.app import App
 from kivy.clock import Clock
 from kivy.properties import StringProperty
+from kivy.graphics import Color, RoundedRectangle, Rectangle
 
 from config import settings
 
+
 Builder.load_string('''
+#:import DS ui.app.DS
+
 <PairingScreen>:
     BoxLayout:
         orientation: 'vertical'
+        canvas.before:
+            Color:
+                rgba: 0.06, 0.07, 0.10, 1
+            Rectangle:
+                pos: self.pos
+                size: self.size
 
         # ---- STATUS BAR ----
         StatusBar:
             Label:
                 text: 'SMARTLOCKER'
-                font_size: '20sp'
+                font_size: '18sp'
                 bold: True
-                color: 1, 1, 1, 1
+                color: 0.96, 0.97, 0.98, 1
                 size_hint_x: 0.5
                 halign: 'left'
                 text_size: self.size
                 valign: 'middle'
 
             Label:
-                text: 'FIRST BOOT SETUP'
-                font_size: '15sp'
+                text: 'FIRST BOOT'
+                font_size: '13sp'
                 bold: True
-                color: 0.96, 0.63, 0.38, 1
+                color: 0.98, 0.65, 0.25, 1
                 size_hint_x: 0.5
                 halign: 'right'
                 text_size: self.size
@@ -46,80 +64,84 @@ Builder.load_string('''
         # ---- MAIN CONTENT ----
         BoxLayout:
             orientation: 'vertical'
-            padding: [60, 25, 60, 20]
-            spacing: 10
+            padding: [50, 15, 50, 12]
+            spacing: 8
 
-            # Title
+            # Title area
             Label:
                 text: 'Cloud Pairing'
-                font_size: '28sp'
+                font_size: '26sp'
                 bold: True
-                color: 1, 1, 1, 1
+                color: 0.96, 0.97, 0.98, 1
                 size_hint_y: None
-                height: '45dp'
+                height: '38dp'
                 halign: 'center'
                 text_size: self.size
 
             Label:
                 text: 'Enter the 6-digit code from the admin panel'
-                font_size: '15sp'
-                color: 0.55, 0.60, 0.68, 1
+                font_size: '14sp'
+                color: 0.38, 0.42, 0.50, 1
                 size_hint_y: None
-                height: '25dp'
+                height: '22dp'
                 halign: 'center'
                 text_size: self.size
-
-            Widget:
-                size_hint_y: None
-                height: '15dp'
-
-            # Big pairing code input
-            Label:
-                text: 'PAIRING CODE'
-                font_size: '13sp'
-                bold: True
-                color: 0.45, 0.50, 0.58, 1
-                size_hint_y: None
-                height: '20dp'
-                halign: 'center'
-                text_size: self.size
-
-            TextInput:
-                id: pairing_code_input
-                hint_text: '_ _ _ _ _ _'
-                font_size: '40sp'
-                multiline: False
-                size_hint_y: None
-                height: '70dp'
-                background_color: 0.09, 0.14, 0.21, 1
-                foreground_color: 0.18, 0.77, 0.71, 1
-                cursor_color: 0.18, 0.77, 0.71, 1
-                hint_text_color: 0.25, 0.30, 0.38, 1
-                padding: [12, 10]
-                halign: 'center'
-                max_chars: 6
 
             Widget:
                 size_hint_y: None
                 height: '10dp'
 
+            # Pairing code label
+            Label:
+                text: 'PAIRING CODE'
+                font_size: '11sp'
+                bold: True
+                color: 0.38, 0.42, 0.50, 1
+                size_hint_y: None
+                height: '16dp'
+                halign: 'center'
+                text_size: self.size
+
+            # Big pairing code input - centered, large for fat fingers
+            BoxLayout:
+                size_hint_y: None
+                height: '68dp'
+                padding: [60, 0]
+                TextInput:
+                    id: pairing_code_input
+                    hint_text: '_ _ _ _ _ _'
+                    font_size: '36sp'
+                    multiline: False
+                    size_hint_y: None
+                    height: '68dp'
+                    background_color: 0.07, 0.09, 0.13, 1
+                    foreground_color: 0.00, 0.82, 0.73, 1
+                    cursor_color: 0.00, 0.82, 0.73, 1
+                    hint_text_color: 0.20, 0.22, 0.28, 1
+                    padding: [12, 12]
+                    halign: 'center'
+
+            Widget:
+                size_hint_y: None
+                height: '6dp'
+
             # Status message
             Label:
                 id: status_label
                 text: root.status_text
-                font_size: '15sp'
+                font_size: '14sp'
                 color: root._status_color
                 size_hint_y: None
-                height: '28dp'
+                height: '24dp'
                 halign: 'center'
                 text_size: self.size
                 markup: True
 
             # Buttons row
             BoxLayout:
-                spacing: 15
+                spacing: 12
                 size_hint_y: None
-                height: '60dp'
+                height: '64dp'
 
                 Button:
                     id: pair_button
@@ -127,26 +149,44 @@ Builder.load_string('''
                     font_size: '20sp'
                     bold: True
                     background_normal: ''
-                    background_color: 0.18, 0.77, 0.71, 1
-                    color: 1, 1, 1, 1
+                    background_color: 0, 0, 0, 0
+                    color: 0.02, 0.05, 0.08, 1
                     on_release: root.do_pairing()
+                    canvas.before:
+                        Color:
+                            rgba: 0.00, 0.82, 0.73, 1
+                        RoundedRectangle:
+                            pos: self.pos
+                            size: self.size
+                            radius: [12]
 
                 Button:
                     text: 'OFFLINE MODE'
-                    font_size: '16sp'
+                    font_size: '15sp'
+                    bold: True
                     background_normal: ''
-                    background_color: 0.20, 0.25, 0.35, 1
-                    color: 0.6, 0.65, 0.72, 1
+                    background_color: 0, 0, 0, 0
+                    color: 0.60, 0.64, 0.72, 1
                     size_hint_x: 0.4
                     on_release: root.skip_pairing()
+                    canvas.before:
+                        Color:
+                            rgba: 0.13, 0.15, 0.20, 1
+                        RoundedRectangle:
+                            pos: self.pos
+                            size: self.size
+                            radius: [12]
+
+            Widget:
+                size_hint_y: 1
 
             # Info footer
             Label:
                 text: root.device_info_text
-                font_size: '12sp'
-                color: 0.35, 0.40, 0.48, 1
+                font_size: '10sp'
+                color: 0.25, 0.28, 0.34, 1
                 size_hint_y: None
-                height: '20dp'
+                height: '16dp'
                 halign: 'center'
                 text_size: self.size
 ''')
@@ -155,14 +195,14 @@ Builder.load_string('''
 class PairingScreen(Screen):
     status_text = StringProperty('')
     device_info_text = StringProperty('')
-    _status_color = [0.55, 0.60, 0.68, 1]
+    _status_color = [0.38, 0.42, 0.50, 1]
 
     def on_enter(self):
         """Called when screen is displayed."""
         app = App.get_running_app()
         self.device_info_text = f"Device: {app.device_id}  |  Cloud: {settings.CLOUD_URL}"
         self.status_text = ''
-        self._status_color = [0.55, 0.60, 0.68, 1]
+        self._status_color = [0.38, 0.42, 0.50, 1]
         # Reset button state
         self.ids.pair_button.text = 'CONNECT'
         self.ids.pair_button.disabled = False
@@ -282,12 +322,12 @@ class PairingScreen(Screen):
         """Update the status label with colored text."""
         self.status_text = text
         if error:
-            self._status_color = [0.90, 0.22, 0.27, 1]  # Red
+            self._status_color = [0.93, 0.27, 0.32, 1]   # Red
         elif success:
-            self._status_color = [0.18, 0.77, 0.71, 1]  # Green
+            self._status_color = [0.20, 0.82, 0.48, 1]    # Green
         elif info:
-            self._status_color = [0.37, 0.66, 0.83, 1]  # Blue
+            self._status_color = [0.33, 0.58, 0.85, 1]    # Blue
         else:
-            self._status_color = [0.55, 0.60, 0.68, 1]  # Gray
+            self._status_color = [0.38, 0.42, 0.50, 1]    # Gray
         # Force UI refresh
         self.ids.status_label.color = self._status_color

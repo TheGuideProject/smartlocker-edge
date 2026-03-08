@@ -96,13 +96,23 @@ class MixingEngine:
     # ============================================================
 
     def start_session(self, recipe_id: str, user_name: str = "",
-                      job_id: Optional[str] = None) -> bool:
-        """Start a new mixing session. Returns False if already in session."""
+                      job_id: Optional[str] = None,
+                      fallback_recipe: Optional[MixingRecipe] = None) -> bool:
+        """Start a new mixing session. Returns False if already in session.
+
+        If recipe_id is not found in loaded recipes, uses fallback_recipe
+        if provided (e.g. generated on-the-fly from maintenance chart data).
+        """
         if self.session and self.session.state != MixingState.IDLE:
             logger.warning("Cannot start session: already active")
             return False
 
         recipe = self._recipes.get(recipe_id)
+        if not recipe and fallback_recipe:
+            # Use the fallback recipe and register it for this session
+            recipe = fallback_recipe
+            self._recipes[recipe_id] = recipe
+            logger.info(f"Using fallback recipe for '{recipe_id}': {recipe.name}")
         if not recipe:
             logger.error(f"Unknown recipe: {recipe_id}")
             return False

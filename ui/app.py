@@ -6,6 +6,34 @@ Main application class that:
 2. Creates the screen manager with all UI screens
 3. Runs the sensor polling loop via Kivy Clock
 4. Shows pairing screen on first boot if not paired to cloud
+
+Design System 2026 - "Maritime Tech"
+=====================================
+A modern dark industrial design with gradient accents, rounded cards,
+generous touch targets (64dp minimum for gloved hands), and high-contrast
+text optimized for a 4.3" touchscreen (800x480) in variable lighting.
+
+Color Palette:
+  BG_DARK        = (0.06, 0.07, 0.10, 1)   # Near-black carbon
+  BG_CARD        = (0.10, 0.12, 0.16, 1)   # Card surface
+  BG_CARD_HOVER  = (0.13, 0.15, 0.20, 1)   # Card pressed/hover
+  BG_INPUT       = (0.07, 0.09, 0.13, 1)   # Input field bg
+
+  PRIMARY        = (0.00, 0.82, 0.73, 1)    # Bright teal/cyan
+  PRIMARY_DIM    = (0.00, 0.55, 0.49, 1)    # Teal pressed state
+  SECONDARY      = (0.33, 0.58, 0.85, 1)   # Ocean blue
+  ACCENT         = (0.98, 0.65, 0.25, 1)    # Warm amber
+
+  SUCCESS        = (0.20, 0.82, 0.48, 1)    # Green
+  WARNING        = (0.98, 0.76, 0.22, 1)    # Yellow
+  DANGER         = (0.93, 0.27, 0.32, 1)    # Red
+  INFO           = (0.33, 0.58, 0.85, 1)    # Blue
+
+  TEXT_PRIMARY   = (0.96, 0.97, 0.98, 1)    # Almost white
+  TEXT_SECONDARY = (0.60, 0.64, 0.72, 1)    # Muted gray
+  TEXT_MUTED     = (0.38, 0.42, 0.50, 1)    # Dim text
+
+  DIVIDER        = (0.18, 0.20, 0.26, 1)   # Subtle line
 """
 
 import os
@@ -14,87 +42,266 @@ import time
 import logging
 
 from kivy.app import App
-from kivy.uix.screenmanager import ScreenManager, SlideTransition
+from kivy.uix.screenmanager import ScreenManager, FadeTransition
 from kivy.clock import Clock
 from kivy.lang import Builder
 from kivy.core.window import Window
 
 # ============================================================
+# DESIGN TOKENS (importable by screens)
+# ============================================================
+class DS:
+    """Design System tokens - centralized styling constants."""
+
+    # --- Background colors ---
+    BG_DARK       = (0.06, 0.07, 0.10, 1)
+    BG_CARD       = (0.10, 0.12, 0.16, 1)
+    BG_CARD_HOVER = (0.13, 0.15, 0.20, 1)
+    BG_INPUT      = (0.07, 0.09, 0.13, 1)
+    BG_STATUS_BAR = (0.05, 0.06, 0.09, 1)
+
+    # --- Primary palette ---
+    PRIMARY       = (0.00, 0.82, 0.73, 1)
+    PRIMARY_DIM   = (0.00, 0.55, 0.49, 1)
+    PRIMARY_GLOW  = (0.00, 0.82, 0.73, 0.15)
+    SECONDARY     = (0.33, 0.58, 0.85, 1)
+    SECONDARY_DIM = (0.20, 0.38, 0.60, 1)
+    ACCENT        = (0.98, 0.65, 0.25, 1)
+    ACCENT_DIM    = (0.70, 0.46, 0.16, 1)
+
+    # --- Semantic colors ---
+    SUCCESS       = (0.20, 0.82, 0.48, 1)
+    WARNING       = (0.98, 0.76, 0.22, 1)
+    DANGER        = (0.93, 0.27, 0.32, 1)
+    DANGER_DIM    = (0.60, 0.18, 0.22, 1)
+    INFO          = (0.33, 0.58, 0.85, 1)
+
+    # --- Text colors ---
+    TEXT_PRIMARY   = (0.96, 0.97, 0.98, 1)
+    TEXT_SECONDARY = (0.60, 0.64, 0.72, 1)
+    TEXT_MUTED     = (0.38, 0.42, 0.50, 1)
+
+    # --- Dividers / borders ---
+    DIVIDER        = (0.18, 0.20, 0.26, 1)
+    BORDER_SUBTLE  = (0.14, 0.16, 0.22, 1)
+
+    # --- Slot status colors ---
+    SLOT_OCCUPIED  = (0.00, 0.82, 0.73, 1)
+    SLOT_EMPTY     = (0.30, 0.33, 0.38, 1)
+    SLOT_REMOVED   = (0.98, 0.65, 0.25, 1)
+    SLOT_IN_USE    = (0.98, 0.76, 0.22, 1)
+    SLOT_ANOMALY   = (0.93, 0.27, 0.32, 1)
+
+    # --- Font sizes (sp) ---
+    FONT_HERO   = '40sp'     # Giant numbers (weight display, timers)
+    FONT_H1     = '26sp'     # Screen title / big buttons
+    FONT_H2     = '20sp'     # Section headers
+    FONT_H3     = '17sp'     # Card titles
+    FONT_BODY   = '15sp'     # Normal text
+    FONT_SMALL  = '13sp'     # Secondary info, labels
+    FONT_TINY   = '11sp'     # Status bar, micro-text
+
+    # --- Spacing (dp) ---
+    PAD_SCREEN  = 12         # Screen edge padding
+    PAD_CARD    = 10         # Inside card padding
+    SPACING     = 8          # Default spacing between elements
+    RADIUS      = 12         # Card corner radius
+
+    # --- Touch targets (dp) ---
+    BTN_HEIGHT_LG  = 64      # Large primary buttons (glove-friendly)
+    BTN_HEIGHT_MD  = 54      # Medium buttons
+    BTN_HEIGHT_SM  = 42      # Small / secondary buttons
+    STATUS_BAR_H   = 44      # Status bar height
+
+    # --- Helpers ---
+    @staticmethod
+    def rgba_str(color):
+        """Convert tuple to KV rgba string."""
+        return f'{color[0]}, {color[1]}, {color[2]}, {color[3]}'
+
+    @staticmethod
+    def hex_markup(color):
+        """Convert rgba tuple to markup hex color string (6 chars)."""
+        r = int(color[0] * 255)
+        g = int(color[1] * 255)
+        b = int(color[2] * 255)
+        return f'{r:02x}{g:02x}{b:02x}'
+
+
+# ============================================================
 # GLOBAL KV STYLES
 # ============================================================
 Builder.load_string('''
+#:import DS ui.app.DS
 #:import utils kivy.utils
 
+# --------------------------------------------------------
+# STATUS BAR - slim, dark, always visible at top
+# --------------------------------------------------------
 <StatusBar@BoxLayout>:
     size_hint_y: None
-    height: '48dp'
-    padding: [15, 5]
-    spacing: 10
+    height: '44dp'
+    padding: [12, 4]
+    spacing: 8
     canvas.before:
         Color:
-            rgba: 0.07, 0.13, 0.22, 1
+            rgba: 0.05, 0.06, 0.09, 1
         Rectangle:
             pos: self.pos
             size: self.size
+        # Bottom accent line (subtle gradient feel)
         Color:
-            rgba: 0.18, 0.77, 0.71, 0.4
+            rgba: 0.00, 0.82, 0.73, 0.25
         Rectangle:
             pos: self.x, self.y
             size: self.width, 1
 
-<NavButton@Button>:
-    background_normal: ''
-    background_color: 0.11, 0.29, 0.40, 1
-    color: 1, 1, 1, 1
-    font_size: '20sp'
-    bold: True
-    size_hint_y: None
-    height: '70dp'
-    markup: True
-
-<GreenButton@Button>:
-    background_normal: ''
-    background_color: 0.18, 0.77, 0.71, 1
-    color: 1, 1, 1, 1
-    font_size: '18sp'
-    bold: True
-    size_hint_y: None
-    height: '60dp'
-
-<DangerButton@Button>:
-    background_normal: ''
-    background_color: 0.90, 0.22, 0.27, 1
-    color: 1, 1, 1, 1
-    font_size: '18sp'
-    bold: True
-    size_hint_y: None
-    height: '60dp'
-
-<SecondaryButton@Button>:
-    background_normal: ''
-    background_color: 0.20, 0.25, 0.35, 1
-    color: 0.8, 0.85, 0.92, 1
-    font_size: '16sp'
-    size_hint_y: None
-    height: '55dp'
-
-<ScreenTitle@Label>:
+# --------------------------------------------------------
+# BACK BUTTON - consistent across screens
+# --------------------------------------------------------
+<BackButton@Button>:
+    text: '<'
     font_size: '22sp'
     bold: True
-    color: 1, 1, 1, 1
+    size_hint: (None, None)
+    size: ('50dp', '36dp')
+    background_normal: ''
+    background_color: 0.13, 0.15, 0.20, 1
+    color: 0.60, 0.64, 0.72, 1
+
+# --------------------------------------------------------
+# PRIMARY BUTTON - teal, high contrast, large
+# --------------------------------------------------------
+<PrimaryButton@Button>:
+    background_normal: ''
+    background_color: 0.00, 0.82, 0.73, 1
+    color: 0.02, 0.05, 0.08, 1
+    font_size: '18sp'
+    bold: True
     size_hint_y: None
-    height: '40dp'
-    halign: 'left'
+    height: '64dp'
+    markup: True
+
+# --------------------------------------------------------
+# SECONDARY BUTTON - blue outline feel
+# --------------------------------------------------------
+<SecondaryButton@Button>:
+    background_normal: ''
+    background_color: 0.13, 0.15, 0.20, 1
+    color: 0.60, 0.64, 0.72, 1
+    font_size: '16sp'
+    bold: True
+    size_hint_y: None
+    height: '54dp'
+    markup: True
+
+# --------------------------------------------------------
+# DANGER BUTTON - red/coral
+# --------------------------------------------------------
+<DangerButton@Button>:
+    background_normal: ''
+    background_color: 0.93, 0.27, 0.32, 1
+    color: 1, 1, 1, 1
+    font_size: '16sp'
+    bold: True
+    size_hint_y: None
+    height: '54dp'
+
+# --------------------------------------------------------
+# ACCENT BUTTON - amber/orange
+# --------------------------------------------------------
+<AccentButton@Button>:
+    background_normal: ''
+    background_color: 0.98, 0.65, 0.25, 1
+    color: 0.06, 0.07, 0.10, 1
+    font_size: '16sp'
+    bold: True
+    size_hint_y: None
+    height: '54dp'
+
+# --------------------------------------------------------
+# GHOST BUTTON - transparent with text only
+# --------------------------------------------------------
+<GhostButton@Button>:
+    background_normal: ''
+    background_color: 0, 0, 0, 0
+    color: 0.60, 0.64, 0.72, 1
+    font_size: '15sp'
+    size_hint_y: None
+    height: '44dp'
+    markup: True
+
+# --------------------------------------------------------
+# NAV BUTTON - for home screen navigation tiles
+# --------------------------------------------------------
+<NavButton@Button>:
+    background_normal: ''
+    background_color: 0.10, 0.12, 0.16, 1
+    color: 1, 1, 1, 1
+    font_size: '17sp'
+    bold: True
+    size_hint_y: None
+    height: '64dp'
+    markup: True
+
+# --------------------------------------------------------
+# SIM BUTTON - test/simulation mode (amber tint)
+# --------------------------------------------------------
+<SimButton@Button>:
+    background_normal: ''
+    background_color: 0.30, 0.22, 0.08, 1
+    color: 0.98, 0.76, 0.22, 1
+    font_size: '15sp'
+    bold: True
+    size_hint_y: None
+    height: '54dp'
+    markup: True
+
+# --------------------------------------------------------
+# SCREEN TITLE
+# --------------------------------------------------------
+<ScreenTitle@Label>:
+    font_size: '20sp'
+    bold: True
+    color: 0.96, 0.97, 0.98, 1
+    size_hint_y: None
+    height: '36dp'
+    halign: 'center'
     text_size: self.size
     valign: 'middle'
+    markup: True
 
+# --------------------------------------------------------
+# INFO LABEL - secondary readable text
+# --------------------------------------------------------
 <InfoLabel@Label>:
-    font_size: '16sp'
-    color: 0.75, 0.80, 0.88, 1
+    font_size: '15sp'
+    color: 0.60, 0.64, 0.72, 1
     halign: 'left'
     text_size: self.size
     valign: 'top'
     markup: True
+
+# --------------------------------------------------------
+# CARD LAYOUT - rounded dark card container
+# --------------------------------------------------------
+<Card@BoxLayout>:
+    orientation: 'vertical'
+    padding: [10, 10]
+    spacing: 6
+    canvas.before:
+        Color:
+            rgba: 0.10, 0.12, 0.16, 1
+        RoundedRectangle:
+            pos: self.pos
+            size: self.size
+            radius: [12]
+
+# --------------------------------------------------------
+# GREEN BUTTON (compat alias for PrimaryButton)
+# --------------------------------------------------------
+<GreenButton@PrimaryButton>:
+    pass
 ''')
 
 
@@ -105,13 +312,14 @@ class SmartLockerApp(App):
 
     def build(self):
         """Initialize system and create UI."""
-        Window.clearcolor = (0.05, 0.11, 0.16, 1)  # Dark navy background
+        # Dark carbon background
+        Window.clearcolor = DS.BG_DARK
 
         # Initialize system components
         self._init_system()
 
-        # Create screen manager
-        self.sm = ScreenManager(transition=SlideTransition(duration=0.2))
+        # Create screen manager with a smooth fade transition
+        self.sm = ScreenManager(transition=FadeTransition(duration=0.15))
 
         # Import and add screens
         from ui.screens.home import HomeScreen
@@ -135,16 +343,16 @@ class SmartLockerApp(App):
 
         # Decide initial screen based on pairing status
         if self.cloud.is_paired:
-            # Already paired → go straight to home
+            # Already paired -> go straight to home
             self.sm.current = 'home'
 
             # Start background sync
             self.sync_engine.start()
-            print("  Cloud: PAIRED — sync started")
+            print("  Cloud: PAIRED -- sync started")
         else:
-            # Not paired → show pairing screen
+            # Not paired -> show pairing screen
             self.sm.current = 'pairing'
-            print("  Cloud: NOT PAIRED — showing pairing screen")
+            print("  Cloud: NOT PAIRED -- showing pairing screen")
 
         # Start sensor polling loop (every 500ms)
         Clock.schedule_interval(self._poll_sensors, 0.5)
@@ -292,7 +500,7 @@ class SmartLockerApp(App):
         for p in demo_products:
             self.db.upsert_product(p)
 
-        # --- RFID Tag → Product Mapping ---
+        # --- RFID Tag -> Product Mapping ---
         self.db.upsert_rfid_tag('TAG-BASE-001', 'PROD-001', can_size_ml=20000)
         self.db.upsert_rfid_tag('TAG-HARD-001', 'PROD-002', can_size_ml=5000)
         self.db.upsert_rfid_tag('TAG-THIN-001', 'PROD-003', can_size_ml=5000)

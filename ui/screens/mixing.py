@@ -29,7 +29,7 @@ from kivy.app import App
 from kivy.clock import Clock
 from kivy.graphics import Color, Rectangle, RoundedRectangle
 
-from core.models import MixingState
+from core.models import MixingState, MixingRecipe
 
 
 Builder.load_string('''
@@ -851,11 +851,18 @@ class MixingScreen(Screen):
         if ctx and ctx.get('recipe_id'):
             recipe_id = ctx['recipe_id']
 
+        # Build a fallback recipe from maintenance chart data if no recipe
+        # exists in the DB (e.g. cloud returned 0 recipes but has chart data)
+        fallback_recipe = None
+        if recipe_id not in app.mixing._recipes:
+            fallback_recipe = self._build_fallback_recipe(ctx, recipe_id)
+
         app.inventory.active_session = True
         success = app.mixing.start_session(
             recipe_id=recipe_id,
             user_name='Crew Member',
             job_id='JOB-001',
+            fallback_recipe=fallback_recipe,
         )
         if success:
             # If Paint Now provided a target weight, auto-select that amount
@@ -863,6 +870,101 @@ class MixingScreen(Screen):
                 target_g = ctx['target_base_grams']
                 app.mixing.show_recipe(base_amount_g=float(target_g))
             self._last_state = None  # Force UI rebuild
+        else:
+            # Show error to user instead of failing silently
+            self._show_start_error()
+
+    def _build_fallback_recipe(self, ctx, recipe_id):
+        """Build a MixingRecipe on-the-fly from maintenance chart product data.
+
+        Uses the paint_now_context and maintenance chart to find ratio info
+        for the selected product. Falls back to sensible defaults (4:1 ratio)
+        if no chart data is available.
+        """
+        app = App.get_running_app()
+        product_name = ''
+        if ctx:
+            product_name = ctx.get('product_name', '')
+
+        # Try to find ratio from maintenance chart products
+        ratio_base = 4.0
+        ratio_hardener = 1.0
+        coverage = 6.0
+        chart = app.maintenance_chart
+
+        if chart and product_name:
+            for p in chart.get('products', []):
+                if p.get('name', '').upper() == product_name.upper():
+                    ratio_base = float(p.get('base_ratio', 4))
+                    ratio_hardener = float(p.get('hardener_ratio', 1))
+                    coverage = p.get('coverage_m2_per_liter', 6.0)
+                    break
+
+        recipe_name = f'{product_name} System' if product_name else 'Generic Mix'
+
+        return MixingRecipe(
+            recipe_id=recipe_id,
+            name=recipe_name,
+            base_product_id='UNKNOWN-BASE',
+            hardener_product_id='UNKNOWN-HARDENER',
+            ratio_base=ratio_base,
+            ratio_hardener=ratio_hardener,
+            tolerance_pct=5.0,
+            pot_life_minutes=480,
+        )
+
+    def _show_start_error(self):
+        """Show a visible error message when mixing session fails to start."""
+        content = self.ids.content_area
+        content.clear_widgets()
+
+        content.add_widget(Widget(size_hint_y=0.15))
+
+        title = Label(
+            text='Cannot Start Mixing',
+            font_size='24sp', bold=True,
+            color=(0.90, 0.22, 0.27, 1),
+            size_hint_y=None, height=45,
+        )
+        content.add_widget(title)
+
+        msg = Label(
+            text='Failed to start mixing session.\n'
+                 'A session may already be active, or\n'
+                 'required data is missing.\n\n'
+                 'Try going back and starting again.',
+            font_size='16sp',
+            color=(0.75, 0.80, 0.88, 1),
+            size_hint_y=None, height=120,
+            halign='center', text_size=(700, None),
+        )
+        content.add_widget(msg)
+
+        content.add_widget(Widget(size_hint_y=0.05))
+
+        retry_btn = Button(
+            text='RETRY',
+            font_size='20sp', bold=True,
+            background_normal='',
+            background_color=(0.18, 0.77, 0.71, 1),
+            size_hint=(0.5, None), height=60,
+            pos_hint={'center_x': 0.5},
+        )
+        retry_btn.bind(on_release=lambda x: self._start_mix())
+        content.add_widget(retry_btn)
+
+        home_btn = Button(
+            text='GO HOME',
+            font_size='18sp', bold=True,
+            background_normal='',
+            background_color=(0.20, 0.25, 0.35, 1),
+            size_hint=(0.5, None), height=55,
+            pos_hint={'center_x': 0.5},
+        )
+        home_btn.bind(on_release=lambda x: App.get_running_app().go_back())
+        content.add_widget(home_btn)
+
+        content.add_widget(Widget(size_hint_y=1))
 
     def _select_amount(self, grams):
         """Crew selected base amount."""

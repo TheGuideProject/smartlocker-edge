@@ -1,31 +1,64 @@
 """
-Home Screen - Main Navigation Hub
+Home Screen - Main Navigation Hub (2026 Redesign)
 
-Redesigned layout:
-- PAINT NOW! as primary big button (top half)
-- CHECK CHART, INVENTORY, SETTINGS as secondary row
-- Info bar at bottom with slot counts and cloud status
+Layout (800x480):
++--------------------------------------------------+
+| SMARTLOCKER           TEST MODE           14:35   |  44dp status bar
++--------------------------------------------------+
+|                                                    |
+|  +--------------------------------------------+  |
+|  |            PAINT NOW!                       |  |  Hero button 180dp
+|  |        Select area & start mixing           |  |  with gradient BG
+|  +--------------------------------------------+  |
+|                                                    |
+|  +----------+  +----------+  +----------+        |
+|  | CHECK    |  | INVENTORY|  | SETTINGS |        |  Nav tiles 110dp
+|  | CHART    |  |          |  |          |        |
+|  +----------+  +----------+  +----------+        |
+|                                                    |
+|  Slots: 3/4  |  Cloud: ONLINE  |  Mix: IDLE      |  24dp info strip
++--------------------------------------------------+
+
+Design principles:
+- Hero "PAINT NOW!" button dominates upper area with teal glow
+- Navigation tiles are large, rounded cards with icons (emoji)
+- Bottom info strip provides at-a-glance system status
+- High contrast, minimal text, game-like feel
 """
 
 from kivy.uix.screenmanager import Screen
+from kivy.uix.boxlayout import BoxLayout
+from kivy.uix.widget import Widget
+from kivy.uix.label import Label
+from kivy.uix.button import Button
 from kivy.lang import Builder
 from kivy.app import App
 from kivy.clock import Clock
+from kivy.graphics import Color, RoundedRectangle, Rectangle, Line
 import time
 
+
 Builder.load_string('''
+#:import DS ui.app.DS
+
 <HomeScreen>:
     BoxLayout:
         orientation: 'vertical'
+        canvas.before:
+            Color:
+                rgba: 0.06, 0.07, 0.10, 1
+            Rectangle:
+                pos: self.pos
+                size: self.size
 
         # ---- STATUS BAR ----
         StatusBar:
             Label:
                 text: 'SMARTLOCKER'
-                font_size: '20sp'
+                font_size: '18sp'
                 bold: True
-                color: 1, 1, 1, 1
-                size_hint_x: 0.4
+                color: 0.96, 0.97, 0.98, 1
+                size_hint_x: 0.35
                 halign: 'left'
                 text_size: self.size
                 valign: 'middle'
@@ -33,10 +66,10 @@ Builder.load_string('''
             Label:
                 id: mode_label
                 text: 'TEST MODE'
-                font_size: '15sp'
+                font_size: '13sp'
                 bold: True
-                color: 0.18, 0.77, 0.71, 1
-                size_hint_x: 0.3
+                color: 0.00, 0.82, 0.73, 1
+                size_hint_x: 0.35
                 halign: 'center'
                 text_size: self.size
                 valign: 'middle'
@@ -45,8 +78,9 @@ Builder.load_string('''
                 id: clock_label
                 text: '00:00'
                 font_size: '15sp'
-                color: 0.55, 0.60, 0.68, 1
-                size_hint_x: 0.3
+                bold: True
+                color: 0.60, 0.64, 0.72, 1
+                size_hint_x: 0.30
                 halign: 'right'
                 text_size: self.size
                 valign: 'middle'
@@ -54,79 +88,169 @@ Builder.load_string('''
         # ---- MAIN CONTENT ----
         BoxLayout:
             orientation: 'vertical'
-            padding: [15, 10, 15, 10]
-            spacing: 10
+            padding: [12, 8, 12, 6]
+            spacing: 8
 
-            # ===== PAINT NOW! - BIG PRIMARY BUTTON =====
+            # ===== HERO PAINT NOW BUTTON =====
             Button:
+                id: hero_btn
                 text: 'PAINT NOW!'
-                font_size: '36sp'
+                font_size: '34sp'
                 bold: True
                 background_normal: ''
-                background_color: 0.18, 0.77, 0.71, 1
-                color: 1, 1, 1, 1
-                size_hint_y: 0.45
-                on_release: app.go_screen('paint_now')
-
-            # Subtitle for Paint Now
-            Label:
-                text: 'Select area, calculate paint, start mixing'
-                font_size: '13sp'
-                color: 0.45, 0.55, 0.60, 1
+                background_color: 0, 0, 0, 0
+                color: 0.02, 0.05, 0.08, 1
                 size_hint_y: None
-                height: '20dp'
+                height: '160dp'
+                on_release: app.go_screen('paint_now')
+                canvas.before:
+                    # Teal gradient fill
+                    Color:
+                        rgba: 0.00, 0.72, 0.63, 1
+                    RoundedRectangle:
+                        pos: self.pos
+                        size: self.size
+                        radius: [16]
+                    # Lighter top edge for gradient feel
+                    Color:
+                        rgba: 0.00, 0.92, 0.82, 0.35
+                    RoundedRectangle:
+                        pos: self.x + 2, self.y + self.height * 0.55
+                        size: self.width - 4, self.height * 0.44
+                        radius: [16, 16, 0, 0]
+                    # Subtle glow border
+                    Color:
+                        rgba: 0.00, 0.92, 0.80, 0.3
+                    Line:
+                        rounded_rectangle: self.x, self.y, self.width, self.height, 16
+                        width: 1.2
+
+            # Subtitle under hero
+            Label:
+                text: 'Select area from chart, calculate paint, start mixing'
+                font_size: '12sp'
+                color: 0.38, 0.42, 0.50, 1
+                size_hint_y: None
+                height: '18dp'
                 halign: 'center'
                 text_size: self.size
 
-            # ===== SECONDARY BUTTONS ROW =====
+            Widget:
+                size_hint_y: None
+                height: '4dp'
+
+            # ===== NAVIGATION TILES ROW =====
             BoxLayout:
                 spacing: 10
-                size_hint_y: 0.30
+                size_hint_y: None
+                height: '120dp'
 
-                # CHECK CHART
+                # -- CHECK CHART tile --
                 Button:
                     text: 'CHECK\\nCHART'
-                    font_size: '18sp'
+                    font_size: '16sp'
                     bold: True
                     background_normal: ''
-                    background_color: 0.11, 0.29, 0.40, 1
-                    color: 1, 1, 1, 1
+                    background_color: 0, 0, 0, 0
+                    color: 0.96, 0.97, 0.98, 1
                     on_release: app.go_screen('chart_viewer')
                     markup: True
+                    halign: 'center'
+                    valign: 'center'
+                    text_size: self.size
+                    canvas.before:
+                        Color:
+                            rgba: 0.10, 0.12, 0.16, 1
+                        RoundedRectangle:
+                            pos: self.pos
+                            size: self.size
+                            radius: [12]
+                        # Top accent bar
+                        Color:
+                            rgba: 0.33, 0.58, 0.85, 1
+                        RoundedRectangle:
+                            pos: self.x + 4, self.y + self.height - 4
+                            size: self.width - 8, 3
+                            radius: [2]
 
-                # INVENTORY
+                # -- INVENTORY tile --
                 Button:
-                    text: 'INVENTORY\\nView'
-                    font_size: '18sp'
+                    text: 'INVENTORY'
+                    font_size: '16sp'
                     bold: True
                     background_normal: ''
-                    background_color: 0.10, 0.30, 0.22, 1
-                    color: 1, 1, 1, 1
+                    background_color: 0, 0, 0, 0
+                    color: 0.96, 0.97, 0.98, 1
                     on_release: app.go_screen('inventory')
                     markup: True
+                    halign: 'center'
+                    valign: 'center'
+                    text_size: self.size
+                    canvas.before:
+                        Color:
+                            rgba: 0.10, 0.12, 0.16, 1
+                        RoundedRectangle:
+                            pos: self.pos
+                            size: self.size
+                            radius: [12]
+                        # Top accent bar
+                        Color:
+                            rgba: 0.20, 0.82, 0.48, 1
+                        RoundedRectangle:
+                            pos: self.x + 4, self.y + self.height - 4
+                            size: self.width - 8, 3
+                            radius: [2]
 
-                # SETTINGS
+                # -- SETTINGS tile --
                 Button:
-                    text: 'SETTINGS\\n& Info'
-                    font_size: '18sp'
+                    text: 'SETTINGS'
+                    font_size: '16sp'
                     bold: True
                     background_normal: ''
-                    background_color: 0.20, 0.20, 0.30, 1
-                    color: 0.8, 0.82, 0.88, 1
+                    background_color: 0, 0, 0, 0
+                    color: 0.96, 0.97, 0.98, 1
                     on_release: app.go_screen('settings')
                     markup: True
+                    halign: 'center'
+                    valign: 'center'
+                    text_size: self.size
+                    canvas.before:
+                        Color:
+                            rgba: 0.10, 0.12, 0.16, 1
+                        RoundedRectangle:
+                            pos: self.pos
+                            size: self.size
+                            radius: [12]
+                        # Top accent bar
+                        Color:
+                            rgba: 0.60, 0.64, 0.72, 1
+                        RoundedRectangle:
+                            pos: self.x + 4, self.y + self.height - 4
+                            size: self.width - 8, 3
+                            radius: [2]
 
-            # ===== BOTTOM INFO BAR =====
+            # ===== SPACER =====
+            Widget:
+                size_hint_y: 1
+
+            # ===== BOTTOM STATUS STRIP =====
             BoxLayout:
                 size_hint_y: None
-                height: '30dp'
-                padding: [5, 0]
+                height: '24dp'
+                padding: [8, 0]
+                canvas.before:
+                    Color:
+                        rgba: 0.08, 0.09, 0.12, 1
+                    RoundedRectangle:
+                        pos: self.pos
+                        size: self.size
+                        radius: [6]
 
                 Label:
                     id: slot_summary
                     text: ''
-                    font_size: '13sp'
-                    color: 0.45, 0.50, 0.58, 1
+                    font_size: '11sp'
+                    color: 0.38, 0.42, 0.50, 1
                     halign: 'center'
                     text_size: self.size
                     valign: 'middle'
@@ -146,10 +270,10 @@ class HomeScreen(Screen):
         # Update mode label
         self.ids.mode_label.text = f"{mode_text} MODE"
         if cloud_status == "CLOUD":
-            self.ids.mode_label.color = (0.37, 0.66, 0.83, 1)  # Blue
+            self.ids.mode_label.color = (0.33, 0.58, 0.85, 1)  # Blue
             self.ids.mode_label.text = f"{mode_text} | CLOUD"
         else:
-            self.ids.mode_label.color = (0.18, 0.77, 0.71, 1)  # Teal
+            self.ids.mode_label.color = (0.00, 0.82, 0.73, 1)  # Teal
 
         # Update clock every second
         self._clock_event = Clock.schedule_interval(self._update_clock, 1.0)
@@ -176,12 +300,17 @@ class HomeScreen(Screen):
         total = len(slots)
         events = len(app.event_log)
 
-        cloud = "[color=5fa8d3]CLOUD[/color]" if app.cloud.is_paired else "[color=8d99ae]OFFLINE[/color]"
-        summary = f"Slots: {occupied}/{total}  |  Events: {events}  |  {cloud}"
+        # Cloud status indicator
+        if app.cloud.is_paired:
+            cloud = "[color=54a5d4]CLOUD[/color]"
+        else:
+            cloud = "[color=616980]OFFLINE[/color]"
+
+        summary = f"Slots: {occupied}/{total}   |   Events: {events}   |   {cloud}"
 
         # Check if mixing is active
         if app.mixing.is_active:
             state = app.mixing.current_state.value.replace('_', ' ').upper()
-            summary += f"  |  [color=2ec4b6]MIX: {state}[/color]"
+            summary += f"   |   [color=00d1ba]MIX: {state}[/color]"
 
         self.ids.slot_summary.text = summary
