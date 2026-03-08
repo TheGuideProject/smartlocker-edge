@@ -10,9 +10,33 @@ All business logic (mixing, inventory, events) is IDENTICAL in both modes.
 """
 
 # ============================================================
-# SYSTEM MODE
+# SYSTEM MODE (legacy - kept for backward compatibility)
 # ============================================================
-MODE = "test"  # "test" or "live"
+# NOTE: MODE is now derived from the per-sensor DRIVER_* settings below.
+# If you set MODE explicitly to "test", ALL drivers will be forced to "fake".
+# If you set MODE to "live", ALL drivers will be forced to "real".
+# Set MODE to "auto" (default) to use the per-sensor DRIVER_* settings.
+MODE = "auto"
+
+# ============================================================
+# DRIVER MODE - Per-sensor configuration
+# ============================================================
+# Each sensor can be independently set to "fake" or "real".
+# This allows progressive hardware integration & testing:
+#   - Start with all "fake" (pure software testing on any laptop)
+#   - Switch one sensor to "real" when it arrives (e.g., RFID first)
+#   - Keep the others as "fake" until you're ready
+#   - When all are "real", the system runs in full LIVE mode
+#
+# The overall system mode is determined automatically:
+#   all fake  -> "test" mode
+#   mixed     -> "hybrid" mode
+#   all real  -> "live" mode
+# ============================================================
+DRIVER_RFID = "fake"       # "fake" or "real" - PN532 NFC/RFID reader via I2C
+DRIVER_WEIGHT = "fake"     # "fake" or "real" - Arduino Nano HX711 bridge via Serial
+DRIVER_LED = "fake"        # "fake" or "real" - WS2812B LED strip via SPI
+DRIVER_BUZZER = "fake"     # "fake" or "real" - GPIO PWM buzzer
 
 # ============================================================
 # DEVICE IDENTITY
@@ -75,22 +99,44 @@ FONT_SIZE_LABEL = 18
 FONT_SIZE_HEADING = 24
 
 # ============================================================
-# HARDWARE PINS (LIVE mode only, ignored in TEST mode)
+# REAL HARDWARE CONFIG (used when a DRIVER_* is set to "real")
 # ============================================================
-RFID_I2C_BUS = 1
-RFID_I2C_ADDRESSES = [0x24]     # PN532 default I2C address
 
-ARDUINO_SERIAL_PORT = "/dev/ttyUSB0"  # Arduino Nano USB serial
-ARDUINO_BAUD_RATE = 115200
+# RFID - PN532 via I2C
+# Library: adafruit-circuitpython-pn532 (recommended) or pn532pi
+RFID_I2C_BUS = 1                 # I2C bus number (usually 1 on RPi)
+RFID_I2C_ADDRESS = 0x24          # Default PN532 I2C address
+RFID_I2C_ADDRESSES = [0x24]     # List for multi-reader setups
 
+# Weight - Arduino Nano via Serial (HX711 bridge)
+# Protocol: Arduino sends JSON lines: {"channel":"shelf1","grams":1234.5,"stable":true}
+WEIGHT_SERIAL_PORT = "/dev/ttyUSB0"   # Arduino serial port
+WEIGHT_SERIAL_BAUD = 115200           # Baud rate
+ARDUINO_SERIAL_PORT = "/dev/ttyUSB0"  # Legacy alias (backward compat)
+ARDUINO_BAUD_RATE = 115200            # Legacy alias (backward compat)
+
+# LED Strip - WS2812B via SPI/PWM
+# Library: rpi_ws281x (recommended) or adafruit-circuitpython-neopixel
 LED_SPI_BUS = 0
 LED_SPI_DEVICE = 0
-LED_COUNT = 12                   # Total LEDs in strip
+LED_COUNT = 12                   # Total LEDs in strip (one per slot)
+LED_GPIO_PIN = 18                # Data pin (must support PWM: 12, 13, 18, 19)
+LED_BRIGHTNESS = 128             # 0-255 brightness level
 
-BUZZER_GPIO_PIN = 18             # PWM-capable GPIO pin
+# Buzzer - GPIO PWM
+# Library: RPi.GPIO or gpiozero
+BUZZER_GPIO_PIN = 18             # BCM pin number (PWM-capable)
 
 # ============================================================
 # LOGGING
 # ============================================================
-LOG_LEVEL = "DEBUG" if MODE == "test" else "INFO"
+# In auto mode, use DEBUG if all drivers are fake, otherwise INFO
+if MODE == "test":
+    LOG_LEVEL = "DEBUG"
+elif MODE == "live":
+    LOG_LEVEL = "INFO"
+else:
+    # auto mode: DEBUG when all fake, INFO when any real
+    _any_real = any(d == "real" for d in [DRIVER_RFID, DRIVER_WEIGHT, DRIVER_LED, DRIVER_BUZZER])
+    LOG_LEVEL = "INFO" if _any_real else "DEBUG"
 LOG_DIR = "logs"

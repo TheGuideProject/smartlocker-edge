@@ -360,7 +360,10 @@ class SmartLockerApp(App):
 
     def _init_system(self):
         """Initialize all system components (same as main.py)."""
-        from config.settings import MODE, DEVICE_ID
+        from config.settings import (
+            MODE, DEVICE_ID,
+            DRIVER_RFID, DRIVER_WEIGHT, DRIVER_LED, DRIVER_BUZZER,
+        )
         from config.logging_config import setup_logging
         from core.event_bus import EventBus
         from core.event_types import Event, EventType
@@ -372,9 +375,40 @@ class SmartLockerApp(App):
         from sync.cloud_client import CloudClient
         from sync.sync_engine import SyncEngine
 
-        self.mode = MODE
         self.device_id = DEVICE_ID
         self.logger = setup_logging()
+
+        # Resolve per-sensor driver selections
+        # Legacy MODE support: "test" forces all fake, "live" forces all real
+        # "auto" (default) uses individual DRIVER_* settings
+        if MODE == "test":
+            drv_rfid = drv_weight = drv_led = drv_buzzer = "fake"
+        elif MODE == "live":
+            drv_rfid = drv_weight = drv_led = drv_buzzer = "real"
+        else:
+            drv_rfid = DRIVER_RFID
+            drv_weight = DRIVER_WEIGHT
+            drv_led = DRIVER_LED
+            drv_buzzer = DRIVER_BUZZER
+
+        # Determine overall system mode
+        drivers = [drv_rfid, drv_weight, drv_led, drv_buzzer]
+        any_real = any(d == "real" for d in drivers)
+        all_real = all(d == "real" for d in drivers)
+        if all_real:
+            self.mode = "live"
+        elif any_real:
+            self.mode = "hybrid"
+        else:
+            self.mode = "test"
+
+        # Store per-driver status for UI display
+        self.driver_status = {
+            'rfid': drv_rfid,
+            'weight': drv_weight,
+            'led': drv_led,
+            'buzzer': drv_buzzer,
+        }
 
         # Create event bus
         self.event_bus = EventBus()
@@ -396,21 +430,37 @@ class SmartLockerApp(App):
 
         self.event_bus.subscribe_all(_log_event)
 
-        # Create drivers based on mode
-        if self.mode == 'test':
-            from hal.fake.fake_rfid import FakeRFIDDriver
-            from hal.fake.fake_weight import FakeWeightDriver
-            from hal.fake.fake_led import FakeLEDDriver
-            from hal.fake.fake_buzzer import FakeBuzzerDriver
-
-            self.rfid = FakeRFIDDriver()
-            self.weight = FakeWeightDriver(channels=['shelf1', 'mixing_scale'])
-            self.led = FakeLEDDriver()
-            self.buzzer = FakeBuzzerDriver()
+        # ---- RFID Driver ----
+        if drv_rfid == "real":
+            from hal.real.real_rfid import RealRFIDDriver
+            self.rfid = RealRFIDDriver()
         else:
-            raise NotImplementedError(
-                "LIVE mode not yet implemented. Use TEST mode for now."
-            )
+            from hal.fake.fake_rfid import FakeRFIDDriver
+            self.rfid = FakeRFIDDriver()
+
+        # ---- Weight Driver ----
+        if drv_weight == "real":
+            from hal.real.real_weight import RealWeightDriver
+            self.weight = RealWeightDriver()
+        else:
+            from hal.fake.fake_weight import FakeWeightDriver
+            self.weight = FakeWeightDriver(channels=['shelf1', 'mixing_scale'])
+
+        # ---- LED Driver ----
+        if drv_led == "real":
+            from hal.real.real_led import RealLEDDriver
+            self.led = RealLEDDriver()
+        else:
+            from hal.fake.fake_led import FakeLEDDriver
+            self.led = FakeLEDDriver()
+
+        # ---- Buzzer Driver ----
+        if drv_buzzer == "real":
+            from hal.real.real_buzzer import RealBuzzerDriver
+            self.buzzer = RealBuzzerDriver()
+        else:
+            from hal.fake.fake_buzzer import FakeBuzzerDriver
+            self.buzzer = FakeBuzzerDriver()
 
         # Create engines
         self.inventory = InventoryEngine(
@@ -443,7 +493,16 @@ class SmartLockerApp(App):
         if not self.inventory.initialize():
             print("WARNING: Failed to initialize sensors!")
 
-        print(f"  SmartLocker UI initialized in {self.mode.upper()} mode")
+        # Log mode and driver status
+        mode_str = self.mode.upper()
+        if self.mode == 'hybrid':
+            real_drivers = [k for k, v in self.driver_status.items() if v == 'real']
+            fake_drivers = [k for k, v in self.driver_status.items() if v == 'fake']
+            print(f"  SmartLocker UI initialized in {mode_str} mode")
+            print(f"    Real: {', '.join(real_drivers)}")
+            print(f"    Fake: {', '.join(fake_drivers)}")
+        else:
+            print(f"  SmartLocker UI initialized in {mode_str} mode")
 
     def _setup_demo_data(self):
         """Create demo products, RFID tag mapping, recipe, and chart for TEST mode."""

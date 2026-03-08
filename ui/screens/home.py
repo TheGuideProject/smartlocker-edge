@@ -231,6 +231,15 @@ Builder.load_string('''
             Widget:
                 size_hint_y: 1
 
+            # ===== ACTIVE MIX INDICATOR (dynamic) =====
+            BoxLayout:
+                id: mix_indicator
+                orientation: 'horizontal'
+                size_hint_y: None
+                height: '0dp'
+                padding: [0, 0]
+                spacing: 0
+
             # ===== BOTTOM STATUS STRIP =====
             BoxLayout:
                 size_hint_y: None
@@ -291,7 +300,7 @@ class HomeScreen(Screen):
         self._update_slot_summary()
 
     def _update_slot_summary(self):
-        """Show a brief slot status summary."""
+        """Show a brief slot status summary and active mix indicator."""
         app = App.get_running_app()
         slots = app.inventory.get_all_slots()
         occupied = sum(1 for s in slots if s.status.value == 'occupied')
@@ -312,3 +321,89 @@ class HomeScreen(Screen):
             summary += f"   |   [color=00d1ba]MIX: {state}[/color]"
 
         self.ids.slot_summary.text = summary
+
+        # Update active mix indicator bar
+        self._update_mix_indicator(app)
+
+    def _update_mix_indicator(self, app):
+        """Show or hide the active mix indicator bar."""
+        indicator = self.ids.mix_indicator
+        is_active = app.mixing.is_active
+
+        if is_active:
+            session = app.mixing.session
+            state_text = app.mixing.current_state.value.replace('_', ' ').upper()
+
+            # Get recipe name
+            recipe_name = ''
+            if session and session.recipe_id:
+                recipes = getattr(app.mixing, '_recipes', {})
+                recipe = recipes.get(session.recipe_id)
+                if recipe:
+                    recipe_name = recipe.name
+
+            display_name = recipe_name or 'Active Session'
+
+            # Rebuild indicator content only if needed
+            if indicator.height < 40:
+                indicator.clear_widgets()
+                indicator.height = 48
+                indicator.padding = [8, 4]
+                indicator.spacing = 8
+
+                # Background canvas
+                indicator.canvas.before.clear()
+                with indicator.canvas.before:
+                    Color(0.80, 0.60, 0.00, 0.20)
+                    self._mix_indicator_bg = RoundedRectangle(
+                        pos=indicator.pos,
+                        size=indicator.size,
+                        radius=[8],
+                    )
+                indicator.bind(
+                    pos=lambda inst, val: setattr(self._mix_indicator_bg, 'pos', val),
+                    size=lambda inst, val: setattr(self._mix_indicator_bg, 'size', val),
+                )
+
+                # Status label
+                self._mix_indicator_label = Label(
+                    text='',
+                    font_size='13sp',
+                    bold=True,
+                    color=(0.95, 0.80, 0.20, 1),
+                    size_hint_x=0.7,
+                    halign='left',
+                    valign='middle',
+                    markup=True,
+                )
+                self._mix_indicator_label.bind(
+                    size=self._mix_indicator_label.setter('text_size'),
+                )
+                indicator.add_widget(self._mix_indicator_label)
+
+                # Resume button
+                resume_btn = Button(
+                    text='RESUME',
+                    font_size='14sp',
+                    bold=True,
+                    background_normal='',
+                    background_color=(0.80, 0.60, 0.00, 1),
+                    color=(0.02, 0.05, 0.08, 1),
+                    size_hint_x=0.3,
+                )
+                resume_btn.bind(on_release=lambda x: app.go_screen('mixing'))
+                indicator.add_widget(resume_btn)
+
+            # Update the label text every refresh
+            if hasattr(self, '_mix_indicator_label'):
+                self._mix_indicator_label.text = (
+                    f'MIX ACTIVE: [b]{display_name}[/b]  -  {state_text}'
+                )
+        else:
+            # Hide indicator when no active mix
+            if indicator.height > 0:
+                indicator.clear_widgets()
+                indicator.canvas.before.clear()
+                indicator.height = 0
+                indicator.padding = [0, 0]
+                indicator.spacing = 0

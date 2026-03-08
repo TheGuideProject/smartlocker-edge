@@ -82,6 +82,10 @@ class MixingScreen(Screen):
         super().__init__(**kwargs)
         self._refresh_event = None
         self._last_state = None
+        # Thinner weighing sub-state
+        self._thinner_weighing = False
+        self._thinner_method = None
+        self._thinner_target_g = 0.0
 
     def on_enter(self):
         """Start refreshing when screen is shown."""
@@ -112,11 +116,16 @@ class MixingScreen(Screen):
         # Only rebuild UI if state changed
         if state != self._last_state:
             self._last_state = state
+            # Reset thinner weighing sub-state when leaving ADD_THINNER
+            if state != MixingState.ADD_THINNER:
+                self._thinner_weighing = False
             self._build_state_ui(state)
 
         # Live updates for weight states
         if state in (MixingState.WEIGH_BASE, MixingState.WEIGH_HARDENER):
             self._update_weight_display()
+        elif state == MixingState.ADD_THINNER and self._thinner_weighing:
+            self._update_thinner_weight_display()
         elif state == MixingState.POT_LIFE_ACTIVE:
             self._update_pot_life_display()
 
@@ -145,7 +154,10 @@ class MixingScreen(Screen):
         elif state == MixingState.CONFIRM_MIX:
             self._build_confirm_mix_ui(content)
         elif state == MixingState.ADD_THINNER:
-            self._build_thinner_ui(content)
+            if self._thinner_weighing:
+                self._build_thinner_weigh_ui(content, is_test)
+            else:
+                self._build_thinner_ui(content)
         elif state == MixingState.POT_LIFE_ACTIVE:
             self._build_pot_life_ui(content)
         elif state == MixingState.RETURN_CANS:
@@ -553,7 +565,16 @@ class MixingScreen(Screen):
         content.add_widget(Widget(size_hint_y=1))
 
     def _build_thinner_ui(self, content):
-        """ADD_THINNER: Application method selection."""
+        """ADD_THINNER: Application method selection with thinner percentages from recipe."""
+        app = App.get_running_app()
+        session = app.mixing.session
+        recipe = app.mixing._recipes.get(session.recipe_id) if session else None
+
+        # Get thinner percentages from recipe (defaults if no recipe)
+        pct_brush = recipe.thinner_pct_brush if recipe else 5.0
+        pct_roller = recipe.thinner_pct_roller if recipe else 5.0
+        pct_spray = recipe.thinner_pct_spray if recipe else 10.0
+
         content.add_widget(Widget(size_hint_y=0.1))
 
         title = Label(
@@ -575,17 +596,21 @@ class MixingScreen(Screen):
 
         content.add_widget(Widget(size_hint_y=0.05))
 
-        # Method buttons
-        for method, pct in [('Brush (5%)', 'brush'), ('Roller (5%)', 'roller'), ('Spray (10%)', 'spray')]:
+        # Method buttons with actual percentages from recipe
+        for label, method_key, pct in [
+            (f'Brush ({pct_brush:.0f}%)', 'brush', pct_brush),
+            (f'Roller ({pct_roller:.0f}%)', 'roller', pct_roller),
+            (f'Spray ({pct_spray:.0f}%)', 'spray', pct_spray),
+        ]:
             btn = Button(
-                text=method,
+                text=label,
                 font_size='18sp', bold=True,
                 background_normal='',
                 background_color=(0.11, 0.29, 0.40, 1),
                 size_hint=(0.7, None), height=55,
                 pos_hint={'center_x': 0.5},
             )
-            btn.bind(on_release=lambda x, m=pct: self._add_thinner(m))
+            btn.bind(on_release=lambda x, m=method_key: self._add_thinner(m))
             content.add_widget(btn)
             content.add_widget(Widget(size_hint_y=None, height=5))
 
@@ -602,6 +627,94 @@ class MixingScreen(Screen):
         skip_btn.bind(on_release=lambda x: self._skip_thinner())
         content.add_widget(skip_btn)
 
+        content.add_widget(Widget(size_hint_y=1))
+
+    def _build_thinner_weigh_ui(self, content, is_test):
+        """ADD_THINNER (weighing sub-state): Live weight gauge for thinner pouring."""
+        target = self._thinner_target_g
+
+        title = Label(
+            text='Pour THINNER',
+            font_size='24sp', bold=True,
+            color=(0.91, 0.77, 0.42, 1),
+            size_hint_y=None, height=40,
+        )
+        content.add_widget(title)
+
+        # Target info
+        target_label = Label(
+            text=f'Target: {target:.0f} g',
+            font_size='18sp',
+            color=(0.65, 0.70, 0.78, 1),
+            size_hint_y=None, height=30,
+        )
+        content.add_widget(target_label)
+
+        # Weight display (large number)
+        self._thinner_weight_value_label = Label(
+            text='0 g',
+            font_size='48sp', bold=True,
+            color=(1, 1, 1, 1),
+            size_hint_y=None, height=70,
+        )
+        content.add_widget(self._thinner_weight_value_label)
+
+        # Progress bar
+        self._thinner_weight_progress = ProgressBar(
+            max=100, value=0,
+            size_hint_y=None, height=25,
+        )
+        content.add_widget(self._thinner_weight_progress)
+
+        # Zone label
+        self._thinner_weight_zone_label = Label(
+            text='Pouring...',
+            font_size='16sp', bold=True,
+            color=(0.55, 0.60, 0.68, 1),
+            size_hint_y=None, height=30,
+        )
+        content.add_widget(self._thinner_weight_zone_label)
+
+        content.add_widget(Widget(size_hint_y=0.05))
+
+        # Action buttons row
+        btn_row = BoxLayout(
+            spacing=10, size_hint_y=None, height=60,
+            padding=[20, 0],
+        )
+
+        if is_test:
+            # Simulate thinner weight in TEST mode
+            sim_btn = Button(
+                text=f'SIM: Set {target:.0f}g',
+                font_size='16sp', bold=True,
+                background_normal='',
+                background_color=(0.40, 0.28, 0.10, 1),
+            )
+            sim_btn.bind(on_release=lambda x: self._simulate_thinner_pour())
+            btn_row.add_widget(sim_btn)
+
+        # Back button to change method
+        back_btn = Button(
+            text='BACK',
+            font_size='16sp', bold=True,
+            background_normal='',
+            background_color=(0.20, 0.25, 0.35, 1),
+        )
+        back_btn.bind(on_release=lambda x: self._cancel_thinner_weigh())
+        btn_row.add_widget(back_btn)
+
+        # Confirm button
+        confirm_btn = Button(
+            text='CONFIRM WEIGHT',
+            font_size='16sp', bold=True,
+            background_normal='',
+            background_color=(0.18, 0.77, 0.71, 1),
+        )
+        confirm_btn.bind(on_release=lambda x: self._confirm_thinner_weight())
+        btn_row.add_widget(confirm_btn)
+
+        content.add_widget(btn_row)
         content.add_widget(Widget(size_hint_y=1))
 
     def _build_pot_life_ui(self, content):
@@ -797,6 +910,60 @@ class MixingScreen(Screen):
             self._weight_zone_label.text = f'OVER TARGET ({progress:.0f}%)'
             self._weight_zone_label.color = (0.90, 0.22, 0.27, 1)
             self._weight_value_label.color = (0.90, 0.22, 0.27, 1)
+
+    def _update_thinner_weight_display(self):
+        """Update live weight gauge during thinner pouring."""
+        app = App.get_running_app()
+        session = app.mixing.session
+
+        if not session or not hasattr(self, '_thinner_weight_value_label'):
+            return
+
+        reading = app.weight.read_weight('mixing_scale')
+        if not reading:
+            return
+
+        # Thinner weight = current total - (base + hardener)
+        base_plus_hardener = session.base_weight_actual_g + session.hardener_weight_actual_g
+        current_thinner = max(0.0, reading.grams - base_plus_hardener)
+        target = self._thinner_target_g
+
+        progress_pct = (current_thinner / target * 100) if target > 0 else 0
+        tolerance = 5.0  # 5% tolerance for thinner
+
+        # Determine zone
+        if progress_pct < 90:
+            zone = 'pouring'
+        elif progress_pct < (100 - tolerance):
+            zone = 'approaching'
+        elif progress_pct <= (100 + tolerance):
+            zone = 'in_range'
+        else:
+            zone = 'over'
+
+        # Update weight number
+        self._thinner_weight_value_label.text = f'{current_thinner:.0f} g'
+
+        # Update progress bar
+        self._thinner_weight_progress.value = min(progress_pct, 100)
+
+        # Update zone label and colors
+        if zone == 'pouring':
+            self._thinner_weight_zone_label.text = f'Pouring... ({progress_pct:.0f}%)'
+            self._thinner_weight_zone_label.color = (0.55, 0.60, 0.68, 1)
+            self._thinner_weight_value_label.color = (1, 1, 1, 1)
+        elif zone == 'approaching':
+            self._thinner_weight_zone_label.text = f'Almost there! ({progress_pct:.0f}%)'
+            self._thinner_weight_zone_label.color = (0.91, 0.77, 0.42, 1)
+            self._thinner_weight_value_label.color = (0.91, 0.77, 0.42, 1)
+        elif zone == 'in_range':
+            self._thinner_weight_zone_label.text = f'IN RANGE ({progress_pct:.0f}%)'
+            self._thinner_weight_zone_label.color = (0.18, 0.77, 0.71, 1)
+            self._thinner_weight_value_label.color = (0.18, 0.77, 0.71, 1)
+        elif zone == 'over':
+            self._thinner_weight_zone_label.text = f'OVER TARGET ({progress_pct:.0f}%)'
+            self._thinner_weight_zone_label.color = (0.90, 0.22, 0.27, 1)
+            self._thinner_weight_value_label.color = (0.90, 0.22, 0.27, 1)
 
     def _update_pot_life_display(self):
         """Update pot-life countdown."""
@@ -1025,22 +1192,74 @@ class MixingScreen(Screen):
         self._last_state = None
 
     def _add_thinner(self, method):
-        """Add thinner with selected application method."""
+        """User selected application method -- transition to thinner weighing screen."""
         from core.models import ApplicationMethod
         app = App.get_running_app()
+        session = app.mixing.session
+        recipe = app.mixing._recipes.get(session.recipe_id) if session else None
+
         method_map = {
             'brush': ApplicationMethod.BRUSH,
             'roller': ApplicationMethod.ROLLER,
             'spray': ApplicationMethod.SPRAY,
         }
-        app.mixing.add_thinner(method_map[method])
-        self._last_state = None
+        self._thinner_method = method_map[method]
+
+        # Calculate target thinner weight from recipe percentages
+        thinner_pct = 0.0
+        if recipe:
+            thinner_pct = {
+                'brush': recipe.thinner_pct_brush,
+                'roller': recipe.thinner_pct_roller,
+                'spray': recipe.thinner_pct_spray,
+            }.get(method, 0.0)
+
+        base_actual = session.base_weight_actual_g if session else 0.0
+        hardener_actual = session.hardener_weight_actual_g if session else 0.0
+        self._thinner_target_g = (base_actual + hardener_actual) * (thinner_pct / 100.0)
+
+        # Switch to weighing sub-state
+        self._thinner_weighing = True
+        self._last_state = None  # Force UI rebuild
 
     def _skip_thinner(self):
         """Skip thinner addition."""
         app = App.get_running_app()
         app.mixing.skip_thinner()
+        self._thinner_weighing = False
         self._last_state = None
+
+    def _simulate_thinner_pour(self):
+        """TEST mode: simulate pouring thinner to target weight on mixing scale."""
+        app = App.get_running_app()
+        session = app.mixing.session
+        if not session:
+            return
+        # Total on scale = base + hardener + thinner target
+        total = session.base_weight_actual_g + session.hardener_weight_actual_g + self._thinner_target_g
+        app.weight.set_weight('mixing_scale', int(total + 1))
+
+    def _confirm_thinner_weight(self):
+        """Confirm the current thinner weight reading and finalize."""
+        app = App.get_running_app()
+        session = app.mixing.session
+        if not session:
+            return
+
+        # Read actual thinner weight from scale
+        reading = app.weight.read_weight('mixing_scale')
+        base_plus_hardener = session.base_weight_actual_g + session.hardener_weight_actual_g
+        actual_thinner = max(0.0, reading.grams - base_plus_hardener)
+
+        # Call engine with actual weight
+        app.mixing.add_thinner(self._thinner_method, thinner_weight_g=actual_thinner)
+        self._thinner_weighing = False
+        self._last_state = None
+
+    def _cancel_thinner_weigh(self):
+        """Go back to method selection from thinner weighing."""
+        self._thinner_weighing = False
+        self._last_state = None  # Force UI rebuild
 
     def _return_cans(self):
         """Transition to return cans phase."""

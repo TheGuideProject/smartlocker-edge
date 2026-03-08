@@ -19,7 +19,10 @@ def main_cli():
     import time
     import logging
 
-    from config.settings import MODE, DEVICE_ID, RFID_POLL_INTERVAL_MS
+    from config.settings import (
+        MODE, DEVICE_ID, RFID_POLL_INTERVAL_MS,
+        DRIVER_RFID, DRIVER_WEIGHT, DRIVER_LED, DRIVER_BUZZER,
+    )
     from config.logging_config import setup_logging
     from core.event_bus import EventBus
     from core.event_types import Event, EventType
@@ -31,11 +34,34 @@ def main_cli():
     from sync.cloud_client import CloudClient
     from sync.sync_engine import SyncEngine
 
-    mode = MODE
+    # Resolve mode: CLI flags override config file
+    cfg_mode = MODE
     if "--test" in sys.argv:
-        mode = "test"
+        cfg_mode = "test"
     elif "--live" in sys.argv:
+        cfg_mode = "live"
+
+    # Resolve per-sensor driver selections
+    if cfg_mode == "test":
+        drv_rfid = drv_weight = drv_led = drv_buzzer = "fake"
+    elif cfg_mode == "live":
+        drv_rfid = drv_weight = drv_led = drv_buzzer = "real"
+    else:
+        drv_rfid = DRIVER_RFID
+        drv_weight = DRIVER_WEIGHT
+        drv_led = DRIVER_LED
+        drv_buzzer = DRIVER_BUZZER
+
+    # Determine overall system mode
+    drivers = [drv_rfid, drv_weight, drv_led, drv_buzzer]
+    any_real = any(d == "real" for d in drivers)
+    all_real = all(d == "real" for d in drivers)
+    if all_real:
         mode = "live"
+    elif any_real:
+        mode = "hybrid"
+    else:
+        mode = "test"
 
     logger = setup_logging()
 
@@ -45,20 +71,46 @@ def main_cli():
     print(f"  Mode: {mode.upper()}")
     print("=" * 60)
 
-    # Create drivers
-    if mode == "test":
-        from hal.fake.fake_rfid import FakeRFIDDriver
-        from hal.fake.fake_weight import FakeWeightDriver
-        from hal.fake.fake_led import FakeLEDDriver
-        from hal.fake.fake_buzzer import FakeBuzzerDriver
-
-        rfid = FakeRFIDDriver()
-        weight = FakeWeightDriver()
-        led = FakeLEDDriver()
-        buzzer = FakeBuzzerDriver()
-        print(f"  Mode: TEST (simulated sensors)")
+    # ---- RFID Driver ----
+    if drv_rfid == "real":
+        from hal.real.real_rfid import RealRFIDDriver
+        rfid = RealRFIDDriver()
     else:
-        raise NotImplementedError("LIVE mode not yet implemented.")
+        from hal.fake.fake_rfid import FakeRFIDDriver
+        rfid = FakeRFIDDriver()
+
+    # ---- Weight Driver ----
+    if drv_weight == "real":
+        from hal.real.real_weight import RealWeightDriver
+        weight = RealWeightDriver()
+    else:
+        from hal.fake.fake_weight import FakeWeightDriver
+        weight = FakeWeightDriver()
+
+    # ---- LED Driver ----
+    if drv_led == "real":
+        from hal.real.real_led import RealLEDDriver
+        led = RealLEDDriver()
+    else:
+        from hal.fake.fake_led import FakeLEDDriver
+        led = FakeLEDDriver()
+
+    # ---- Buzzer Driver ----
+    if drv_buzzer == "real":
+        from hal.real.real_buzzer import RealBuzzerDriver
+        buzzer = RealBuzzerDriver()
+    else:
+        from hal.fake.fake_buzzer import FakeBuzzerDriver
+        buzzer = FakeBuzzerDriver()
+
+    # Log driver status
+    driver_status = {'rfid': drv_rfid, 'weight': drv_weight, 'led': drv_led, 'buzzer': drv_buzzer}
+    if mode == 'hybrid':
+        real_list = [k for k, v in driver_status.items() if v == 'real']
+        fake_list = [k for k, v in driver_status.items() if v == 'fake']
+        print(f"  Drivers - Real: {', '.join(real_list)} | Fake: {', '.join(fake_list)}")
+    else:
+        print(f"  All drivers: {'REAL' if mode == 'live' else 'FAKE (simulated)'}")
 
     # Create core components
     event_bus = EventBus()

@@ -81,7 +81,7 @@ Builder.load_string('''
                 BoxLayout:
                     orientation: 'vertical'
                     size_hint_y: None
-                    height: '88dp'
+                    height: '126dp'
                     padding: [14, 8]
                     spacing: 3
                     canvas.before:
@@ -111,6 +111,17 @@ Builder.load_string('''
                         text_size: self.size
                         size_hint_y: None
                         height: '18dp'
+
+                    Label:
+                        id: drivers_label
+                        text: 'Drivers: ---'
+                        font_size: '12sp'
+                        color: 0.38, 0.42, 0.50, 1
+                        halign: 'left'
+                        text_size: self.size
+                        size_hint_y: None
+                        height: '18dp'
+                        markup: True
 
                     Label:
                         id: version_label
@@ -354,7 +365,31 @@ class SettingsScreen(Screen):
 
         # Device info
         self.ids.device_id_label.text = f'Device ID: {app.device_id}'
-        self.ids.mode_label.text = f'Mode: {app.mode.upper()}'
+
+        # Mode label with color coding
+        mode_upper = app.mode.upper()
+        if app.mode == 'hybrid':
+            self.ids.mode_label.text = f'Mode: [color=fac238]{mode_upper}[/color]'
+            self.ids.mode_label.markup = True
+        elif app.mode == 'live':
+            self.ids.mode_label.text = f'Mode: [color=33d17a]{mode_upper}[/color]'
+            self.ids.mode_label.markup = True
+        else:
+            self.ids.mode_label.text = f'Mode: {mode_upper}'
+
+        # Driver status (show which are real vs fake)
+        if hasattr(app, 'driver_status'):
+            parts = []
+            for name, status in app.driver_status.items():
+                label = name.upper()
+                if status == 'real':
+                    parts.append(f'[color=33d17a]{label}[/color]')
+                else:
+                    parts.append(f'[color=616878]{label}[/color]')
+            self.ids.drivers_label.text = f'Drivers: {" | ".join(parts)}'
+            self.ids.drivers_label.markup = True
+        else:
+            self.ids.drivers_label.text = f'Drivers: all fake'
 
         total_events = len(app.event_log)
         self.ids.events_label.text = f'Events in memory: {total_events}'
