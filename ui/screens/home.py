@@ -111,7 +111,7 @@ Builder.load_string('''
                     background_normal: ''
                     background_color: 0.20, 0.20, 0.30, 1
                     color: 0.8, 0.82, 0.88, 1
-                    on_release: pass
+                    on_release: app.go_screen('settings')
 
             # Slot summary at bottom
             Label:
@@ -133,7 +133,8 @@ class HomeScreen(Screen):
     def on_enter(self):
         """Called when screen is displayed."""
         app = App.get_running_app()
-        self.device_info = f"Device: {app.device_id} | Mode: {app.mode.upper()}"
+        cloud_status = "CLOUD" if app.cloud.is_paired else "OFFLINE"
+        self.device_info = f"Device: {app.device_id} | Mode: {app.mode.upper()} | {cloud_status}"
 
         # Update clock every second
         self._clock_event = Clock.schedule_interval(self._update_clock, 1.0)

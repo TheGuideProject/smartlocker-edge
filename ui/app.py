@@ -5,6 +5,7 @@ Main application class that:
 1. Initializes the entire system (drivers, engines, database)
 2. Creates the screen manager with all UI screens
 3. Runs the sensor polling loop via Kivy Clock
+4. Shows pairing screen on first boot if not paired to cloud
 """
 
 import os
@@ -117,11 +118,29 @@ class SmartLockerApp(App):
         from ui.screens.inventory import InventoryScreen
         from ui.screens.mixing import MixingScreen
         from ui.screens.demo import DemoScreen
+        from ui.screens.pairing import PairingScreen
+        from ui.screens.settings import SettingsScreen
 
+        # Add pairing screen FIRST (so it's the default if not paired)
+        self.sm.add_widget(PairingScreen(name='pairing'))
         self.sm.add_widget(HomeScreen(name='home'))
         self.sm.add_widget(InventoryScreen(name='inventory'))
         self.sm.add_widget(MixingScreen(name='mixing'))
         self.sm.add_widget(DemoScreen(name='demo'))
+        self.sm.add_widget(SettingsScreen(name='settings'))
+
+        # Decide initial screen based on pairing status
+        if self.cloud.is_paired:
+            # Already paired → go straight to home
+            self.sm.current = 'home'
+
+            # Start background sync
+            self.sync_engine.start()
+            print("  Cloud: PAIRED — sync started")
+        else:
+            # Not paired → show pairing screen
+            self.sm.current = 'pairing'
+            print("  Cloud: NOT PAIRED — showing pairing screen")
 
         # Start sensor polling loop (every 500ms)
         Clock.schedule_interval(self._poll_sensors, 0.5)
@@ -139,6 +158,8 @@ class SmartLockerApp(App):
         from core.usage_calculator import UsageCalculator
         from core.models import MixingRecipe
         from persistence.database import Database
+        from sync.cloud_client import CloudClient
+        from sync.sync_engine import SyncEngine
 
         self.mode = MODE
         self.device_id = DEVICE_ID
@@ -156,6 +177,7 @@ class SmartLockerApp(App):
 
         def _log_event(event):
             self.db.save_event(event)
+            self.db.enqueue_for_sync(event)
             self.event_log.append(event)
             # Keep last 50 events in memory
             if len(self.event_log) > 50:
@@ -191,18 +213,23 @@ class SmartLockerApp(App):
         )
         self.usage = UsageCalculator(event_bus=self.event_bus)
 
-        # Load demo recipe
-        recipe = MixingRecipe(
-            recipe_id='RCP-001',
-            name='SIGMACOVER 280 System',
-            base_product_id='PROD-001',
-            hardener_product_id='PROD-002',
-            ratio_base=4.0,
-            ratio_hardener=1.0,
-            tolerance_pct=5.0,
-            pot_life_minutes=480,
-        )
-        self.mixing.load_recipes({'RCP-001': recipe})
+        # ---- Cloud Sync ----
+        self.cloud = CloudClient()
+        self.sync_engine = SyncEngine(self.db, self.cloud)
+
+        # Load demo recipe only if NOT paired (paired gets data from cloud)
+        if not self.cloud.is_paired:
+            recipe = MixingRecipe(
+                recipe_id='RCP-001',
+                name='SIGMACOVER 280 System',
+                base_product_id='PROD-001',
+                hardener_product_id='PROD-002',
+                ratio_base=4.0,
+                ratio_hardener=1.0,
+                tolerance_pct=5.0,
+                pot_life_minutes=480,
+            )
+            self.mixing.load_recipes({'RCP-001': recipe})
 
         # Initialize hardware
         if not self.inventory.initialize():
@@ -228,6 +255,7 @@ class SmartLockerApp(App):
     def on_stop(self):
         """Clean shutdown when app closes."""
         try:
+            self.sync_engine.stop()
             self.inventory.shutdown()
             self.db.close()
         except Exception:
