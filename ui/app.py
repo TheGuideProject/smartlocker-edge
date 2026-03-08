@@ -329,6 +329,7 @@ class SmartLockerApp(App):
         from ui.screens.settings import SettingsScreen
         from ui.screens.paint_now import PaintNowScreen
         from ui.screens.chart_viewer import ChartViewerScreen
+        from ui.screens.admin import AdminScreen
 
         # Add pairing screen FIRST (so it's the default if not paired)
         self.sm.add_widget(PairingScreen(name='pairing'))
@@ -339,6 +340,7 @@ class SmartLockerApp(App):
         self.sm.add_widget(SettingsScreen(name='settings'))
         self.sm.add_widget(PaintNowScreen(name='paint_now'))
         self.sm.add_widget(ChartViewerScreen(name='chart_viewer'))
+        self.sm.add_widget(AdminScreen(name='admin'))
 
         # Decide initial screen based on pairing status
         if self.cloud.is_paired:
@@ -390,6 +392,29 @@ class SmartLockerApp(App):
             drv_weight = DRIVER_WEIGHT
             drv_led = DRIVER_LED
             drv_buzzer = DRIVER_BUZZER
+
+        # ---- Apply admin overrides from DB (if any) ----
+        # This must happen after DB connect but we need a temp DB here.
+        # We do a lightweight check using a temporary Database instance
+        # to read admin config before the main DB is created below.
+        try:
+            _tmp_db = Database()
+            _tmp_db.connect()
+            admin_config = _tmp_db.get_admin_config()
+            _tmp_db.close()
+            if admin_config and MODE == "auto":
+                if 'driver_rfid' in admin_config:
+                    drv_rfid = admin_config['driver_rfid']
+                if 'driver_weight' in admin_config:
+                    drv_weight = admin_config['driver_weight']
+                if 'driver_led' in admin_config:
+                    drv_led = admin_config['driver_led']
+                if 'driver_buzzer' in admin_config:
+                    drv_buzzer = admin_config['driver_buzzer']
+                print("  Admin overrides applied from DB")
+        except Exception:
+            admin_config = {}
+            pass
 
         # Determine overall system mode
         drivers = [drv_rfid, drv_weight, drv_led, drv_buzzer]
@@ -477,6 +502,16 @@ class SmartLockerApp(App):
         # ---- Cloud Sync ----
         self.cloud = CloudClient()
         self.sync_engine = SyncEngine(self.db, self.cloud)
+
+        # Set monitoring references so heartbeats include sensor health
+        self.cloud.set_monitoring_refs(
+            driver_status=self.driver_status,
+            sensors={
+                'rfid': self.rfid,
+                'weight': self.weight,
+            },
+            db_ref=self.db,
+        )
 
         # Paint Now context (for passing data between screens)
         self.paint_now_context = None

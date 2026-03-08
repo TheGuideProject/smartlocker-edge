@@ -291,6 +291,59 @@ class Database:
         return None
 
     # ============================================================
+    # ADMIN CONFIG
+    # ============================================================
+
+    def save_admin_config(self, config_dict: dict) -> None:
+        """Save admin settings as JSON in config table (key='admin_settings')."""
+        self.conn.execute(
+            """INSERT OR REPLACE INTO config (key, value, updated_at)
+               VALUES ('admin_settings', ?, CURRENT_TIMESTAMP)""",
+            (json.dumps(config_dict),),
+        )
+        self.conn.commit()
+        logger.info("Admin config saved to DB")
+
+    def get_admin_config(self) -> dict:
+        """Load admin settings from config table. Returns {} if none."""
+        cursor = self.conn.execute(
+            "SELECT value FROM config WHERE key = 'admin_settings'"
+        )
+        row = cursor.fetchone()
+        if row:
+            try:
+                return json.loads(row[0])
+            except (json.JSONDecodeError, TypeError):
+                return {}
+        return {}
+
+    def get_admin_password_hash(self) -> Optional[str]:
+        """Get stored admin password hash."""
+        cursor = self.conn.execute(
+            "SELECT value FROM config WHERE key = 'admin_password_hash'"
+        )
+        row = cursor.fetchone()
+        return row[0] if row else None
+
+    def set_admin_password_hash(self, hash_str: str) -> None:
+        """Store new admin password hash."""
+        self.conn.execute(
+            """INSERT OR REPLACE INTO config (key, value, updated_at)
+               VALUES ('admin_password_hash', ?, CURRENT_TIMESTAMP)""",
+            (hash_str,),
+        )
+        self.conn.commit()
+        logger.info("Admin password hash updated")
+
+    def get_admin_password_change_date(self) -> Optional[str]:
+        """Get the timestamp of the last admin password change."""
+        cursor = self.conn.execute(
+            "SELECT updated_at FROM config WHERE key = 'admin_password_hash'"
+        )
+        row = cursor.fetchone()
+        return row[0] if row else None
+
+    # ============================================================
     # RECIPE LOOKUP BY PRODUCT NAME
     # ============================================================
 

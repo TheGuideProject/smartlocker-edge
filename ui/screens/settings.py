@@ -342,6 +342,27 @@ Builder.load_string('''
                                 pos: self.pos
                                 size: self.size
                                 radius: [10]
+
+                # ==== ADMIN ACCESS ====
+                BoxLayout:
+                    size_hint_y: None
+                    height: '54dp'
+                    Button:
+                        text: 'ADMIN'
+                        font_size: '15sp'
+                        bold: True
+                        background_normal: ''
+                        background_color: 0, 0, 0, 0
+                        color: 0.98, 0.65, 0.25, 1
+                        on_release: root.open_admin()
+                        markup: True
+                        canvas.before:
+                            Color:
+                                rgba: 0.16, 0.12, 0.06, 1
+                            RoundedRectangle:
+                                pos: self.pos
+                                size: self.size
+                                radius: [10]
 ''')
 
 
@@ -443,3 +464,9 @@ class SettingsScreen(Screen):
         app.sync_engine.stop()
         app.cloud.unpair()
         self._refresh_info()
+
+    def open_admin(self):
+        """Open the admin screen after password verification."""
+        from ui.screens.admin import show_admin_password_dialog
+        app = App.get_running_app()
+        show_admin_password_dialog(lambda: app.go_screen('admin'))

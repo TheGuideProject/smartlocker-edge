@@ -204,6 +204,14 @@ class SyncEngine:
                 self.db.save_maintenance_chart(chart)
                 logger.info(f"Maintenance chart synced: {chart.get('vessel_name', '?')}")
 
+            # Update admin password if sent from cloud
+            new_password = config.get("admin_password")
+            if new_password:
+                import hashlib
+                hash_str = hashlib.sha256(new_password.encode()).hexdigest()
+                self.db.set_admin_password_hash(hash_str)
+                logger.info("Admin password updated from cloud")
+
             logger.info(f"Config synced: {len(products)} products, {len(recipes)} recipes")
 
         except Exception as e:

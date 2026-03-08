@@ -38,6 +38,12 @@ class CloudClient:
         self.device_id: str = settings.DEVICE_ID
         self.is_paired: bool = False
 
+        # Device monitoring references (set by app after init)
+        self._driver_status: Optional[Dict[str, str]] = None  # {"rfid": "real", ...}
+        self._sensors = {}  # {"rfid": driver_ref, "weight": driver_ref, ...}
+        self._start_time: float = time.time()
+        self._db_ref = None  # Reference to Database for size/pending info
+
         # Try to load saved pairing
         self._load_pairing()
 
@@ -139,24 +145,128 @@ class CloudClient:
             return False, []
 
     # ============================================================
+    # MONITORING SETUP
+    # ============================================================
+
+    def set_monitoring_refs(
+        self,
+        driver_status: Dict[str, str],
+        sensors: Dict,
+        db_ref=None,
+    ) -> None:
+        """
+        Set references for device monitoring (called after init by the app).
+
+        Args:
+            driver_status: {"rfid": "real"|"fake", "weight": ..., "led": ..., "buzzer": ...}
+            sensors: {"rfid": rfid_driver, "weight": weight_driver, ...}
+            db_ref: Reference to Database instance for size/pending info
+        """
+        self._driver_status = driver_status
+        self._sensors = sensors
+        self._db_ref = db_ref
+        self._start_time = time.time()
+        logger.info(f"Monitoring refs set: drivers={driver_status}")
+
+    def _collect_health_data(self) -> Dict[str, Any]:
+        """Collect health status from all sensor drivers."""
+        health = {}
+
+        # RFID health
+        rfid = self._sensors.get("rfid")
+        if rfid:
+            try:
+                is_healthy = rfid.is_healthy()
+                health["rfid"] = {
+                    "status": "ok" if is_healthy else "error",
+                    "message": "All readers responding" if is_healthy else "RFID reader not responding",
+                    "readers": len(rfid.get_reader_ids()) if hasattr(rfid, 'get_reader_ids') else 0,
+                }
+            except Exception as e:
+                health["rfid"] = {"status": "error", "message": str(e)}
+
+        # Weight sensor health
+        weight = self._sensors.get("weight")
+        if weight:
+            try:
+                is_healthy = weight.is_healthy()
+                channels = weight.get_channels() if hasattr(weight, 'get_channels') else []
+                health["weight"] = {
+                    "status": "ok" if is_healthy else "error",
+                    "message": "All scales responding" if is_healthy else "Weight sensor error",
+                    "channels": len(channels),
+                }
+
+                # Check for out-of-range readings on each channel
+                for ch in channels:
+                    try:
+                        reading = weight.read_weight(ch)
+                        if reading.grams < -100:
+                            health[f"weight_{ch}"] = {
+                                "status": "out_of_range",
+                                "message": f"Negative reading on {ch}: {reading.grams}g",
+                                "last_value": round(reading.grams, 1),
+                            }
+                        elif reading.grams > 50000:
+                            health[f"weight_{ch}"] = {
+                                "status": "out_of_range",
+                                "message": f"Excessive reading on {ch}: {reading.grams}g",
+                                "last_value": round(reading.grams, 1),
+                            }
+                    except Exception:
+                        pass  # Individual channel read failure is not critical
+
+            except Exception as e:
+                health["weight"] = {"status": "error", "message": str(e)}
+
+        return health
+
+    def _collect_system_info(self, sync_queue_depth: int = 0) -> Dict[str, Any]:
+        """Collect system information for heartbeat."""
+        info = {
+            "uptime_seconds": round(time.time() - self._start_time, 1),
+            "events_pending_sync": sync_queue_depth,
+        }
+
+        # Try to get DB file size
+        if self._db_ref:
+            try:
+                db_path = getattr(self._db_ref, 'db_path', None)
+                if db_path and os.path.exists(db_path):
+                    size_bytes = os.path.getsize(db_path)
+                    info["db_size_mb"] = round(size_bytes / (1024 * 1024), 2)
+            except Exception:
+                pass
+
+        return info
+
+    # ============================================================
     # HEARTBEAT
     # ============================================================
 
     def send_heartbeat(self, uptime_hours: float = 0, sync_queue_depth: int = 0) -> bool:
-        """Send a heartbeat to the cloud."""
+        """Send a heartbeat with sensor health data to the cloud."""
         if not self.is_paired:
             return False
 
         url = f"{self.cloud_url}/api/devices/{self.device_id}/heartbeat"
+
+        # Collect extended monitoring data
+        health_data = self._collect_health_data()
+        system_info = self._collect_system_info(sync_queue_depth)
+
         payload = {
             "software_version": "1.0.0",
             "uptime_hours": uptime_hours,
             "sync_queue_depth": sync_queue_depth,
+            "driver_status": self._driver_status,
+            "sensor_health": health_data,
+            "system_info": system_info,
         }
 
         success, _ = self._http_post(url, payload, auth=True)
         if success:
-            logger.debug("Heartbeat sent OK")
+            logger.debug("Heartbeat sent OK (with health data)")
         return success
 
     # ============================================================
