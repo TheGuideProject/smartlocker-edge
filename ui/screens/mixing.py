@@ -160,43 +160,98 @@ class MixingScreen(Screen):
     # ============================================================
 
     def _build_idle_ui(self, content, is_test):
-        """IDLE: Show start button."""
-        content.add_widget(Widget(size_hint_y=0.2))
-
-        title = Label(
-            text='Ready to Mix',
-            font_size='28sp', bold=True,
-            color=(1, 1, 1, 1),
-            size_hint_y=None, height=50,
-        )
-        content.add_widget(title)
-
-        subtitle = Label(
-            text='Tap START to begin a guided mixing session.\nThe system will show you which cans to pick and\nhow much to pour.',
-            font_size='16sp',
-            color=(0.65, 0.70, 0.78, 1),
-            size_hint_y=None, height=80,
-            halign='center', text_size=(700, None),
-        )
-        content.add_widget(subtitle)
+        """IDLE: Show start button, with Paint Now context info if available."""
+        app = App.get_running_app()
+        ctx = app.paint_now_context
 
         content.add_widget(Widget(size_hint_y=0.1))
 
-        btn = Button(
-            text='START NEW MIX',
-            font_size='24sp', bold=True,
-            background_normal='',
-            background_color=(0.18, 0.77, 0.71, 1),
-            size_hint=(0.7, None), height=80,
-            pos_hint={'center_x': 0.5},
-        )
-        btn.bind(on_release=lambda x: self._start_mix())
-        content.add_widget(btn)
+        if ctx:
+            # Coming from Paint Now — show context info
+            area = ctx.get('area_name', '')
+            product = ctx.get('product_name', '')
+            color = ctx.get('color', '')
+            target_g = ctx.get('target_base_grams')
+            m2 = ctx.get('m2')
+
+            title = Label(
+                text='Ready to Mix',
+                font_size='24sp', bold=True,
+                color=(0.18, 0.77, 0.71, 1),
+                size_hint_y=None, height=40,
+            )
+            content.add_widget(title)
+
+            info_lines = []
+            if area:
+                info_lines.append(f'[b]Area:[/b] {area}')
+            if product:
+                info_lines.append(f'[b]Product:[/b] {product}')
+            if color:
+                info_lines.append(f'[b]Color:[/b] {color}')
+            if m2:
+                info_lines.append(f'[b]Surface:[/b] {m2} m\u00b2')
+            if target_g:
+                info_lines.append(f'[b]Target base:[/b] {target_g:.0f} g')
+
+            if info_lines:
+                content.add_widget(Label(
+                    text='\n'.join(info_lines),
+                    font_size='16sp',
+                    color=(0.85, 0.88, 0.95, 1),
+                    size_hint_y=None, height=len(info_lines) * 26 + 10,
+                    halign='center', text_size=(700, None),
+                    markup=True,
+                ))
+
+            content.add_widget(Widget(size_hint_y=0.05))
+
+            btn = Button(
+                text='START MIXING',
+                font_size='24sp', bold=True,
+                background_normal='',
+                background_color=(0.18, 0.77, 0.71, 1),
+                size_hint=(0.7, None), height=75,
+                pos_hint={'center_x': 0.5},
+            )
+            btn.bind(on_release=lambda x: self._start_mix())
+            content.add_widget(btn)
+        else:
+            # Standard entry (no Paint Now context)
+            title = Label(
+                text='Ready to Mix',
+                font_size='28sp', bold=True,
+                color=(1, 1, 1, 1),
+                size_hint_y=None, height=50,
+            )
+            content.add_widget(title)
+
+            subtitle = Label(
+                text='Tap START to begin a guided mixing session.\nThe system will show you which cans to pick and\nhow much to pour.',
+                font_size='16sp',
+                color=(0.65, 0.70, 0.78, 1),
+                size_hint_y=None, height=80,
+                halign='center', text_size=(700, None),
+            )
+            content.add_widget(subtitle)
+
+            content.add_widget(Widget(size_hint_y=0.1))
+
+            btn = Button(
+                text='START NEW MIX',
+                font_size='24sp', bold=True,
+                background_normal='',
+                background_color=(0.18, 0.77, 0.71, 1),
+                size_hint=(0.7, None), height=80,
+                pos_hint={'center_x': 0.5},
+            )
+            btn.bind(on_release=lambda x: self._start_mix())
+            content.add_widget(btn)
 
         content.add_widget(Widget(size_hint_y=1))
 
     def _build_select_product_ui(self, content):
-        """SELECT_PRODUCT: Show recipe selection (simplified — auto-select)."""
+        """SELECT_PRODUCT: Show recipe selection and amount buttons."""
         content.add_widget(Widget(size_hint_y=0.1))
 
         title = Label(
@@ -208,9 +263,23 @@ class MixingScreen(Screen):
         content.add_widget(title)
 
         app = App.get_running_app()
+        ctx = app.paint_now_context
+
+        # Get recipe name from context or default
         recipe_name = 'SIGMACOVER 280 System'
+        if app.mixing.session and app.mixing.session.recipe_id:
+            # Try to get name from loaded recipes
+            recipes = getattr(app.mixing, '_recipes', {})
+            recipe = recipes.get(app.mixing.session.recipe_id)
+            if recipe:
+                recipe_name = recipe.name
+
+        info_text = f'Recipe: {recipe_name}\nRatio: 4:1 (Base:Hardener)\n\nHow much BASE do you want to mix?'
+        if ctx and ctx.get('product_name'):
+            info_text = f'Product: {ctx["product_name"]}\nRecipe: {recipe_name}\n\nHow much BASE do you want to mix?'
+
         info = Label(
-            text=f'Recipe: {recipe_name}\nRatio: 4:1 (Base:Hardener)\n\nHow much BASE do you want to mix?',
+            text=info_text,
             font_size='16sp',
             color=(0.65, 0.70, 0.78, 1),
             size_hint_y=None, height=100,
@@ -773,15 +842,26 @@ class MixingScreen(Screen):
     # ============================================================
 
     def _start_mix(self):
-        """Start a new mixing session."""
+        """Start a new mixing session, using Paint Now context if available."""
         app = App.get_running_app()
+        ctx = app.paint_now_context
+
+        # Determine recipe_id from context or default
+        recipe_id = 'RCP-001'
+        if ctx and ctx.get('recipe_id'):
+            recipe_id = ctx['recipe_id']
+
         app.inventory.active_session = True
         success = app.mixing.start_session(
-            recipe_id='RCP-001',
+            recipe_id=recipe_id,
             user_name='Crew Member',
             job_id='JOB-001',
         )
         if success:
+            # If Paint Now provided a target weight, auto-select that amount
+            if ctx and ctx.get('target_base_grams'):
+                target_g = ctx['target_base_grams']
+                app.mixing.show_recipe(base_amount_g=float(target_g))
             self._last_state = None  # Force UI rebuild
 
     def _select_amount(self, grams):
@@ -879,4 +959,5 @@ class MixingScreen(Screen):
         app = App.get_running_app()
         app.mixing.complete_session()
         app.inventory.active_session = False
+        app.paint_now_context = None  # Clear Paint Now context
         self._last_state = None

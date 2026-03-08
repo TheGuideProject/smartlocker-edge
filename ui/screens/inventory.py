@@ -201,6 +201,21 @@ class SlotCard(BoxLayout):
         self._bg_rect.pos = self.pos
         self._bg_rect.size = self.size
 
+    def _get_product_name(self, tag_uid):
+        """Look up product name for an RFID tag. Returns short name or None."""
+        try:
+            app = App.get_running_app()
+            product = app.db.get_product_for_tag(tag_uid)
+            if product:
+                name = product.get('name', '')
+                # Shorten long names for display
+                if len(name) > 16:
+                    return name[:14] + '..'
+                return name
+        except Exception:
+            pass
+        return None
+
     def update(self, slot):
         """Update card display from a Slot object."""
         status = slot.status.value
@@ -211,13 +226,17 @@ class SlotCard(BoxLayout):
             self._status_text.text = 'OCCUPIED'
             self._status_text.color = (0.18, 0.77, 0.71, 1)
             tag = slot.current_tag_id or '???'
-            self._tag_label.text = tag[:16]
+            # Look up product name from RFID tag
+            product_name = self._get_product_name(tag)
+            self._tag_label.text = product_name if product_name else tag[:16]
         elif status == 'removed':
             self._status_label.color = (0.96, 0.63, 0.38, 1)  # Orange
             self._bg_color.rgba = (0.18, 0.14, 0.08, 1)
             self._status_text.text = 'REMOVED'
             self._status_text.color = (0.96, 0.63, 0.38, 1)
-            self._tag_label.text = f'was: {(slot.current_tag_id or "?")[:12]}'
+            tag = slot.current_tag_id or '?'
+            product_name = self._get_product_name(tag)
+            self._tag_label.text = f'was: {product_name or tag[:12]}'
         elif status == 'in_use':
             self._status_label.color = (0.91, 0.77, 0.42, 1)  # Yellow
             self._bg_color.rgba = (0.18, 0.16, 0.08, 1)

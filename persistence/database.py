@@ -194,6 +194,23 @@ class Database:
         )
         self.conn.commit()
 
+    def get_product_by_id(self, product_id: str) -> Optional[Dict[str, Any]]:
+        """Get a single product by ID."""
+        cursor = self.conn.execute(
+            "SELECT * FROM product WHERE product_id = ?", (product_id,)
+        )
+        row = cursor.fetchone()
+        return dict(row) if row else None
+
+    def get_product_by_name(self, name: str) -> Optional[Dict[str, Any]]:
+        """Find a product by name (case-insensitive partial match)."""
+        cursor = self.conn.execute(
+            "SELECT * FROM product WHERE UPPER(name) LIKE UPPER(?)",
+            (f"%{name}%",),
+        )
+        row = cursor.fetchone()
+        return dict(row) if row else None
+
     def upsert_recipe(self, recipe: Dict[str, Any]) -> None:
         """Insert or update a mixing recipe."""
         self.conn.execute(
@@ -219,3 +236,72 @@ class Database:
             ),
         )
         self.conn.commit()
+
+    # ============================================================
+    # RFID TAG → PRODUCT MAPPING
+    # ============================================================
+
+    def upsert_rfid_tag(self, tag_uid: str, product_id: str,
+                        can_size_ml: int = None) -> None:
+        """Map an RFID tag to a product."""
+        self.conn.execute(
+            """INSERT OR REPLACE INTO rfid_tag
+               (tag_uid, product_id, can_size_ml)
+               VALUES (?, ?, ?)""",
+            (tag_uid, product_id, can_size_ml),
+        )
+        self.conn.commit()
+
+    def get_product_for_tag(self, tag_uid: str) -> Optional[Dict[str, Any]]:
+        """Look up the product associated with an RFID tag."""
+        cursor = self.conn.execute(
+            """SELECT p.* FROM product p
+               JOIN rfid_tag t ON t.product_id = p.product_id
+               WHERE t.tag_uid = ?""",
+            (tag_uid,),
+        )
+        row = cursor.fetchone()
+        return dict(row) if row else None
+
+    # ============================================================
+    # MAINTENANCE CHART (stored as JSON in config table)
+    # ============================================================
+
+    def save_maintenance_chart(self, chart_data: dict) -> None:
+        """Save maintenance chart data for offline access."""
+        self.conn.execute(
+            """INSERT OR REPLACE INTO config (key, value, updated_at)
+               VALUES ('maintenance_chart', ?, CURRENT_TIMESTAMP)""",
+            (json.dumps(chart_data),),
+        )
+        self.conn.commit()
+        logger.info("Maintenance chart saved to local DB")
+
+    def get_maintenance_chart(self) -> Optional[dict]:
+        """Get the locally cached maintenance chart."""
+        cursor = self.conn.execute(
+            "SELECT value FROM config WHERE key = 'maintenance_chart'"
+        )
+        row = cursor.fetchone()
+        if row:
+            try:
+                return json.loads(row[0])
+            except (json.JSONDecodeError, TypeError):
+                return None
+        return None
+
+    # ============================================================
+    # RECIPE LOOKUP BY PRODUCT NAME
+    # ============================================================
+
+    def find_recipe_by_product_name(self, product_name: str) -> Optional[Dict[str, Any]]:
+        """Find a mixing recipe that uses a product with the given name as base."""
+        product = self.get_product_by_name(product_name)
+        if not product:
+            return None
+        cursor = self.conn.execute(
+            "SELECT * FROM mixing_recipe WHERE base_product_id = ?",
+            (product["product_id"],),
+        )
+        row = cursor.fetchone()
+        return dict(row) if row else None

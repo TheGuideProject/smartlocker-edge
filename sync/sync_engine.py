@@ -198,6 +198,12 @@ class SyncEngine:
                     "pot_life_minutes": r.get("pot_life_minutes", 480),
                 })
 
+            # Save maintenance chart if included
+            chart = config.get("maintenance_chart")
+            if chart:
+                self.db.save_maintenance_chart(chart)
+                logger.info(f"Maintenance chart synced: {chart.get('vessel_name', '?')}")
+
             logger.info(f"Config synced: {len(products)} products, {len(recipes)} recipes")
 
         except Exception as e:

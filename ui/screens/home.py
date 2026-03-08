@@ -1,11 +1,10 @@
 """
 Home Screen - Main Navigation Hub
 
-Shows 4 large buttons for the primary workflows:
-- MIXING ASSISTANT: Start a guided mixing session
-- INVENTORY: View current shelf/slot status
-- DEMO CONTROLS: Simulate sensor events (TEST mode)
-- SETTINGS: System info and configuration
+Redesigned layout:
+- PAINT NOW! as primary big button (top half)
+- CHECK CHART, INVENTORY, SETTINGS as secondary row
+- Info bar at bottom with slot counts and cloud status
 """
 
 from kivy.uix.screenmanager import Screen
@@ -52,78 +51,86 @@ Builder.load_string('''
                 text_size: self.size
                 valign: 'middle'
 
-        # ---- MAIN CONTENT: 2x2 BUTTON GRID ----
+        # ---- MAIN CONTENT ----
         BoxLayout:
             orientation: 'vertical'
-            padding: [20, 15, 20, 15]
-            spacing: 12
+            padding: [15, 10, 15, 10]
+            spacing: 10
 
-            # Device info line
+            # ===== PAINT NOW! - BIG PRIMARY BUTTON =====
+            Button:
+                text: 'PAINT NOW!'
+                font_size: '36sp'
+                bold: True
+                background_normal: ''
+                background_color: 0.18, 0.77, 0.71, 1
+                color: 1, 1, 1, 1
+                size_hint_y: 0.45
+                on_release: app.go_screen('paint_now')
+
+            # Subtitle for Paint Now
             Label:
-                text: root.device_info
+                text: 'Select area, calculate paint, start mixing'
                 font_size: '13sp'
-                color: 0.45, 0.50, 0.58, 1
+                color: 0.45, 0.55, 0.60, 1
                 size_hint_y: None
-                height: '22dp'
+                height: '20dp'
                 halign: 'center'
                 text_size: self.size
 
-            # Row 1
+            # ===== SECONDARY BUTTONS ROW =====
             BoxLayout:
-                spacing: 12
+                spacing: 10
+                size_hint_y: 0.30
 
+                # CHECK CHART
                 Button:
-                    text: 'MIXING\\nAssistant'
-                    font_size: '22sp'
+                    text: 'CHECK\\nCHART'
+                    font_size: '18sp'
                     bold: True
                     background_normal: ''
-                    background_color: 0.06, 0.35, 0.50, 1
+                    background_color: 0.11, 0.29, 0.40, 1
                     color: 1, 1, 1, 1
-                    on_release: app.go_screen('mixing')
+                    on_release: app.go_screen('chart_viewer')
                     markup: True
 
+                # INVENTORY
                 Button:
                     text: 'INVENTORY\\nView'
-                    font_size: '22sp'
+                    font_size: '18sp'
                     bold: True
                     background_normal: ''
                     background_color: 0.10, 0.30, 0.22, 1
                     color: 1, 1, 1, 1
                     on_release: app.go_screen('inventory')
+                    markup: True
 
-            # Row 2
-            BoxLayout:
-                spacing: 12
-
-                Button:
-                    text: 'DEMO\\nControls'
-                    font_size: '22sp'
-                    bold: True
-                    background_normal: ''
-                    background_color: 0.40, 0.28, 0.10, 1
-                    color: 1, 1, 1, 1
-                    on_release: app.go_screen('demo')
-
+                # SETTINGS
                 Button:
                     text: 'SETTINGS\\n& Info'
-                    font_size: '22sp'
+                    font_size: '18sp'
                     bold: True
                     background_normal: ''
                     background_color: 0.20, 0.20, 0.30, 1
                     color: 0.8, 0.82, 0.88, 1
                     on_release: app.go_screen('settings')
+                    markup: True
 
-            # Slot summary at bottom
-            Label:
-                id: slot_summary
-                text: ''
-                font_size: '14sp'
-                color: 0.55, 0.60, 0.68, 1
+            # ===== BOTTOM INFO BAR =====
+            BoxLayout:
                 size_hint_y: None
-                height: '25dp'
-                halign: 'center'
-                text_size: self.size
-                markup: True
+                height: '30dp'
+                padding: [5, 0]
+
+                Label:
+                    id: slot_summary
+                    text: ''
+                    font_size: '13sp'
+                    color: 0.45, 0.50, 0.58, 1
+                    halign: 'center'
+                    text_size: self.size
+                    valign: 'middle'
+                    markup: True
 ''')
 
 
@@ -134,7 +141,15 @@ class HomeScreen(Screen):
         """Called when screen is displayed."""
         app = App.get_running_app()
         cloud_status = "CLOUD" if app.cloud.is_paired else "OFFLINE"
-        self.device_info = f"Device: {app.device_id} | Mode: {app.mode.upper()} | {cloud_status}"
+        mode_text = app.mode.upper()
+
+        # Update mode label
+        self.ids.mode_label.text = f"{mode_text} MODE"
+        if cloud_status == "CLOUD":
+            self.ids.mode_label.color = (0.37, 0.66, 0.83, 1)  # Blue
+            self.ids.mode_label.text = f"{mode_text} | CLOUD"
+        else:
+            self.ids.mode_label.color = (0.18, 0.77, 0.71, 1)  # Teal
 
         # Update clock every second
         self._clock_event = Clock.schedule_interval(self._update_clock, 1.0)
@@ -161,7 +176,8 @@ class HomeScreen(Screen):
         total = len(slots)
         events = len(app.event_log)
 
-        summary = f"Slots: {occupied}/{total} occupied  |  Events: {events}"
+        cloud = "[color=5fa8d3]CLOUD[/color]" if app.cloud.is_paired else "[color=8d99ae]OFFLINE[/color]"
+        summary = f"Slots: {occupied}/{total}  |  Events: {events}  |  {cloud}"
 
         # Check if mixing is active
         if app.mixing.is_active:

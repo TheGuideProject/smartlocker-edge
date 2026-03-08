@@ -259,6 +259,15 @@ class PairingScreen(Screen):
                 'pot_life_minutes': r.get('pot_life_minutes', 480),
             })
 
+        # Save maintenance chart if included
+        chart = config.get('maintenance_chart')
+        if chart:
+            app.db.save_maintenance_chart(chart)
+            app.maintenance_chart = chart
+
+        # Reload catalog into mixing engine
+        app._reload_catalog_from_db()
+
     def _go_home(self):
         """Navigate to home screen."""
         app = App.get_running_app()
