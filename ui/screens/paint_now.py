@@ -30,8 +30,6 @@ from kivy.graphics import Color, RoundedRectangle, Rectangle, Line, Ellipse
 
 
 Builder.load_string('''
-#:import DS ui.app.DS
-
 <PaintNowScreen>:
     BoxLayout:
         orientation: 'vertical'

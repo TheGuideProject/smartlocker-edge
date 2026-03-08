@@ -33,8 +33,6 @@ from kivy.graphics import Color, RoundedRectangle, Rectangle
 
 
 Builder.load_string('''
-#:import DS ui.app.DS
-
 <InventoryScreen>:
     BoxLayout:
         orientation: 'vertical'

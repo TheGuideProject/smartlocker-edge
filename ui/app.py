@@ -132,7 +132,6 @@ class DS:
 # GLOBAL KV STYLES
 # ============================================================
 Builder.load_string('''
-#:import DS ui.app.DS
 #:import utils kivy.utils
 
 # --------------------------------------------------------

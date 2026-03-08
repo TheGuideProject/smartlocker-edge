@@ -39,8 +39,6 @@ import time
 
 
 Builder.load_string('''
-#:import DS ui.app.DS
-
 <HomeScreen>:
     BoxLayout:
         orientation: 'vertical'

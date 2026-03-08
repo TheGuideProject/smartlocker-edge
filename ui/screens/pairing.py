@@ -27,8 +27,6 @@ from config import settings
 
 
 Builder.load_string('''
-#:import DS ui.app.DS
-
 <PairingScreen>:
     BoxLayout:
         orientation: 'vertical'

@@ -26,8 +26,6 @@ from kivy.graphics import Color, RoundedRectangle, Rectangle
 
 
 Builder.load_string('''
-#:import DS ui.app.DS
-
 <ChartViewerScreen>:
     BoxLayout:
         orientation: 'vertical'
