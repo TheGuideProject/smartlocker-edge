@@ -46,15 +46,19 @@ MIX_WEIGHT_STABLE_S = 2.0      # Seconds of stable weight before confirming pour
 THINNER_MAX_PCT = 20.0          # Maximum thinner percentage allowed
 
 # ============================================================
-# SYNC CONFIGURATION
+# CLOUD SYNC CONFIGURATION
 # ============================================================
-SYNC_ENABLED = False            # Disable sync for early development
+CLOUD_URL = ""                  # Set after pairing (e.g., "https://smartlocker-cloud-production.up.railway.app")
+CLOUD_API_KEY = ""              # Set after pairing (slk_xxx token from cloud)
+CLOUD_DEVICE_UUID = ""          # Cloud's internal UUID for this device
+CLOUD_PAIRED = False            # True after successful pairing
+CLOUD_PAIRING_FILE = "data/cloud_pairing.json"  # Persistent pairing config
+
+SYNC_ENABLED = False            # Auto-enabled after pairing
 SYNC_BATCH_SIZE = 50            # Max events per sync batch
-SYNC_INTERVAL_S = 30            # Seconds between sync attempts
+SYNC_INTERVAL_S = 300           # Seconds between sync attempts (5 min)
 SYNC_RETRY_MAX = 7              # Max retry attempts before marking failed
-MQTT_BROKER_URL = ""            # Fill in when cloud is ready
-MQTT_PORT = 443
-MQTT_USE_WSS = True
+HEARTBEAT_INTERVAL_S = 60      # Seconds between heartbeat pings
 
 # ============================================================
 # DATABASE

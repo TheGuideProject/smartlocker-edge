@@ -24,6 +24,8 @@ from core.mixing_engine import MixingEngine
 from core.usage_calculator import UsageCalculator
 from core.models import MixingRecipe
 from persistence.database import Database
+from sync.cloud_client import CloudClient
+from sync.sync_engine import SyncEngine
 
 
 def create_drivers(mode: str):
@@ -164,8 +166,26 @@ def main():
         print("ERROR: Failed to initialize sensors. Check hardware.")
         sys.exit(1)
 
-    # Load demo data
-    load_demo_data(db, mixing_engine)
+    # ---- Cloud Sync ----
+    cloud = CloudClient()
+    sync_engine = SyncEngine(db, cloud)
+
+    if cloud.is_paired:
+        info = cloud.get_pairing_info()
+        print(f"  Cloud: PAIRED")
+        print(f"  Vessel: {info.get('vessel_name', 'N/A')}")
+        print(f"  Company: {info.get('company_name', 'N/A')}")
+        print(f"  Cloud URL: {info.get('cloud_url', 'N/A')}")
+
+        # Start background sync
+        sync_engine.start()
+        print("  Sync: ACTIVE (background)")
+    else:
+        print("  Cloud: NOT PAIRED")
+        print("  Run 'python scripts/pair_device.py' to connect to cloud")
+
+        # Load demo data only if not paired (paired devices get data from cloud)
+        load_demo_data(db, mixing_engine)
 
     print()
     print("  System ready. Starting main loop...")
@@ -183,6 +203,7 @@ def main():
         print("\nShutting down...")
 
     finally:
+        sync_engine.stop()
         inventory_engine.shutdown()
         db.close()
         print("SmartLocker stopped.")
