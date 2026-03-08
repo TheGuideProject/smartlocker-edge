@@ -1,0 +1,552 @@
+"""
+Mixing Engine - State Machine
+
+Guides crew through the complete mixing workflow:
+  1. Select maintenance job / area
+  2. System shows which products are needed
+  3. LEDs indicate which cans to pick
+  4. Place container on mixing scale, tare
+  5. Pour base component (live weight feedback)
+  6. Pour hardener component (ratio monitoring)
+  7. Optional: add thinner
+  8. Log mixing session
+  9. Start pot-life countdown
+  10. Guide can returns to correct slots
+
+This is the highest-value feature in the system.
+"""
+
+import logging
+import time
+from typing import Optional, Callable, Dict, Any
+
+from config import settings
+from core.models import (
+    MixingSession, MixingState, MixingRecipe, Product,
+    ApplicationMethod, EventConfirmation,
+)
+from core.event_types import Event, EventType
+from core.event_bus import EventBus
+from hal.interfaces import (
+    WeightDriverInterface, LEDDriverInterface, BuzzerDriverInterface,
+    LEDColor, LEDPattern, BuzzerPattern, WeightReading,
+)
+
+logger = logging.getLogger("smartlocker")
+
+
+class MixingEngine:
+    """
+    State machine that manages the mixing workflow.
+
+    Usage:
+        engine = MixingEngine(weight, led, buzzer, event_bus)
+        engine.start_session(recipe, user_name="Crew A")
+
+        # Call update() repeatedly in the main loop
+        engine.update()  # Reads weight, checks thresholds, advances state
+
+        # UI calls these when crew interacts with touchscreen:
+        engine.select_job(job_id)
+        engine.confirm_pour()
+        engine.confirm_mix()
+        engine.add_thinner(method=ApplicationMethod.BRUSH)
+    """
+
+    def __init__(
+        self,
+        weight: WeightDriverInterface,
+        led: LEDDriverInterface,
+        buzzer: BuzzerDriverInterface,
+        event_bus: EventBus,
+    ):
+        self.weight = weight
+        self.led = led
+        self.buzzer = buzzer
+        self.event_bus = event_bus
+
+        # Current session (None when idle)
+        self.session: Optional[MixingSession] = None
+
+        # Recipe catalog (loaded from DB/config — simplified for now)
+        self._recipes: Dict[str, MixingRecipe] = {}
+        self._products: Dict[str, Product] = {}
+
+        # Callback for UI updates
+        self._on_state_change: Optional[Callable[[MixingState, Dict], None]] = None
+
+        # Weight monitoring
+        self._last_weight_reading: Optional[WeightReading] = None
+        self._weight_stable_since: float = 0.0
+
+    def set_state_change_callback(self, callback: Callable[[MixingState, Dict], None]):
+        """Register a callback for UI updates when state changes."""
+        self._on_state_change = callback
+
+    def load_recipes(self, recipes: Dict[str, MixingRecipe]):
+        """Load mixing recipes (from database or config)."""
+        self._recipes = recipes
+
+    def load_products(self, products: Dict[str, Product]):
+        """Load product catalog."""
+        self._products = products
+
+    # ============================================================
+    # STATE TRANSITIONS
+    # ============================================================
+
+    def start_session(self, recipe_id: str, user_name: str = "",
+                      job_id: Optional[str] = None) -> bool:
+        """Start a new mixing session. Returns False if already in session."""
+        if self.session and self.session.state != MixingState.IDLE:
+            logger.warning("Cannot start session: already active")
+            return False
+
+        recipe = self._recipes.get(recipe_id)
+        if not recipe:
+            logger.error(f"Unknown recipe: {recipe_id}")
+            return False
+
+        self.session = MixingSession(
+            state=MixingState.SELECT_PRODUCT,
+            recipe_id=recipe_id,
+            job_id=job_id,
+            user_name=user_name,
+            base_product_id=recipe.base_product_id,
+            hardener_product_id=recipe.hardener_product_id,
+            started_at=time.time(),
+        )
+
+        self.event_bus.publish(Event(
+            event_type=EventType.MIX_SESSION_STARTED,
+            device_id=settings.DEVICE_ID,
+            session_id=self.session.session_id,
+            user_name=user_name,
+            data={
+                "recipe_id": recipe_id,
+                "recipe_name": recipe.name,
+                "job_id": job_id or "",
+            },
+        ))
+
+        self._notify_ui({"recipe": recipe.name})
+        logger.info(f"Mixing session started: {recipe.name} by {user_name}")
+        return True
+
+    def show_recipe(self, base_amount_g: float) -> None:
+        """
+        Calculate and display the recipe.
+        base_amount_g: how much base the crew wants to mix.
+        """
+        if not self.session:
+            return
+
+        recipe = self._recipes.get(self.session.recipe_id)
+        if not recipe:
+            return
+
+        # Calculate hardener amount from ratio
+        hardener_amount_g = base_amount_g * (recipe.ratio_hardener / recipe.ratio_base)
+
+        self.session.base_weight_target_g = base_amount_g
+        self.session.hardener_weight_target_g = hardener_amount_g
+        self.session.state = MixingState.SHOW_RECIPE
+
+        self._notify_ui({
+            "base_target_g": base_amount_g,
+            "hardener_target_g": round(hardener_amount_g, 1),
+            "ratio": f"{recipe.ratio_base}:{recipe.ratio_hardener}",
+            "tolerance_pct": recipe.tolerance_pct,
+            "pot_life_min": recipe.pot_life_minutes,
+        })
+
+    def advance_to_pick_base(self) -> None:
+        """Crew confirmed recipe, ready to pick base can."""
+        if not self.session or self.session.state != MixingState.SHOW_RECIPE:
+            return
+
+        self.session.state = MixingState.PICK_BASE
+
+        # Light up the correct shelf slot for base product
+        # (In full version, find the slot with matching product via inventory engine)
+        self.led.clear_all()
+        # TODO: get actual slot from inventory engine
+        # self.led.set_slot(base_slot_id, LEDColor.GREEN, LEDPattern.BLINK_SLOW)
+
+        self.buzzer.play(BuzzerPattern.TICK)
+        self._notify_ui({"instruction": "Pick the BASE can from the lit shelf slot"})
+
+    def confirm_base_picked(self, tag_id: str) -> None:
+        """Crew picked up the base can (confirmed by RFID disappearance)."""
+        if not self.session or self.session.state != MixingState.PICK_BASE:
+            return
+
+        self.session.base_tag_id = tag_id
+        self.session.state = MixingState.WEIGH_BASE
+
+        self._notify_ui({
+            "instruction": "Place container on mixing scale, then TARE",
+            "target_g": self.session.base_weight_target_g,
+        })
+
+    def tare_scale(self) -> bool:
+        """Crew placed container on scale and pressed TARE."""
+        success = self.weight.tare("mixing_scale")
+        if success:
+            self.buzzer.play(BuzzerPattern.CONFIRM)
+            logger.info("Mixing scale tared")
+        return success
+
+    def confirm_base_weighed(self) -> None:
+        """Crew finished pouring base component."""
+        if not self.session or self.session.state != MixingState.WEIGH_BASE:
+            return
+
+        reading = self.weight.read_weight("mixing_scale")
+        self.session.base_weight_actual_g = reading.grams
+
+        self.event_bus.publish(Event(
+            event_type=EventType.MIX_BASE_WEIGHED,
+            device_id=settings.DEVICE_ID,
+            session_id=self.session.session_id,
+            data={
+                "target_g": self.session.base_weight_target_g,
+                "actual_g": reading.grams,
+            },
+        ))
+
+        self.session.state = MixingState.PICK_HARDENER
+        self.buzzer.play(BuzzerPattern.CONFIRM)
+
+        # Light up hardener slot
+        self.led.clear_all()
+        # TODO: get actual slot from inventory engine
+        # self.led.set_slot(hardener_slot_id, LEDColor.GREEN, LEDPattern.BLINK_SLOW)
+
+        self._notify_ui({
+            "instruction": "Pick the HARDENER can from the lit shelf slot",
+            "base_actual_g": reading.grams,
+        })
+
+    def confirm_hardener_picked(self, tag_id: str) -> None:
+        """Crew picked up hardener can."""
+        if not self.session or self.session.state != MixingState.PICK_HARDENER:
+            return
+
+        self.session.hardener_tag_id = tag_id
+        self.session.state = MixingState.WEIGH_HARDENER
+
+        self._notify_ui({
+            "instruction": "Pour hardener into the mixing container",
+            "target_g": self.session.hardener_weight_target_g,
+        })
+
+    def confirm_hardener_weighed(self) -> None:
+        """Crew finished pouring hardener."""
+        if not self.session or self.session.state != MixingState.WEIGH_HARDENER:
+            return
+
+        reading = self.weight.read_weight("mixing_scale")
+        # Hardener weight = total - base
+        hardener_actual = reading.grams - self.session.base_weight_actual_g
+        self.session.hardener_weight_actual_g = hardener_actual
+
+        # Calculate actual ratio
+        if hardener_actual > 0:
+            self.session.ratio_achieved = self.session.base_weight_actual_g / hardener_actual
+        else:
+            self.session.ratio_achieved = 0.0
+
+        # Check if ratio is within tolerance
+        recipe = self._recipes.get(self.session.recipe_id)
+        if recipe:
+            target_ratio = recipe.ratio_base / recipe.ratio_hardener
+            deviation_pct = abs(self.session.ratio_achieved - target_ratio) / target_ratio * 100
+            self.session.ratio_in_spec = deviation_pct <= recipe.tolerance_pct
+        else:
+            self.session.ratio_in_spec = False
+
+        self.event_bus.publish(Event(
+            event_type=EventType.MIX_HARDENER_WEIGHED,
+            device_id=settings.DEVICE_ID,
+            session_id=self.session.session_id,
+            data={
+                "target_g": self.session.hardener_weight_target_g,
+                "actual_g": hardener_actual,
+                "ratio_achieved": round(self.session.ratio_achieved, 2),
+                "in_spec": self.session.ratio_in_spec,
+            },
+        ))
+
+        self.session.state = MixingState.CONFIRM_MIX
+
+        if self.session.ratio_in_spec:
+            self.buzzer.play(BuzzerPattern.TARGET_REACHED)
+        else:
+            self.buzzer.play(BuzzerPattern.WARNING)
+            self.event_bus.publish(Event(
+                event_type=EventType.MIX_OUT_OF_SPEC,
+                device_id=settings.DEVICE_ID,
+                session_id=self.session.session_id,
+                data={
+                    "ratio_achieved": round(self.session.ratio_achieved, 2),
+                    "ratio_in_spec": False,
+                },
+            ))
+
+        self._notify_ui({
+            "ratio_achieved": round(self.session.ratio_achieved, 2),
+            "in_spec": self.session.ratio_in_spec,
+            "instruction": "MIX OK" if self.session.ratio_in_spec else "MIX OUT OF SPEC",
+        })
+
+    def confirm_mix(self, override_reason: str = "") -> None:
+        """Crew confirms the mix (even if out of spec with a reason)."""
+        if not self.session or self.session.state != MixingState.CONFIRM_MIX:
+            return
+
+        if not self.session.ratio_in_spec and override_reason:
+            self.session.override_reason = override_reason
+            self.event_bus.publish(Event(
+                event_type=EventType.MIX_OVERRIDE,
+                device_id=settings.DEVICE_ID,
+                session_id=self.session.session_id,
+                data={"reason": override_reason},
+            ))
+
+        self.session.state = MixingState.ADD_THINNER
+        self._notify_ui({"instruction": "Add thinner? Select application method or SKIP"})
+
+    def add_thinner(self, method: ApplicationMethod, thinner_weight_g: float = 0.0) -> None:
+        """Add thinner based on application method."""
+        if not self.session or self.session.state != MixingState.ADD_THINNER:
+            return
+
+        self.session.application_method = method
+        self.session.thinner_weight_g = thinner_weight_g
+
+        recipe = self._recipes.get(self.session.recipe_id)
+        if recipe:
+            thinner_pct = {
+                ApplicationMethod.BRUSH: recipe.thinner_pct_brush,
+                ApplicationMethod.ROLLER: recipe.thinner_pct_roller,
+                ApplicationMethod.SPRAY: recipe.thinner_pct_spray,
+            }.get(method, 0)
+
+            self.event_bus.publish(Event(
+                event_type=EventType.MIX_THINNER_ADDED,
+                device_id=settings.DEVICE_ID,
+                session_id=self.session.session_id,
+                data={
+                    "method": method.value,
+                    "thinner_pct": thinner_pct,
+                    "thinner_weight_g": thinner_weight_g,
+                },
+            ))
+
+        self._start_pot_life()
+
+    def skip_thinner(self) -> None:
+        """Skip thinner addition."""
+        if not self.session or self.session.state != MixingState.ADD_THINNER:
+            return
+        self.session.application_method = ApplicationMethod.BRUSH
+        self._start_pot_life()
+
+    def _start_pot_life(self) -> None:
+        """Start the pot-life countdown timer."""
+        if not self.session:
+            return
+
+        recipe = self._recipes.get(self.session.recipe_id)
+        pot_life_sec = (recipe.pot_life_minutes * 60) if recipe else 28800  # 8h default
+
+        self.session.pot_life_started_at = time.time()
+        self.session.pot_life_expires_at = time.time() + pot_life_sec
+        self.session.state = MixingState.POT_LIFE_ACTIVE
+
+        self.buzzer.play(BuzzerPattern.CONFIRM)
+
+        self._notify_ui({
+            "instruction": "Mix ready! Pot-life timer started.",
+            "pot_life_minutes": pot_life_sec / 60,
+            "expires_at": self.session.pot_life_expires_at,
+        })
+
+        logger.info(f"Pot-life started: {pot_life_sec/60:.0f} minutes")
+
+    def return_cans_phase(self) -> None:
+        """Transition to can return phase after mixing is done."""
+        if not self.session:
+            return
+        self.session.state = MixingState.RETURN_CANS
+
+        # Light up correct slots for can returns
+        # TODO: get actual slots from inventory engine
+        self._notify_ui({"instruction": "Return all cans to their slots"})
+
+    def complete_session(self) -> None:
+        """Mark session as complete, log everything."""
+        if not self.session:
+            return
+
+        self.session.state = MixingState.SESSION_COMPLETE
+        self.session.completed_at = time.time()
+        self.session.confirmation = EventConfirmation.CONFIRMED
+
+        self.event_bus.publish(Event(
+            event_type=EventType.MIX_COMPLETED,
+            device_id=settings.DEVICE_ID,
+            session_id=self.session.session_id,
+            user_name=self.session.user_name,
+            data={
+                "recipe_id": self.session.recipe_id,
+                "base_actual_g": self.session.base_weight_actual_g,
+                "hardener_actual_g": self.session.hardener_weight_actual_g,
+                "thinner_g": self.session.thinner_weight_g,
+                "ratio_achieved": round(self.session.ratio_achieved, 2),
+                "in_spec": self.session.ratio_in_spec,
+                "override_reason": self.session.override_reason,
+                "method": self.session.application_method.value,
+                "duration_sec": self.session.completed_at - self.session.started_at,
+            },
+        ))
+
+        self.led.clear_all()
+        self.buzzer.play(BuzzerPattern.CONFIRM)
+        self._notify_ui({"instruction": "Session complete!"})
+
+        logger.info(
+            f"Mixing session complete: {self.session.session_id} "
+            f"ratio={self.session.ratio_achieved:.2f} "
+            f"in_spec={self.session.ratio_in_spec}"
+        )
+
+        # Reset
+        self.session = None
+
+    def abort_session(self, reason: str = "") -> None:
+        """Abort the current mixing session."""
+        if not self.session:
+            return
+
+        self.event_bus.publish(Event(
+            event_type=EventType.MIX_ABORTED,
+            device_id=settings.DEVICE_ID,
+            session_id=self.session.session_id,
+            data={"reason": reason, "state_when_aborted": self.session.state.value},
+        ))
+
+        self.led.clear_all()
+        self.session = None
+        self._notify_ui({"instruction": "Session aborted"})
+        logger.info(f"Mixing session aborted: {reason}")
+
+    # ============================================================
+    # LIVE WEIGHT MONITORING
+    # ============================================================
+
+    def get_current_weight(self) -> Optional[WeightReading]:
+        """Read current weight on mixing scale (for UI display)."""
+        try:
+            return self.weight.read_weight("mixing_scale")
+        except Exception as e:
+            logger.warning(f"Failed to read mixing scale: {e}")
+            return None
+
+    def check_weight_target(self) -> Optional[Dict[str, Any]]:
+        """
+        Check if current weight has reached the target for the active pour.
+        Returns status dict for UI, or None if not in a weighing state.
+        """
+        if not self.session:
+            return None
+
+        reading = self.get_current_weight()
+        if not reading:
+            return None
+
+        if self.session.state == MixingState.WEIGH_BASE:
+            target = self.session.base_weight_target_g
+            current = reading.grams
+        elif self.session.state == MixingState.WEIGH_HARDENER:
+            target = self.session.base_weight_actual_g + self.session.hardener_weight_target_g
+            current = reading.grams
+        else:
+            return None
+
+        progress_pct = (current / target * 100) if target > 0 else 0
+        tolerance = settings.MIX_RATIO_TOLERANCE_PCT
+
+        # Determine zone
+        if progress_pct < 90:
+            zone = "pouring"
+        elif progress_pct < (100 - tolerance):
+            zone = "approaching"
+        elif progress_pct <= (100 + tolerance):
+            zone = "in_range"
+        else:
+            zone = "over"
+
+        return {
+            "current_g": round(current, 1),
+            "target_g": round(target, 1),
+            "progress_pct": round(progress_pct, 1),
+            "zone": zone,
+            "stable": reading.stable,
+        }
+
+    def check_pot_life(self) -> Optional[Dict[str, Any]]:
+        """Check pot-life timer status. Returns None if no active timer."""
+        if not self.session or self.session.pot_life_expires_at == 0:
+            return None
+
+        now = time.time()
+        remaining_sec = self.session.pot_life_expires_at - now
+        total_sec = self.session.pot_life_expires_at - self.session.pot_life_started_at
+        elapsed_pct = ((now - self.session.pot_life_started_at) / total_sec * 100) if total_sec > 0 else 0
+
+        if remaining_sec <= 0:
+            # Expired
+            if self.session.state != MixingState.SESSION_COMPLETE:
+                self.event_bus.publish(Event(
+                    event_type=EventType.POT_LIFE_EXPIRED,
+                    device_id=settings.DEVICE_ID,
+                    session_id=self.session.session_id,
+                ))
+                self.buzzer.play(BuzzerPattern.ERROR)
+            return {"remaining_sec": 0, "expired": True, "elapsed_pct": 100}
+
+        # Warnings at 75% and 90%
+        if elapsed_pct >= 90:
+            self.buzzer.play(BuzzerPattern.WARNING)
+        elif elapsed_pct >= 75:
+            pass  # UI shows yellow
+
+        return {
+            "remaining_sec": round(remaining_sec),
+            "remaining_min": round(remaining_sec / 60, 1),
+            "elapsed_pct": round(elapsed_pct, 1),
+            "expired": False,
+        }
+
+    # ============================================================
+    # HELPERS
+    # ============================================================
+
+    @property
+    def current_state(self) -> MixingState:
+        return self.session.state if self.session else MixingState.IDLE
+
+    @property
+    def is_active(self) -> bool:
+        return self.session is not None and self.session.state != MixingState.IDLE
+
+    def _notify_ui(self, data: Dict[str, Any]) -> None:
+        """Send state change notification to UI callback."""
+        state = self.session.state if self.session else MixingState.IDLE
+        if self._on_state_change:
+            try:
+                self._on_state_change(state, data)
+            except Exception as e:
+                logger.error(f"UI callback error: {e}")
