@@ -2,9 +2,8 @@
 Pairing Screen - First Boot Cloud Connection Setup
 
 Shown automatically when the device is NOT paired with the cloud.
-Allows the technician to enter:
-1. Cloud URL (e.g., https://smartlocker-cloud-xxx.up.railway.app)
-2. 6-digit pairing code (from admin panel)
+The technician enters ONLY the 6-digit pairing code (from admin panel).
+The cloud URL is fixed in config/settings.py.
 
 After successful pairing, navigates to the home screen.
 """
@@ -14,6 +13,8 @@ from kivy.lang import Builder
 from kivy.app import App
 from kivy.clock import Clock
 from kivy.properties import StringProperty
+
+from config import settings
 
 Builder.load_string('''
 <PairingScreen>:
@@ -33,7 +34,7 @@ Builder.load_string('''
                 valign: 'middle'
 
             Label:
-                text: 'SETUP'
+                text: 'FIRST BOOT SETUP'
                 font_size: '15sp'
                 bold: True
                 color: 0.96, 0.63, 0.38, 1
@@ -45,23 +46,23 @@ Builder.load_string('''
         # ---- MAIN CONTENT ----
         BoxLayout:
             orientation: 'vertical'
-            padding: [40, 20, 40, 20]
-            spacing: 12
+            padding: [60, 25, 60, 20]
+            spacing: 10
 
             # Title
             Label:
                 text: 'Cloud Pairing'
-                font_size: '26sp'
+                font_size: '28sp'
                 bold: True
                 color: 1, 1, 1, 1
                 size_hint_y: None
-                height: '40dp'
+                height: '45dp'
                 halign: 'center'
                 text_size: self.size
 
             Label:
-                text: 'Enter the cloud URL and pairing code from your admin panel'
-                font_size: '14sp'
+                text: 'Enter the 6-digit code from the admin panel'
+                font_size: '15sp'
                 color: 0.55, 0.60, 0.68, 1
                 size_hint_y: None
                 height: '25dp'
@@ -70,88 +71,60 @@ Builder.load_string('''
 
             Widget:
                 size_hint_y: None
-                height: '8dp'
+                height: '15dp'
 
-            # Cloud URL
+            # Big pairing code input
             Label:
-                text: 'Cloud URL'
-                font_size: '14sp'
+                text: 'PAIRING CODE'
+                font_size: '13sp'
                 bold: True
-                color: 0.75, 0.80, 0.88, 1
+                color: 0.45, 0.50, 0.58, 1
                 size_hint_y: None
-                height: '22dp'
-                halign: 'left'
-                text_size: self.size
-
-            TextInput:
-                id: cloud_url_input
-                hint_text: 'https://smartlocker-cloud-xxx.up.railway.app'
-                font_size: '16sp'
-                multiline: False
-                size_hint_y: None
-                height: '44dp'
-                background_color: 0.09, 0.14, 0.21, 1
-                foreground_color: 1, 1, 1, 1
-                cursor_color: 0.18, 0.77, 0.71, 1
-                hint_text_color: 0.35, 0.40, 0.48, 1
-                padding: [12, 10]
-
-            Widget:
-                size_hint_y: None
-                height: '6dp'
-
-            # Pairing Code
-            Label:
-                text: 'Pairing Code (6 digits)'
-                font_size: '14sp'
-                bold: True
-                color: 0.75, 0.80, 0.88, 1
-                size_hint_y: None
-                height: '22dp'
-                halign: 'left'
+                height: '20dp'
+                halign: 'center'
                 text_size: self.size
 
             TextInput:
                 id: pairing_code_input
-                hint_text: 'e.g. A3K7M2'
-                font_size: '28sp'
+                hint_text: '_ _ _ _ _ _'
+                font_size: '40sp'
                 multiline: False
                 size_hint_y: None
-                height: '52dp'
+                height: '70dp'
                 background_color: 0.09, 0.14, 0.21, 1
                 foreground_color: 0.18, 0.77, 0.71, 1
                 cursor_color: 0.18, 0.77, 0.71, 1
-                hint_text_color: 0.35, 0.40, 0.48, 1
-                padding: [12, 8]
-                input_filter: lambda text, from_undo: text.upper()
+                hint_text_color: 0.25, 0.30, 0.38, 1
+                padding: [12, 10]
                 halign: 'center'
+                max_chars: 6
 
             Widget:
                 size_hint_y: None
-                height: '8dp'
+                height: '10dp'
 
             # Status message
             Label:
                 id: status_label
                 text: root.status_text
-                font_size: '14sp'
+                font_size: '15sp'
                 color: root._status_color
                 size_hint_y: None
-                height: '25dp'
+                height: '28dp'
                 halign: 'center'
                 text_size: self.size
                 markup: True
 
             # Buttons row
             BoxLayout:
-                spacing: 12
+                spacing: 15
                 size_hint_y: None
-                height: '55dp'
+                height: '60dp'
 
                 Button:
                     id: pair_button
-                    text: 'PAIR DEVICE'
-                    font_size: '18sp'
+                    text: 'CONNECT'
+                    font_size: '20sp'
                     bold: True
                     background_normal: ''
                     background_color: 0.18, 0.77, 0.71, 1
@@ -159,12 +132,12 @@ Builder.load_string('''
                     on_release: root.do_pairing()
 
                 Button:
-                    text: 'SKIP'
+                    text: 'OFFLINE MODE'
                     font_size: '16sp'
                     background_normal: ''
                     background_color: 0.20, 0.25, 0.35, 1
                     color: 0.6, 0.65, 0.72, 1
-                    size_hint_x: 0.35
+                    size_hint_x: 0.4
                     on_release: root.skip_pairing()
 
             # Info footer
@@ -187,26 +160,27 @@ class PairingScreen(Screen):
     def on_enter(self):
         """Called when screen is displayed."""
         app = App.get_running_app()
-        self.device_info_text = f"Device: {app.device_id}  |  Mode: {app.mode.upper()}"
+        self.device_info_text = f"Device: {app.device_id}  |  Cloud: {settings.CLOUD_URL}"
         self.status_text = ''
         self._status_color = [0.55, 0.60, 0.68, 1]
+        # Reset button state
+        self.ids.pair_button.text = 'CONNECT'
+        self.ids.pair_button.disabled = False
+        self.ids.pairing_code_input.text = ''
 
     def do_pairing(self):
         """Execute the pairing process."""
-        cloud_url = self.ids.cloud_url_input.text.strip()
         pairing_code = self.ids.pairing_code_input.text.strip().upper()
 
-        # Validate inputs
-        if not cloud_url:
-            self._set_status('Please enter the Cloud URL', error=True)
+        # Validate
+        if not pairing_code or len(pairing_code) != 6:
+            self._set_status('Enter the 6-digit code', error=True)
             return
 
-        if not cloud_url.startswith('http'):
-            cloud_url = 'https://' + cloud_url
-            self.ids.cloud_url_input.text = cloud_url
-
-        if not pairing_code or len(pairing_code) != 6:
-            self._set_status('Pairing code must be exactly 6 characters', error=True)
+        # Cloud URL from settings (fixed)
+        cloud_url = settings.CLOUD_URL
+        if not cloud_url:
+            self._set_status('Cloud URL not configured!', error=True)
             return
 
         # Disable button and show connecting
@@ -245,13 +219,13 @@ class PairingScreen(Screen):
                 Clock.schedule_once(lambda dt: self._go_home(), 2.0)
             else:
                 error = data.get('detail', 'Unknown error')
-                self._set_status(f'Failed: {error}', error=True)
-                self.ids.pair_button.text = 'PAIR DEVICE'
+                self._set_status(f'{error}', error=True)
+                self.ids.pair_button.text = 'CONNECT'
                 self.ids.pair_button.disabled = False
 
         except Exception as e:
             self._set_status(f'Error: {str(e)}', error=True)
-            self.ids.pair_button.text = 'PAIR DEVICE'
+            self.ids.pair_button.text = 'CONNECT'
             self.ids.pair_button.disabled = False
 
     def _save_config(self, app, config):

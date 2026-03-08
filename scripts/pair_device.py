@@ -123,19 +123,12 @@ def main():
         cloud.unpair()
         print("  Previous pairing removed.\n")
 
-    # Get cloud URL
-    print("  Enter the SmartLocker Cloud URL")
-    print("  (e.g., https://smartlocker-cloud-production.up.railway.app)")
+    # Cloud URL is fixed in settings
+    cloud_url = settings.CLOUD_URL
+    print(f"  Cloud: {cloud_url}")
     print()
-    cloud_url = input("  Cloud URL: ").strip()
-    if not cloud_url:
-        print("  Error: URL cannot be empty!")
-        return
-    if not cloud_url.startswith("http"):
-        cloud_url = "https://" + cloud_url
 
     # Get pairing code
-    print()
     print("  Enter the 6-digit pairing code from the admin panel")
     print("  (e.g., A3K7M2)")
     print()

@@ -48,7 +48,7 @@ THINNER_MAX_PCT = 20.0          # Maximum thinner percentage allowed
 # ============================================================
 # CLOUD SYNC CONFIGURATION
 # ============================================================
-CLOUD_URL = ""                  # Set after pairing (e.g., "https://smartlocker-cloud-production.up.railway.app")
+CLOUD_URL = "https://web-production-34fe1.up.railway.app"  # Fixed cloud backend URL
 CLOUD_API_KEY = ""              # Set after pairing (slk_xxx token from cloud)
 CLOUD_DEVICE_UUID = ""          # Cloud's internal UUID for this device
 CLOUD_PAIRED = False            # True after successful pairing
