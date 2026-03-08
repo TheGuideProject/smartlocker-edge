@@ -300,7 +300,7 @@ Builder.load_string('''
 # GREEN BUTTON (compat alias for PrimaryButton)
 # --------------------------------------------------------
 <GreenButton@PrimaryButton>:
-    pass
+    background_color: 0.00, 0.82, 0.73, 1
 ''')
 
 
