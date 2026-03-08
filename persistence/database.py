@@ -37,7 +37,7 @@ class Database:
         # Ensure directory exists
         os.makedirs(os.path.dirname(self.db_path) or ".", exist_ok=True)
 
-        self._conn = sqlite3.connect(self.db_path)
+        self._conn = sqlite3.connect(self.db_path, check_same_thread=False)
         self._conn.row_factory = sqlite3.Row  # Dict-like row access
 
         # Enable WAL mode for crash safety
