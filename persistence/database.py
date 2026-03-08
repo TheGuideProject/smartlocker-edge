@@ -53,6 +53,29 @@ class Database:
         else:
             logger.warning(f"Schema file not found: {schema_path}")
 
+        # Create sensor health log table (added for offline health logging)
+        self._conn.execute('''
+            CREATE TABLE IF NOT EXISTS sensor_health_log (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                timestamp TEXT NOT NULL,
+                sensor TEXT NOT NULL,
+                status TEXT NOT NULL,
+                message TEXT,
+                value TEXT,
+                synced INTEGER DEFAULT 0,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        ''')
+        self._conn.execute(
+            'CREATE INDEX IF NOT EXISTS idx_health_log_synced '
+            'ON sensor_health_log(synced)'
+        )
+        self._conn.execute(
+            'CREATE INDEX IF NOT EXISTS idx_health_log_sensor '
+            'ON sensor_health_log(sensor)'
+        )
+        self._conn.commit()
+
     def close(self) -> None:
         """Close database connection."""
         if self._conn:
@@ -158,6 +181,56 @@ class Database:
             event_ids,
         )
         self.mark_events_synced(event_ids)
+
+    # ============================================================
+    # SENSOR HEALTH LOG (offline health logging)
+    # ============================================================
+
+    def log_sensor_health(self, sensor: str, status: str,
+                          message: str = '', value: str = '') -> None:
+        """Log a sensor health snapshot (called every 5 min by SyncEngine)."""
+        from datetime import datetime, timezone
+        now = datetime.now(timezone.utc).isoformat()
+        self.conn.execute(
+            """INSERT INTO sensor_health_log
+               (timestamp, sensor, status, message, value, synced)
+               VALUES (?, ?, ?, ?, ?, 0)""",
+            (now, sensor, status, message, value),
+        )
+        self.conn.commit()
+
+    def get_pending_health_logs(self, limit: int = 500) -> List[Dict[str, Any]]:
+        """Get unsynced health logs for batch upload to cloud."""
+        cursor = self.conn.execute(
+            """SELECT id, timestamp, sensor, status, message, value
+               FROM sensor_health_log
+               WHERE synced = 0
+               ORDER BY id ASC
+               LIMIT ?""",
+            (limit,),
+        )
+        return [dict(row) for row in cursor.fetchall()]
+
+    def mark_health_logs_synced(self, log_ids: List[int]) -> None:
+        """Mark health logs as synced after successful upload."""
+        if not log_ids:
+            return
+        placeholders = ",".join("?" * len(log_ids))
+        self.conn.execute(
+            f"UPDATE sensor_health_log SET synced = 1 WHERE id IN ({placeholders})",
+            log_ids,
+        )
+        self.conn.commit()
+
+    def cleanup_old_health_logs(self, days: int = 30) -> None:
+        """Delete synced health logs older than X days to save RPi storage."""
+        self.conn.execute(
+            """DELETE FROM sensor_health_log
+               WHERE synced = 1
+               AND created_at < datetime('now', '-' || ? || ' days')""",
+            (days,),
+        )
+        self.conn.commit()
 
     # ============================================================
     # PRODUCT CATALOG

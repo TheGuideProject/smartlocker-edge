@@ -270,6 +270,33 @@ class CloudClient:
         return success
 
     # ============================================================
+    # HEALTH LOG SYNC (batch upload of offline health logs)
+    # ============================================================
+
+    def upload_health_logs(self, logs: list) -> bool:
+        """
+        Upload a batch of health logs to the cloud.
+        Called by SyncEngine when network is available.
+
+        Args:
+            logs: List of dicts with keys: id, timestamp, sensor, status, message, value
+
+        Returns:
+            True if upload was successful
+        """
+        if not self.is_paired:
+            return False
+
+        url = f"{self.cloud_url}/api/devices/{self.device_id}/health-logs"
+        payload = {"logs": logs}
+
+        success, data = self._http_post(url, payload, auth=True, timeout=15)
+        if success:
+            received = data.get("received", 0)
+            logger.info(f"Health logs uploaded: {received} entries")
+        return success
+
+    # ============================================================
     # CONFIG SYNC
     # ============================================================
 

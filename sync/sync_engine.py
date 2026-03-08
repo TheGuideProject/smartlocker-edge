@@ -33,6 +33,9 @@ class SyncEngine:
         engine.stop()   # Stops background thread
     """
 
+    # Health snapshot interval: every 5 minutes (300 seconds)
+    HEALTH_LOG_INTERVAL_S = 300
+
     def __init__(self, db: Database, cloud: CloudClient):
         self.db = db
         self.cloud = cloud
@@ -41,6 +44,7 @@ class SyncEngine:
         self._last_sync_time = 0.0
         self._last_heartbeat_time = 0.0
         self._last_config_sync_time = 0.0
+        self._last_health_log_time = 0.0
         self._start_time = time.time()
 
     def start(self) -> None:
@@ -91,6 +95,7 @@ class SyncEngine:
         self._do_event_sync()
         self._do_heartbeat()
         self._do_config_sync()
+        self._log_health_snapshot()  # Initial health snapshot
 
         while self._running:
             try:
@@ -99,6 +104,7 @@ class SyncEngine:
                 # Event sync
                 if now - self._last_sync_time >= settings.SYNC_INTERVAL_S:
                     self._do_event_sync()
+                    self._do_health_sync()  # Upload buffered health logs
                     self._last_sync_time = now
 
                 # Heartbeat
@@ -110,6 +116,11 @@ class SyncEngine:
                 if now - self._last_config_sync_time >= 1800:
                     self._do_config_sync()
                     self._last_config_sync_time = now
+
+                # Health snapshot every 5 minutes (REGARDLESS of network)
+                if now - self._last_health_log_time >= self.HEALTH_LOG_INTERVAL_S:
+                    self._log_health_snapshot()
+                    self._last_health_log_time = now
 
                 # Sleep between checks (short so we can stop quickly)
                 time.sleep(5)
@@ -216,6 +227,50 @@ class SyncEngine:
 
         except Exception as e:
             logger.error(f"Config sync error: {e}")
+
+    # ============================================================
+    # HEALTH LOGGING (offline-tolerant)
+    # ============================================================
+
+    def _log_health_snapshot(self) -> None:
+        """
+        Take a health snapshot of all sensors and store locally.
+        Called every 5 minutes REGARDLESS of network status.
+        """
+        try:
+            health = self.cloud._collect_health_data() if hasattr(self.cloud, '_collect_health_data') else {}
+
+            if not health:
+                logger.debug("No health data to log (no sensors configured)")
+                return
+
+            for sensor_name, sensor_data in health.items():
+                if not isinstance(sensor_data, dict):
+                    continue
+                status = sensor_data.get('status', 'unknown')
+                message = sensor_data.get('message', '')
+                value = json.dumps(sensor_data.get('details', '')) if sensor_data.get('details') else ''
+                self.db.log_sensor_health(sensor_name, status, message, value)
+
+            logger.debug(f"Health snapshot logged: {len(health)} sensors")
+        except Exception as e:
+            logger.error(f"Health snapshot error: {e}")
+
+    def _do_health_sync(self) -> None:
+        """Upload buffered health logs to cloud when online."""
+        try:
+            pending = self.db.get_pending_health_logs(limit=500)
+            if not pending:
+                return
+
+            success = self.cloud.upload_health_logs(pending)
+            if success:
+                ids = [log['id'] for log in pending]
+                self.db.mark_health_logs_synced(ids)
+                self.db.cleanup_old_health_logs(days=30)
+                logger.info(f"Health logs synced: {len(pending)} entries")
+        except Exception as e:
+            logger.warning(f"Health sync failed: {e}")
 
     # ============================================================
     # STATUS
