@@ -493,6 +493,8 @@ class SmartLockerApp(App):
             led=self.led, buzzer=self.buzzer,
             event_bus=self.event_bus,
         )
+        self.inventory.set_database(self.db)
+
         self.mixing = MixingEngine(
             weight=self.weight, led=self.led,
             buzzer=self.buzzer, event_bus=self.event_bus,

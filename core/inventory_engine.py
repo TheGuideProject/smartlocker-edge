@@ -10,7 +10,7 @@ This is the core brain for inventory tracking.
 
 import logging
 import time
-from typing import Dict, List, Optional, Set
+from typing import Dict, List, Optional, Set, TYPE_CHECKING
 
 from config import settings
 from core.models import Slot, Shelf, SlotStatus, EventConfirmation
@@ -21,6 +21,9 @@ from hal.interfaces import (
     LEDDriverInterface, BuzzerDriverInterface,
     LEDColor, LEDPattern, BuzzerPattern, TagReading, WeightReading,
 )
+
+if TYPE_CHECKING:
+    from persistence.database import Database
 
 logger = logging.getLogger("smartlocker")
 
@@ -74,6 +77,53 @@ class InventoryEngine:
 
         # Whether there's an active touchscreen session (set by mixing engine)
         self.active_session = False
+
+        # Database reference (set via set_database after init)
+        self._db: Optional['Database'] = None
+
+    def set_database(self, db: 'Database') -> None:
+        """Set the database reference for product lookups and slot state persistence."""
+        self._db = db
+        logger.info("InventoryEngine: database reference set")
+
+    def _lookup_tag_info(self, tag_uid: str) -> Dict:
+        """Look up product info for a tag from the database.
+        Returns a dict with product_id, product_name, lot_number, can_size_ml
+        or empty values if DB is unavailable or tag not found."""
+        info = {
+            "product_id": "",
+            "product_name": "",
+            "lot_number": "",
+            "can_size_ml": 0,
+        }
+        if not self._db:
+            return info
+        try:
+            tag_data = self._db.get_rfid_tag_info(tag_uid)
+            if tag_data:
+                info["product_id"] = tag_data.get("product_id") or ""
+                info["product_name"] = tag_data.get("product_name") or ""
+                info["lot_number"] = tag_data.get("batch_number") or ""
+                info["can_size_ml"] = tag_data.get("can_size_ml") or 0
+        except Exception as e:
+            logger.warning(f"Failed to look up tag info for {tag_uid}: {e}")
+        return info
+
+    def _persist_slot_state(self, slot: Slot) -> None:
+        """Persist the current slot state to the database."""
+        if not self._db:
+            return
+        try:
+            self._db.update_slot_state(
+                slot_id=slot.slot_id,
+                status=slot.status.value,
+                current_tag_id=slot.current_tag_id,
+                current_product_id=slot.current_product_id,
+                weight_when_placed_g=slot.weight_when_placed_g,
+                weight_current_g=slot.weight_current_g,
+            )
+        except Exception as e:
+            logger.warning(f"Failed to persist slot state for {slot.slot_id}: {e}")
 
     def _build_default_shelves(self) -> List[Shelf]:
         """Create a default shelf with 4 slots for initial development."""
@@ -161,11 +211,29 @@ class InventoryEngine:
         # Check if this slot previously had a can removed (= can returned)
         was_removed = slot.status == SlotStatus.REMOVED
 
+        # Save weight before placement for return consumption calc
+        weight_at_removal_g = slot.weight_when_placed_g if was_removed else 0.0
+
+        # Read current weight from the shelf
+        current_weight_g = 0.0
+        try:
+            shelf = self.shelves.get(slot.shelf_id)
+            if shelf:
+                w = self.weight.read_weight(shelf.weight_channel)
+                current_weight_g = w.grams
+        except Exception as e:
+            logger.warning(f"Weight read failed during tag appeared: {e}")
+
+        # Look up product info from database
+        tag_info = self._lookup_tag_info(reading.tag_id)
+
         # Update slot state
         old_tag = slot.current_tag_id
         slot.current_tag_id = reading.tag_id
+        slot.current_product_id = tag_info["product_id"]
         slot.status = SlotStatus.OCCUPIED
         slot.last_change_time = time.time()
+        slot.weight_current_g = current_weight_g
 
         # Remove from removal tracking
         self._removal_times.pop(slot.slot_id, None)
@@ -175,11 +243,45 @@ class InventoryEngine:
             event_type = EventType.CAN_RETURNED
             self.buzzer.play(BuzzerPattern.CONFIRM)
             self.led.set_slot(slot.slot_id, LEDColor.GREEN, LEDPattern.SOLID)
+
+            consumed_g = max(0.0, weight_at_removal_g - current_weight_g)
+
+            event_data = {
+                "reader_id": reading.reader_id,
+                "signal_strength": reading.signal_strength,
+                "previous_tag": old_tag,
+                "tag_uid": reading.tag_id,
+                "product_id": tag_info["product_id"],
+                "product_name": tag_info["product_name"],
+                "weight_at_removal_g": weight_at_removal_g,
+                "weight_at_return_g": current_weight_g,
+                "consumed_g": consumed_g,
+                "slot_id": slot.slot_id,
+            }
+
+            # Update slot weight to current (after return)
+            slot.weight_when_placed_g = current_weight_g
         else:
             # New can placed
             event_type = EventType.CAN_PLACED
             self.buzzer.play(BuzzerPattern.TICK)
             self.led.set_slot(slot.slot_id, LEDColor.GREEN, LEDPattern.SOLID)
+
+            # Store weight at placement
+            slot.weight_when_placed_g = current_weight_g
+
+            event_data = {
+                "reader_id": reading.reader_id,
+                "signal_strength": reading.signal_strength,
+                "previous_tag": old_tag,
+                "tag_uid": reading.tag_id,
+                "product_id": tag_info["product_id"],
+                "product_name": tag_info["product_name"],
+                "lot_number": tag_info["lot_number"],
+                "can_size_ml": tag_info["can_size_ml"],
+                "weight_g": current_weight_g,
+                "slot_id": slot.slot_id,
+            }
 
         # Check if can returned to wrong slot
         if was_removed and old_tag and reading.tag_id != old_tag:
@@ -187,17 +289,16 @@ class InventoryEngine:
             self.led.set_slot(slot.slot_id, LEDColor.RED, LEDPattern.BLINK_FAST)
             self.buzzer.play(BuzzerPattern.WARNING)
 
+        # Persist slot state to database
+        self._persist_slot_state(slot)
+
         self.event_bus.publish(Event(
             event_type=event_type,
             device_id=settings.DEVICE_ID,
             shelf_id=slot.shelf_id,
             slot_id=slot.slot_id,
             tag_id=reading.tag_id,
-            data={
-                "reader_id": reading.reader_id,
-                "signal_strength": reading.signal_strength,
-                "previous_tag": old_tag,
-            },
+            data=event_data,
             confirmation=(
                 EventConfirmation.CONFIRMED.value if self.active_session
                 else EventConfirmation.UNCONFIRMED.value
@@ -220,8 +321,22 @@ class InventoryEngine:
             logger.debug(f"Tag {tag_id} disappeared but not tracked to any slot")
             return
 
-        # Read weight before updating state
-        weight_before = slot.weight_current_g
+        # Read current weight from shelf
+        weight_before = slot.weight_when_placed_g
+        try:
+            shelf = self.shelves.get(slot.shelf_id)
+            if shelf:
+                w = self.weight.read_weight(shelf.weight_channel)
+                weight_before = w.grams
+                slot.weight_current_g = w.grams
+        except Exception as e:
+            logger.warning(f"Weight read failed during tag disappeared: {e}")
+
+        # Store the weight at removal for consumption calculation on return
+        slot.weight_when_placed_g = weight_before
+
+        # Look up product info from database
+        tag_info = self._lookup_tag_info(tag_id)
 
         # Update slot state
         slot.status = SlotStatus.REMOVED
@@ -239,6 +354,9 @@ class InventoryEngine:
             self.led.set_slot(slot.slot_id, LEDColor.RED, LEDPattern.BLINK_FAST)
             self.buzzer.play(BuzzerPattern.ERROR)
 
+        # Persist slot state to database
+        self._persist_slot_state(slot)
+
         self.event_bus.publish(Event(
             event_type=event_type,
             device_id=settings.DEVICE_ID,
@@ -246,7 +364,11 @@ class InventoryEngine:
             slot_id=slot.slot_id,
             tag_id=tag_id,
             data={
+                "tag_uid": tag_id,
+                "product_id": tag_info["product_id"],
+                "product_name": tag_info["product_name"],
                 "weight_at_removal_g": weight_before,
+                "slot_id": slot.slot_id,
             },
             confirmation=(
                 EventConfirmation.CONFIRMED.value if self.active_session
@@ -276,7 +398,11 @@ class InventoryEngine:
                 # 12 hours: mark as consumed
                 slot.status = SlotStatus.EMPTY
                 slot.current_tag_id = None
+                slot.current_product_id = None
                 to_remove.append(slot_id)
+
+                # Persist slot state
+                self._persist_slot_state(slot)
 
                 self.event_bus.publish(Event(
                     event_type=EventType.CAN_CONSUMED,

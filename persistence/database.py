@@ -315,13 +315,14 @@ class Database:
     # ============================================================
 
     def upsert_rfid_tag(self, tag_uid: str, product_id: str,
-                        can_size_ml: int = None) -> None:
-        """Map an RFID tag to a product."""
+                        can_size_ml: int = None,
+                        batch_number: str = None) -> None:
+        """Map an RFID tag to a product, with optional batch/lot number."""
         self.conn.execute(
             """INSERT OR REPLACE INTO rfid_tag
-               (tag_uid, product_id, can_size_ml)
-               VALUES (?, ?, ?)""",
-            (tag_uid, product_id, can_size_ml),
+               (tag_uid, product_id, can_size_ml, batch_number)
+               VALUES (?, ?, ?, ?)""",
+            (tag_uid, product_id, can_size_ml, batch_number),
         )
         self.conn.commit()
 
@@ -335,6 +336,53 @@ class Database:
         )
         row = cursor.fetchone()
         return dict(row) if row else None
+
+    def get_rfid_tag_info(self, tag_uid: str) -> Optional[Dict[str, Any]]:
+        """Look up RFID tag details including product info, lot number, can size."""
+        cursor = self.conn.execute(
+            """SELECT t.tag_uid, t.product_id, t.batch_number, t.can_size_ml,
+                      t.weight_full_g, t.weight_current_g,
+                      p.name as product_name, p.product_type, p.ppg_code
+               FROM rfid_tag t
+               LEFT JOIN product p ON t.product_id = p.product_id
+               WHERE t.tag_uid = ?""",
+            (tag_uid,),
+        )
+        row = cursor.fetchone()
+        return dict(row) if row else None
+
+    # ============================================================
+    # SLOT STATE (inventory tracking)
+    # ============================================================
+
+    def update_slot_state(self, slot_id: str, status: str,
+                          current_tag_id: Optional[str] = None,
+                          current_product_id: Optional[str] = None,
+                          weight_when_placed_g: float = 0.0,
+                          weight_current_g: float = 0.0) -> None:
+        """Update or insert current state for a shelf slot."""
+        self.conn.execute(
+            """INSERT OR REPLACE INTO slot_state
+               (slot_id, status, current_tag_id, current_product_id,
+                weight_when_placed_g, weight_current_g, last_change_at)
+               VALUES (?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)""",
+            (slot_id, status, current_tag_id, current_product_id,
+             weight_when_placed_g, weight_current_g),
+        )
+        self.conn.commit()
+
+    def get_inventory_snapshot(self) -> List[Dict[str, Any]]:
+        """Get current state of all slots for cloud sync / reconciliation."""
+        cursor = self.conn.execute('''
+            SELECT s.slot_id, s.status, s.current_tag_id, s.current_product_id,
+                   s.weight_when_placed_g, s.weight_current_g, s.last_change_at,
+                   p.name as product_name, p.product_type,
+                   t.batch_number, t.can_size_ml
+            FROM slot_state s
+            LEFT JOIN product p ON s.current_product_id = p.product_id
+            LEFT JOIN rfid_tag t ON s.current_tag_id = t.tag_uid
+        ''')
+        return [dict(row) for row in cursor.fetchall()]
 
     # ============================================================
     # MAINTENANCE CHART (stored as JSON in config table)

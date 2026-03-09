@@ -36,6 +36,9 @@ class SyncEngine:
     # Health snapshot interval: every 5 minutes (300 seconds)
     HEALTH_LOG_INTERVAL_S = 300
 
+    # Inventory snapshot sync interval: every 30 minutes (1800 seconds)
+    INVENTORY_SYNC_INTERVAL_S = 1800
+
     def __init__(self, db: Database, cloud: CloudClient):
         self.db = db
         self.cloud = cloud
@@ -45,6 +48,7 @@ class SyncEngine:
         self._last_heartbeat_time = 0.0
         self._last_config_sync_time = 0.0
         self._last_health_log_time = 0.0
+        self._last_inventory_sync_time = 0.0
         self._start_time = time.time()
 
     def start(self) -> None:
@@ -116,6 +120,11 @@ class SyncEngine:
                 if now - self._last_config_sync_time >= 1800:
                     self._do_config_sync()
                     self._last_config_sync_time = now
+
+                # Inventory snapshot sync (every 30 minutes)
+                if now - self._last_inventory_sync_time >= self.INVENTORY_SYNC_INTERVAL_S:
+                    self._do_inventory_sync()
+                    self._last_inventory_sync_time = now
 
                 # Health snapshot every 5 minutes (REGARDLESS of network)
                 if now - self._last_health_log_time >= self.HEALTH_LOG_INTERVAL_S:
@@ -227,6 +236,43 @@ class SyncEngine:
 
         except Exception as e:
             logger.error(f"Config sync error: {e}")
+
+    # ============================================================
+    # INVENTORY SNAPSHOT SYNC
+    # ============================================================
+
+    def _do_inventory_sync(self) -> None:
+        """Send current slot state to cloud for reconciliation."""
+        try:
+            slots_data = self.db.get_inventory_snapshot()
+            if not slots_data:
+                logger.debug("No slot state data to sync")
+                return
+
+            # Convert sqlite3.Row-compatible dicts to plain serializable dicts
+            clean_slots = []
+            for slot in slots_data:
+                clean_slots.append({
+                    "slot_id": slot.get("slot_id", ""),
+                    "status": slot.get("status", "empty"),
+                    "current_tag_id": slot.get("current_tag_id"),
+                    "current_product_id": slot.get("current_product_id"),
+                    "weight_when_placed_g": slot.get("weight_when_placed_g", 0.0),
+                    "weight_current_g": slot.get("weight_current_g", 0.0),
+                    "last_change_at": slot.get("last_change_at"),
+                    "product_name": slot.get("product_name"),
+                    "product_type": slot.get("product_type"),
+                    "batch_number": slot.get("batch_number"),
+                    "can_size_ml": slot.get("can_size_ml"),
+                })
+
+            success = self.cloud.send_inventory_snapshot(clean_slots)
+            if success:
+                logger.info(f"Inventory snapshot synced: {len(clean_slots)} slots")
+            else:
+                logger.warning("Inventory snapshot sync failed, will retry next cycle")
+        except Exception as e:
+            logger.error(f"Inventory sync error: {e}")
 
     # ============================================================
     # HEALTH LOGGING (offline-tolerant)

@@ -297,6 +297,38 @@ class CloudClient:
         return success
 
     # ============================================================
+    # INVENTORY SNAPSHOT SYNC
+    # ============================================================
+
+    def send_inventory_snapshot(self, slots_data: list) -> bool:
+        """
+        Send current slot state to cloud for reconciliation.
+
+        Args:
+            slots_data: List of dicts with slot state info
+                        (from Database.get_inventory_snapshot())
+
+        Returns:
+            True if upload was successful
+        """
+        if not self.is_paired:
+            return False
+
+        url = f"{self.cloud_url}/api/devices/{self.device_id}/inventory-snapshot"
+        payload = {
+            "device_id": self.device_id,
+            "timestamp": time.time(),
+            "slots": slots_data,
+        }
+
+        success, data = self._http_post(url, payload, auth=True, timeout=15)
+        if success:
+            logger.info(f"Inventory snapshot sent: {len(slots_data)} slots")
+        else:
+            logger.warning(f"Inventory snapshot failed: {data}")
+        return success
+
+    # ============================================================
     # CONFIG SYNC
     # ============================================================
 

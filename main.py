@@ -127,6 +127,8 @@ def main_cli():
         rfid=rfid, weight=weight, led=led, buzzer=buzzer,
         event_bus=event_bus,
     )
+    inventory_engine.set_database(db)
+
     mixing_engine = MixingEngine(
         weight=weight, led=led, buzzer=buzzer,
         event_bus=event_bus,
