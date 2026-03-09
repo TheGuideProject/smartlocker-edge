@@ -80,9 +80,9 @@ CLOUD_PAIRING_FILE = "data/cloud_pairing.json"  # Persistent pairing config
 
 SYNC_ENABLED = False            # Auto-enabled after pairing
 SYNC_BATCH_SIZE = 50            # Max events per sync batch
-SYNC_INTERVAL_S = 300           # Seconds between sync attempts (5 min)
+SYNC_INTERVAL_S = 30            # Seconds between sync attempts (30s — catch short connectivity windows)
 SYNC_RETRY_MAX = 7              # Max retry attempts before marking failed
-HEARTBEAT_INTERVAL_S = 60      # Seconds between heartbeat pings
+HEARTBEAT_INTERVAL_S = 30      # Seconds between heartbeat pings
 
 # ============================================================
 # DATABASE

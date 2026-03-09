@@ -36,8 +36,11 @@ class SyncEngine:
     # Health snapshot interval: every 5 minutes (300 seconds)
     HEALTH_LOG_INTERVAL_S = 300
 
-    # Inventory snapshot sync interval: every 30 minutes (1800 seconds)
-    INVENTORY_SYNC_INTERVAL_S = 1800
+    # Config sync interval: every 2 minutes (check for OTA, products, recipes)
+    CONFIG_SYNC_INTERVAL_S = 120
+
+    # Inventory snapshot sync interval: every 5 minutes
+    INVENTORY_SYNC_INTERVAL_S = 300
 
     def __init__(self, db: Database, cloud: CloudClient):
         self.db = db
@@ -119,8 +122,8 @@ class SyncEngine:
                     self._do_heartbeat()
                     self._last_heartbeat_time = now
 
-                # Config sync (every 30 minutes)
-                if now - self._last_config_sync_time >= 1800:
+                # Config sync (every 2 minutes — fast OTA + product updates)
+                if now - self._last_config_sync_time >= self.CONFIG_SYNC_INTERVAL_S:
                     self._do_config_sync()
                     self._last_config_sync_time = now
 
