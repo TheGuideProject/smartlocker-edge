@@ -1,99 +1,79 @@
 """
-Chart Viewer Screen - Maintenance Chart (2026 Modern Redesign)
+Chart Viewer Screen — Maintenance Chart v3 (Clarity Focus)
 
-A premium dark-themed chart viewer for vessel maintenance data:
-- Gradient vessel header with ship emoji and IMO badge
-- Color-coded area cards with accent bars and layer chips
-- Product summary with pill badges and type-coded colors
-- Marking color swatches with circular previews
-- Smooth scrolling, 48dp+ touch targets, glove-friendly
-
-Design: "Maritime Tech 2026" - dark carbon base, gradient accents,
-rounded cards with colored left bars, chip/pill badges for layers
-and products, optimized for 800x480 touchscreen.
+Completely redesigned for maximum readability on 4.3" 800×480 touchscreen:
+- Large, high-contrast WHITE text on dark cards
+- Clear area headers with colored accent bars
+- Simple text-based layer listing (no invisible pills)
+- Clean product rows with readable details
+- Color dots for visual paint color reference
+- Glove-friendly spacing, optimized for marine use
 """
 
 from kivy.uix.screenmanager import Screen
 from kivy.uix.boxlayout import BoxLayout
-from kivy.uix.floatlayout import FloatLayout
 from kivy.uix.scrollview import ScrollView
 from kivy.uix.gridlayout import GridLayout
 from kivy.uix.widget import Widget
 from kivy.uix.label import Label
-from kivy.uix.button import Button
 from kivy.lang import Builder
 from kivy.app import App
-from kivy.graphics import (
-    Color, RoundedRectangle, Rectangle, Ellipse, Line,
-)
-from kivy.metrics import dp, sp
+from kivy.graphics import Color, RoundedRectangle, Ellipse
+from kivy.metrics import dp
 
 
-# ============================================================
-# ACCENT PALETTE - cycled per area card
-# ============================================================
+# ── Accent colors cycled per area ──
 AREA_ACCENTS = [
     (0.00, 0.82, 0.73, 1),   # Teal
     (0.98, 0.65, 0.25, 1),   # Amber
-    (0.33, 0.58, 0.85, 1),   # Blue
+    (0.40, 0.65, 0.95, 1),   # Blue
     (0.93, 0.45, 0.42, 1),   # Coral
-    (0.62, 0.42, 0.85, 1),   # Purple
-    (0.20, 0.82, 0.48, 1),   # Green
-    (0.85, 0.55, 0.70, 1),   # Rose
+    (0.70, 0.50, 0.90, 1),   # Purple
+    (0.30, 0.85, 0.55, 1),   # Green
+    (0.90, 0.60, 0.75, 1),   # Rose
 ]
 
-# Product-type color mapping
-PRODUCT_TYPE_COLORS = {
-    'base':     (0.00, 0.72, 0.64, 1),
-    'hardener': (0.88, 0.58, 0.18, 1),
-    'thinner':  (0.28, 0.50, 0.78, 1),
-    'default':  (0.45, 0.48, 0.56, 1),
-}
-
-# Named color map for paint colors -> RGBA (common marine paint colors)
-PAINT_COLOR_MAP = {
-    'red':       (0.85, 0.22, 0.22, 1),
-    'dark red':  (0.65, 0.12, 0.12, 1),
-    'brown':     (0.55, 0.35, 0.18, 1),
-    'green':     (0.18, 0.65, 0.30, 1),
-    'dark green':(0.10, 0.42, 0.18, 1),
-    'blue':      (0.20, 0.45, 0.82, 1),
-    'dark blue': (0.12, 0.25, 0.55, 1),
-    'white':     (0.90, 0.90, 0.92, 1),
-    'black':     (0.15, 0.15, 0.18, 1),
-    'grey':      (0.50, 0.52, 0.55, 1),
-    'gray':      (0.50, 0.52, 0.55, 1),
-    'yellow':    (0.92, 0.82, 0.20, 1),
-    'orange':    (0.92, 0.55, 0.15, 1),
-    'pink':      (0.88, 0.45, 0.55, 1),
-    'maroon':    (0.50, 0.12, 0.15, 1),
-    'copper':    (0.72, 0.45, 0.20, 1),
-    'beige':     (0.82, 0.76, 0.62, 1),
-    'cream':     (0.90, 0.87, 0.75, 1),
-    'silver':    (0.70, 0.72, 0.75, 1),
-    'aluminum':  (0.65, 0.68, 0.72, 1),
+# ── Paint color name → RGBA ──
+PAINT_COLORS = {
+    'red':       (0.90, 0.25, 0.25, 1),
+    'dark red':  (0.70, 0.15, 0.15, 1),
+    'brown':     (0.60, 0.38, 0.20, 1),
+    'green':     (0.20, 0.70, 0.35, 1),
+    'dark green': (0.12, 0.48, 0.20, 1),
+    'blue':      (0.25, 0.50, 0.85, 1),
+    'dark blue': (0.15, 0.30, 0.60, 1),
+    'white':     (0.92, 0.92, 0.94, 1),
+    'black':     (0.18, 0.18, 0.20, 1),
+    'grey':      (0.55, 0.57, 0.60, 1),
+    'gray':      (0.55, 0.57, 0.60, 1),
+    'yellow':    (0.95, 0.85, 0.25, 1),
+    'orange':    (0.95, 0.60, 0.18, 1),
+    'pink':      (0.90, 0.48, 0.58, 1),
+    'maroon':    (0.55, 0.15, 0.18, 1),
+    'copper':    (0.75, 0.48, 0.22, 1),
+    'beige':     (0.85, 0.78, 0.65, 1),
+    'cream':     (0.92, 0.89, 0.78, 1),
+    'silver':    (0.72, 0.74, 0.78, 1),
+    'aluminum':  (0.68, 0.70, 0.74, 1),
+    'aluminium': (0.68, 0.70, 0.74, 1),
 }
 
 
-# ============================================================
-# KV LAYOUT (static structure: status bar + content area)
-# ============================================================
+# ── KV Layout ──
 Builder.load_string('''
 <ChartViewerScreen>:
     BoxLayout:
         orientation: 'vertical'
         canvas.before:
             Color:
-                rgba: 0.06, 0.07, 0.10, 1
+                rgba: 0.08, 0.09, 0.12, 1
             Rectangle:
                 pos: self.pos
                 size: self.size
 
-        # ---- STATUS BAR ----
         StatusBar:
             BackButton:
                 on_release: app.go_back()
-
             Label:
                 text: '\\U0001F6A2  MAINTENANCE CHART'
                 font_size: '16sp'
@@ -103,282 +83,113 @@ Builder.load_string('''
                 halign: 'center'
                 text_size: self.size
                 valign: 'middle'
-
             Label:
                 id: vessel_label
                 text: ''
                 font_size: '11sp'
-                color: 0.38, 0.42, 0.50, 1
+                color: 0.50, 0.55, 0.62, 1
                 size_hint_x: 0.25
                 halign: 'right'
                 text_size: self.size
                 valign: 'middle'
 
-        # ---- SCROLLABLE CONTENT ----
         BoxLayout:
             id: content_area
             orientation: 'vertical'
-            padding: [0, 0, 0, 0]
 ''')
 
 
-# ============================================================
-# DRAWING HELPERS
-# ============================================================
+# ── Drawing helpers ──
 
-def _draw_rounded_rect(widget, color, radius=12):
-    """Add a rounded-rect background that tracks widget pos/size."""
+def _bg(widget, color, radius=10):
+    """Rounded background that tracks widget size."""
     with widget.canvas.before:
-        c = Color(*color)
+        Color(*color)
         rr = RoundedRectangle(pos=widget.pos, size=widget.size,
                               radius=[radius])
     widget.bind(
         pos=lambda w, p: setattr(rr, 'pos', p),
         size=lambda w, s: setattr(rr, 'size', s),
     )
-    return rr
 
 
-def _draw_gradient_rect(widget, color_top, color_bottom, radius=12):
-    """Fake two-tone gradient: top half one color, bottom half another,
-    both as rounded rects with overlap to blend visually."""
-    with widget.canvas.before:
-        # Bottom layer (full card)
-        Color(*color_bottom)
-        rr_bot = RoundedRectangle(pos=widget.pos, size=widget.size,
-                                  radius=[radius])
-        # Top overlay (upper ~60%)
-        Color(*color_top)
-        rr_top = RoundedRectangle(
-            pos=(widget.x, widget.y + widget.height * 0.35),
-            size=(widget.width, widget.height * 0.65),
-            radius=[radius, radius, 0, 0],
-        )
-
-    def _update_bot(w, *_):
-        rr_bot.pos = w.pos
-        rr_bot.size = w.size
-
-    def _update_top(w, *_):
-        rr_top.pos = (w.x, w.y + w.height * 0.35)
-        rr_top.size = (w.width, w.height * 0.65)
-
-    widget.bind(pos=_update_bot, size=_update_bot)
-    widget.bind(pos=_update_top, size=_update_top)
-
-
-def _draw_accent_bar(widget, color, width=4, radius=6):
-    """Draw a colored vertical bar on the left edge of the widget."""
+def _bar(widget, color, w=4):
+    """Colored vertical accent bar on left edge."""
     with widget.canvas.after:
         Color(*color)
         bar = RoundedRectangle(
-            pos=(widget.x, widget.y + 4),
-            size=(width, widget.height - 8),
-            radius=[radius],
+            pos=(widget.x + 2, widget.y + 4),
+            size=(w, widget.height - 8),
+            radius=[2],
         )
 
-    def _update(w, *_):
-        bar.pos = (w.x, w.y + 4)
-        bar.size = (width, w.height - 8)
+    def _upd(wid, *_):
+        bar.pos = (wid.x + 2, wid.y + 4)
+        bar.size = (w, wid.height - 8)
 
-    widget.bind(pos=_update, size=_update)
-
-
-def _draw_circle(widget, color, cx, cy, diameter):
-    """Draw a filled circle at absolute coordinates on widget's canvas."""
-    with widget.canvas.after:
-        Color(*color)
-        ell = Ellipse(
-            pos=(cx - diameter / 2, cy - diameter / 2),
-            size=(diameter, diameter),
-        )
-    return ell
+    widget.bind(pos=_upd, size=_upd)
 
 
-def _draw_divider(widget, color=(0.18, 0.20, 0.26, 1), pad_x=12):
-    """Add a subtle horizontal divider at the bottom of a widget."""
-    with widget.canvas.after:
-        Color(*color)
-        line_rect = Rectangle(
-            pos=(widget.x + pad_x, widget.y),
-            size=(widget.width - 2 * pad_x, 1),
-        )
-
-    def _update(w, *_):
-        line_rect.pos = (w.x + pad_x, w.y)
-        line_rect.size = (w.width - 2 * pad_x, 1)
-
-    widget.bind(pos=_update, size=_update)
+def _dot_widget(color_rgba, size=16):
+    """Create a small colored circle widget."""
+    dot = Widget(size_hint=(None, None), size=(dp(size), dp(size)))
+    with dot.canvas:
+        Color(*color_rgba)
+        ell = Ellipse(pos=dot.pos, size=dot.size)
+    dot.bind(
+        pos=lambda w, p: setattr(ell, 'pos', p),
+        size=lambda w, s: setattr(ell, 'size', s),
+    )
+    return dot
 
 
-def _color_for_name(name):
-    """Resolve a paint color name to an RGBA tuple."""
+def _resolve_color(name):
+    """Get RGBA for a paint color name."""
     if not name:
-        return PRODUCT_TYPE_COLORS['default']
+        return None
     key = name.strip().lower()
-    return PAINT_COLOR_MAP.get(key, PRODUCT_TYPE_COLORS['default'])
+    # Try exact match first
+    if key in PAINT_COLORS:
+        return PAINT_COLORS[key]
+    # Try first word (e.g. "RED 6188" → "red")
+    first_word = key.split()[0] if key else ''
+    return PAINT_COLORS.get(first_word)
 
 
-def _text_color_for_bg(bg_color):
-    """Return white or dark text depending on background luminance."""
-    r, g, b = bg_color[0], bg_color[1], bg_color[2]
-    lum = 0.299 * r + 0.587 * g + 0.114 * b
-    if lum > 0.55:
-        return (0.08, 0.09, 0.12, 1)
-    return (0.96, 0.97, 0.98, 1)
+def _clean_text(text):
+    """Fix common encoding artifacts from PDF parsing."""
+    if not text:
+        return text
+    return (text
+            .replace('Ãƒâ€šÃ‚', '')
+            .replace('ÃƒÂ', 'µ')
+            .replace('Ã‚µ', 'µ')
+            .replace('Â', '')
+            .replace('Ãƒ', '')
+            .replace('Ã', '')
+            .replace('Â', '')
+            .replace('\u00c3\u0082\u00c2\u00b5', 'µ')
+            .replace('\u00c2\u00b5', 'µ')
+            .strip())
 
 
-# ============================================================
-# CUSTOM WIDGETS
-# ============================================================
-
-class PillBadge(Label):
-    """A rounded pill-shaped label with colored background."""
-
-    def __init__(self, text='', bg_color=(0.15, 0.18, 0.24, 1),
-                 text_color=None, font_size='12sp', height=26,
-                 padding_x=14, **kwargs):
-        if text_color is None:
-            text_color = _text_color_for_bg(bg_color)
-        super().__init__(
-            text=text,
-            font_size=font_size,
-            bold=True,
-            color=text_color,
-            size_hint=(None, None),
-            height=height,
-            halign='center',
-            valign='middle',
-            padding=[padding_x, 2],
-            **kwargs,
-        )
-        self.bg_color = bg_color
-        self.bind(texture_size=self._update_width)
-        self.bind(size=self._draw, pos=self._draw)
-
-    def _update_width(self, *_):
-        self.width = self.texture_size[0] + 28
-        self.text_size = (self.width, self.height)
-
-    def _draw(self, *_):
-        self.canvas.before.clear()
-        with self.canvas.before:
-            Color(*self.bg_color)
-            RoundedRectangle(pos=self.pos, size=self.size,
-                             radius=[self.height / 2])
-
-
-class CircleBadge(Widget):
-    """Small numbered circle badge (for layer numbers)."""
-
-    def __init__(self, number=1, color=(0.00, 0.82, 0.73, 1),
-                 diameter=24, **kwargs):
-        super().__init__(
-            size_hint=(None, None),
-            size=(diameter, diameter),
-            **kwargs,
-        )
-        self.badge_color = color
-        self.number = number
-        self.diameter = diameter
-        self.bind(pos=self._draw, size=self._draw)
-
-        # Number label
-        self._label = Label(
-            text=str(number),
-            font_size='11sp',
-            bold=True,
-            color=_text_color_for_bg(color),
-            size_hint=(None, None),
-            size=(diameter, diameter),
-            halign='center',
-            valign='middle',
-        )
-        self._label.text_size = (diameter, diameter)
-        self.add_widget(self._label)
-
-    def _draw(self, *_):
-        self.canvas.before.clear()
-        with self.canvas.before:
-            Color(*self.badge_color)
-            Ellipse(pos=self.pos, size=self.size)
-        self._label.pos = self.pos
-        self._label.size = self.size
-
-
-class ColorSwatch(BoxLayout):
-    """Circular color swatch with label underneath."""
-
-    def __init__(self, color_name='', swatch_color=(0.5, 0.5, 0.5, 1),
-                 **kwargs):
-        super().__init__(
-            orientation='vertical',
-            size_hint=(None, None),
-            size=(72, 64),
-            spacing=4,
-            **kwargs,
-        )
-        self.swatch_color = swatch_color
-
-        # Circle swatch
-        self._circle_widget = Widget(size_hint=(None, None), size=(36, 36))
-        self._circle_widget.bind(pos=self._draw_circle, size=self._draw_circle)
-        self.add_widget(Widget(size_hint_y=None, height=2))  # top spacer
-
-        circle_row = BoxLayout(size_hint_y=None, height=36)
-        circle_row.add_widget(Widget())  # left spacer
-        circle_row.add_widget(self._circle_widget)
-        circle_row.add_widget(Widget())  # right spacer
-        self.add_widget(circle_row)
-
-        # Name label
-        self.add_widget(Label(
-            text=color_name,
-            font_size='10sp',
-            color=(0.70, 0.73, 0.78, 1),
-            size_hint_y=None, height=18,
-            halign='center',
-            text_size=(70, None),
-            shorten=True,
-            shorten_from='right',
-        ))
-
-    def _draw_circle(self, *_):
-        w = self._circle_widget
-        self._circle_widget.canvas.before.clear()
-        with w.canvas.before:
-            # Outer ring (subtle)
-            Color(*(c * 0.6 if i < 3 else c
-                     for i, c in enumerate(self.swatch_color)))
-            Ellipse(pos=(w.x - 2, w.y - 2),
-                    size=(w.width + 4, w.height + 4))
-            # Inner fill
-            Color(*self.swatch_color)
-            Ellipse(pos=w.pos, size=w.size)
-
-
-# ============================================================
-# MAIN SCREEN
-# ============================================================
+# ── MAIN SCREEN ──
 
 class ChartViewerScreen(Screen):
 
     def on_enter(self):
-        """Build the entire chart view from local data."""
         content = self.ids.content_area
         content.clear_widgets()
 
         app = App.get_running_app()
-
-        # Reload from DB
         app.maintenance_chart = app.db.get_maintenance_chart()
         chart = app.maintenance_chart
 
         if not chart:
-            self._build_no_chart(content)
+            self._empty_state(content)
             return
 
-        vessel_name = chart.get('vessel_name', 'Unknown Vessel')
+        vessel = chart.get('vessel_name', 'Unknown Vessel')
         imo = chart.get('imo_number', '')
         self.ids.vessel_label.text = f'IMO {imo}' if imo else ''
 
@@ -386,537 +197,389 @@ class ChartViewerScreen(Screen):
         products = chart.get('products', [])
         markings = chart.get('marking_colors', [])
 
-        # --- Main scroll view ---
+        # ── Scrollable content ──
         scroll = ScrollView(
             size_hint=(1, 1),
             do_scroll_x=False,
-            bar_width=dp(3),
-            bar_color=(0.00, 0.82, 0.73, 0.4),
+            bar_width=dp(4),
+            bar_color=(0.00, 0.82, 0.73, 0.5),
             bar_inactive_color=(0.20, 0.22, 0.28, 0.3),
             scroll_type=['bars', 'content'],
         )
 
-        main_grid = GridLayout(
-            cols=1,
-            spacing=dp(10),
-            size_hint_y=None,
-            padding=[dp(10), dp(8), dp(10), dp(16)],
+        col = GridLayout(
+            cols=1, spacing=dp(8), size_hint_y=None,
+            padding=[dp(8), dp(6), dp(8), dp(20)],
         )
-        main_grid.bind(minimum_height=main_grid.setter('height'))
+        col.bind(minimum_height=col.setter('height'))
 
-        # ========================================
-        # 1. VESSEL HEADER CARD
-        # ========================================
-        header = self._build_vessel_header(vessel_name, imo, areas, products)
-        main_grid.add_widget(header)
+        # ▸ Vessel header
+        col.add_widget(self._vessel_header(
+            vessel, imo, len(areas), len(products)))
 
-        # ========================================
-        # 2. AREA CARDS
-        # ========================================
+        # ▸ Area cards
         for i, area in enumerate(areas):
             accent = AREA_ACCENTS[i % len(AREA_ACCENTS)]
-            area_card = self._build_area_card(i, area, accent)
-            main_grid.add_widget(area_card)
+            col.add_widget(self._area_card(area, accent))
 
-        # ========================================
-        # 3. PRODUCTS SECTION
-        # ========================================
+        # ▸ Products
         if products:
-            prod_section = self._build_products_section(products)
-            main_grid.add_widget(prod_section)
+            col.add_widget(self._products_section(products))
 
-        # ========================================
-        # 4. MARKING COLORS SECTION
-        # ========================================
+        # ▸ Marking colors
         if markings:
-            mark_section = self._build_markings_section(markings)
-            main_grid.add_widget(mark_section)
+            col.add_widget(self._markings_section(markings))
 
-        # Bottom spacer
-        main_grid.add_widget(Widget(size_hint_y=None, height=dp(12)))
-
-        scroll.add_widget(main_grid)
+        col.add_widget(Widget(size_hint_y=None, height=dp(12)))
+        scroll.add_widget(col)
         content.add_widget(scroll)
 
-    # --------------------------------------------------------
+    # ════════════════════════════════════════════════
     # VESSEL HEADER
-    # --------------------------------------------------------
-    def _build_vessel_header(self, vessel_name, imo, areas, products):
-        """Hero card with vessel name, IMO, and summary stats."""
+    # ════════════════════════════════════════════════
+    def _vessel_header(self, name, imo, n_areas, n_products):
         card = BoxLayout(
-            orientation='vertical',
-            size_hint_y=None, height=dp(88),
-            padding=[dp(18), dp(12), dp(18), dp(10)],
-            spacing=dp(4),
+            orientation='vertical', size_hint_y=None, height=dp(68),
+            padding=[dp(16), dp(10), dp(16), dp(8)], spacing=dp(4),
         )
-        # Gradient background: dark navy -> dark teal
-        _draw_gradient_rect(
-            card,
-            color_top=(0.06, 0.10, 0.18, 1),
-            color_bottom=(0.04, 0.12, 0.14, 1),
-            radius=12,
-        )
+        _bg(card, (0.10, 0.13, 0.18, 1), radius=12)
 
-        # Top row: ship emoji + vessel name
-        name_row = BoxLayout(size_hint_y=None, height=dp(32))
-        name_row.add_widget(Label(
-            text='\U0001F6A2',
-            font_size='24sp',
-            size_hint_x=None, width=dp(36),
-            valign='middle', halign='center',
-            text_size=(dp(36), dp(32)),
+        # Vessel name — BIG WHITE
+        card.add_widget(Label(
+            text=f'\U0001F6A2  {name}',
+            font_size='20sp', bold=True,
+            color=(1, 1, 1, 1),
+            size_hint_y=None, height=dp(30),
+            halign='left', valign='middle',
+            text_size=(dp(700), dp(30)),
         ))
-        name_row.add_widget(Label(
-            text=vessel_name,
-            font_size='22sp',
-            bold=True,
-            color=(0.85, 0.92, 0.98, 1),
-            halign='left',
-            valign='middle',
-            text_size=(dp(600), dp(32)),
-            shorten=True,
-            shorten_from='right',
-        ))
-        card.add_widget(name_row)
 
-        # IMO row
-        if imo:
-            imo_row = BoxLayout(size_hint_y=None, height=dp(18),
-                                padding=[dp(38), 0, 0, 0])
-            imo_row.add_widget(Label(
-                text=f'IMO {imo}',
-                font_size='12sp',
-                color=(0.40, 0.52, 0.62, 1),
-                halign='left',
-                valign='middle',
-                text_size=(dp(300), dp(18)),
-            ))
-            card.add_widget(imo_row)
-        else:
-            card.add_widget(Widget(size_hint_y=None, height=dp(4)))
-
-        # Stats row: areas count | products count
-        stats_row = BoxLayout(size_hint_y=None, height=dp(20),
-                              padding=[dp(38), 0, 0, 0], spacing=dp(8))
-        stats_row.add_widget(PillBadge(
-            text=f'\U0001F4CB {len(areas)} areas',
-            bg_color=(0.00, 0.82, 0.73, 0.18),
-            text_color=(0.00, 0.82, 0.73, 1),
-            font_size='11sp',
-            height=dp(20),
-            padding_x=10,
+        # Stats line
+        stats = f'IMO {imo}   \u2022   {n_areas} areas   \u2022   {n_products} products'
+        card.add_widget(Label(
+            text=stats,
+            font_size='13sp',
+            color=(0.55, 0.62, 0.72, 1),
+            size_hint_y=None, height=dp(20),
+            halign='left', valign='middle',
+            text_size=(dp(700), dp(20)),
         ))
-        stats_row.add_widget(PillBadge(
-            text=f'\U0001F3A8 {len(products)} products',
-            bg_color=(0.98, 0.65, 0.25, 0.18),
-            text_color=(0.98, 0.65, 0.25, 1),
-            font_size='11sp',
-            height=dp(20),
-            padding_x=10,
-        ))
-        stats_row.add_widget(Widget())  # fill remaining
-        card.add_widget(stats_row)
 
         return card
 
-    # --------------------------------------------------------
+    # ════════════════════════════════════════════════
     # AREA CARD
-    # --------------------------------------------------------
-    def _build_area_card(self, index, area, accent_color):
-        """A card for one maintenance area with layer rows inside."""
-        area_name = area.get('name', f'Area {index + 1}')
+    # ════════════════════════════════════════════════
+    def _area_card(self, area, accent):
+        name = area.get('name', 'Unknown Area')
         layers = area.get('layers', [])
         notes = area.get('notes', '')
 
-        # Calculate dynamic height
-        header_h = dp(38)
+        # Dynamic height
+        header_h = dp(34)
         notes_h = dp(20) if notes else 0
-        layer_h = dp(36) * len(layers)
-        pad_h = dp(16)
-        total_h = header_h + notes_h + layer_h + pad_h
+        layers_h = dp(32) * len(layers)
+        total = header_h + notes_h + layers_h + dp(14)
 
         card = BoxLayout(
-            orientation='vertical',
-            size_hint_y=None, height=total_h,
-            padding=[dp(16), dp(8), dp(12), dp(8)],
-            spacing=dp(2),
+            orientation='vertical', size_hint_y=None, height=total,
+            padding=[dp(14), dp(6), dp(10), dp(6)], spacing=dp(2),
         )
+        _bg(card, (0.11, 0.13, 0.17, 1), radius=10)
+        _bar(card, accent, w=dp(4))
 
-        # Card background
-        _draw_rounded_rect(card, (0.10, 0.12, 0.16, 1), radius=12)
-
-        # Colored left accent bar
-        _draw_accent_bar(card, accent_color, width=dp(4), radius=3)
-
-        # ---- Area header row ----
-        header_row = BoxLayout(
-            size_hint_y=None, height=dp(30),
-            spacing=dp(8),
-        )
-        header_row.add_widget(Label(
-            text=area_name,
-            font_size='17sp',
-            bold=True,
-            color=accent_color,
-            halign='left',
-            valign='middle',
-            text_size=(dp(500), dp(30)),
-            shorten=True,
-            shorten_from='right',
+        # ── Area name — LARGE, COLORED, READABLE ──
+        card.add_widget(Label(
+            text=name,
+            font_size='15sp', bold=True,
+            color=accent,
+            size_hint_y=None, height=dp(26),
+            halign='left', valign='middle',
+            text_size=(dp(700), dp(26)),
+            padding=[dp(10), 0],
         ))
 
-        # Layer count pill
-        header_row.add_widget(PillBadge(
-            text=f'{len(layers)} layers',
-            bg_color=(accent_color[0], accent_color[1],
-                      accent_color[2], 0.18),
-            text_color=accent_color,
-            font_size='10sp',
-            height=dp(20),
-            padding_x=8,
-        ))
-        header_row.add_widget(Widget(size_hint_x=None, width=dp(4)))
-        card.add_widget(header_row)
-
-        # ---- Notes ----
+        # ── Notes (DFT info) ──
         if notes:
             card.add_widget(Label(
-                text=notes,
+                text=_clean_text(notes),
                 font_size='11sp',
-                color=(0.45, 0.50, 0.58, 1),
+                color=(0.50, 0.54, 0.62, 1),
                 size_hint_y=None, height=dp(16),
-                halign='left',
-                valign='middle',
-                text_size=(dp(680), dp(16)),
-                padding=[dp(4), 0],
-                shorten=True,
-                shorten_from='right',
+                halign='left', valign='middle',
+                text_size=(dp(700), dp(16)),
+                padding=[dp(10), 0],
+                shorten=True, shorten_from='right',
             ))
 
-        # ---- Layer rows ----
-        for li, layer in enumerate(layers):
-            layer_row = self._build_layer_row(layer, accent_color)
-            card.add_widget(layer_row)
-
-            # Divider between layers (not after last)
-            if li < len(layers) - 1:
-                divider = Widget(size_hint_y=None, height=dp(1))
-                _draw_rounded_rect(divider, (0.16, 0.18, 0.24, 0.6),
-                                   radius=0)
-                card.add_widget(divider)
+        # ── Layer rows ──
+        for layer in layers:
+            card.add_widget(self._layer_row(layer, accent))
 
         return card
 
-    def _build_layer_row(self, layer, accent_color):
-        """A single layer row: circle badge + product pill + coat type."""
-        layer_num = layer.get('layer_number', '?')
+    def _layer_row(self, layer, accent):
+        """Single layer: number circle + product name + color dot/name."""
+        num = layer.get('layer_number', '?')
         product = layer.get('product', 'Unknown')
         color_name = layer.get('color', '')
-        coat_type = layer.get('coat_type', '')
-        dft = layer.get('dft_microns', '')
 
         row = BoxLayout(
-            size_hint_y=None, height=dp(34),
-            spacing=dp(8),
-            padding=[dp(4), dp(3), dp(4), dp(3)],
+            size_hint_y=None, height=dp(28),
+            spacing=dp(8), padding=[dp(10), dp(2), dp(6), dp(2)],
         )
 
-        # Circle badge with layer number
-        muted_accent = (accent_color[0] * 0.7, accent_color[1] * 0.7,
-                        accent_color[2] * 0.7, 1)
-        row.add_widget(CircleBadge(
-            number=layer_num,
-            color=muted_accent,
-            diameter=dp(22),
-        ))
+        # ▸ Layer number circle
+        circle_size = dp(22)
+        muted = (accent[0] * 0.65, accent[1] * 0.65, accent[2] * 0.65, 1)
+        num_container = Widget(
+            size_hint=(None, None), size=(circle_size, circle_size),
+        )
+        with num_container.canvas:
+            Color(*muted)
+            circle_ell = Ellipse(pos=num_container.pos,
+                                 size=num_container.size)
+        num_container.bind(
+            pos=lambda w, p: setattr(circle_ell, 'pos', p),
+            size=lambda w, s: setattr(circle_ell, 'size', s),
+        )
+        num_label = Label(
+            text=str(num), font_size='11sp', bold=True,
+            color=(1, 1, 1, 1),
+            size_hint=(None, None), size=(circle_size, circle_size),
+            halign='center', valign='middle',
+        )
+        num_label.text_size = (circle_size, circle_size)
+        num_container.add_widget(num_label)
+        num_container.bind(
+            pos=lambda w, p: setattr(num_label, 'pos', p))
+        row.add_widget(num_container)
 
-        # Product pill - use paint color if available
-        if color_name:
-            pill_bg = _color_for_name(color_name)
-        else:
-            pill_bg = (0.16, 0.19, 0.26, 1)
-        pill_text = _text_color_for_bg(pill_bg)
-
-        row.add_widget(PillBadge(
+        # ▸ Product name — BIG, WHITE, BOLD
+        row.add_widget(Label(
             text=product,
-            bg_color=pill_bg,
-            text_color=pill_text,
-            font_size='12sp',
-            height=dp(24),
-            padding_x=10,
+            font_size='14sp', bold=True,
+            color=(0.93, 0.95, 0.97, 1),
+            halign='left', valign='middle',
+            text_size=(dp(420), dp(28)),
+            shorten=True, shorten_from='right',
         ))
 
-        # Coat info (muted text)
-        info_parts = []
+        # ▸ Color indicator (dot + text)
         if color_name:
-            info_parts.append(color_name)
-        if coat_type:
-            info_parts.append(coat_type)
-        if dft:
-            info_parts.append(f'{dft}\u00b5m')
+            paint_rgba = _resolve_color(color_name)
 
-        if info_parts:
-            row.add_widget(Label(
-                text=' \u00b7 '.join(info_parts),
-                font_size='11sp',
-                color=(0.48, 0.52, 0.60, 1),
-                halign='left',
-                valign='middle',
-                text_size=(dp(250), dp(28)),
-                shorten=True,
-                shorten_from='right',
+            color_box = BoxLayout(
+                size_hint=(None, None),
+                size=(dp(130), dp(24)),
+                spacing=dp(5),
+                padding=[dp(2), dp(3), 0, dp(3)],
+            )
+
+            if paint_rgba:
+                color_box.add_widget(_dot_widget(paint_rgba, size=14))
+
+            color_box.add_widget(Label(
+                text=color_name,
+                font_size='12sp',
+                color=(0.62, 0.66, 0.74, 1),
+                halign='left', valign='middle',
+                text_size=(dp(105), dp(20)),
+                shorten=True, shorten_from='right',
             ))
-        else:
-            row.add_widget(Widget())
+            row.add_widget(color_box)
 
         return row
 
-    # --------------------------------------------------------
+    # ════════════════════════════════════════════════
     # PRODUCTS SECTION
-    # --------------------------------------------------------
-    def _build_products_section(self, products):
-        """Grid of product info cards."""
-        # Section header + product cards
-        num_products = len(products)
-        card_height = dp(68)
-        # Two columns, so rows = ceil(n / 2)
-        num_rows = (num_products + 1) // 2
-        grid_height = num_rows * (card_height + dp(8))
-        section_height = dp(38) + grid_height + dp(8)
+    # ════════════════════════════════════════════════
+    def _products_section(self, products):
+        row_h = dp(48)
+        header_h = dp(34)
+        total = header_h + (row_h + dp(4)) * len(products) + dp(8)
 
         section = BoxLayout(
-            orientation='vertical',
-            size_hint_y=None,
-            height=section_height,
-            spacing=dp(6),
+            orientation='vertical', size_hint_y=None, height=total,
+            spacing=dp(4),
         )
 
         # Section header
-        header_row = BoxLayout(size_hint_y=None, height=dp(28),
-                               padding=[dp(4), 0])
-        header_row.add_widget(Label(
-            text='\U0001F3A8  PRODUCTS',
-            font_size='15sp',
-            bold=True,
+        section.add_widget(Label(
+            text=f'\U0001F3A8  PRODUCTS  ({len(products)})',
+            font_size='15sp', bold=True,
             color=(0.00, 0.82, 0.73, 1),
-            halign='left',
-            valign='middle',
-            text_size=(dp(300), dp(28)),
+            size_hint_y=None, height=dp(28),
+            halign='left', valign='middle',
+            text_size=(dp(700), dp(28)),
+            padding=[dp(4), 0],
         ))
-        header_row.add_widget(PillBadge(
-            text=str(num_products),
-            bg_color=(0.00, 0.82, 0.73, 0.18),
-            text_color=(0.00, 0.82, 0.73, 1),
-            font_size='11sp',
-            height=dp(20),
-            padding_x=8,
-        ))
-        header_row.add_widget(Widget())
-        section.add_widget(header_row)
-
-        # Product cards in a 2-column grid
-        grid = GridLayout(
-            cols=2,
-            spacing=dp(8),
-            size_hint_y=None,
-            height=grid_height,
-        )
 
         for p in products:
-            pcard = self._build_product_card(p)
-            grid.add_widget(pcard)
+            section.add_widget(self._product_row(p))
 
-        # Pad grid if odd number
-        if num_products % 2 == 1:
-            grid.add_widget(Widget())
-
-        section.add_widget(grid)
         return section
 
-    def _build_product_card(self, product):
-        """A single product info card."""
+    def _product_row(self, product):
+        """Single product info row: name + details underneath."""
         name = product.get('name', '?')
         thinner = product.get('thinner', '')
         components = product.get('components', 1)
+        base_r = product.get('base_ratio', '')
+        hard_r = product.get('hardener_ratio', '')
         coverage = product.get('coverage_m2_per_liter', '')
-        ratio_base = product.get('base_ratio', '')
-        ratio_hard = product.get('hardener_ratio', '')
-        prod_type = product.get('type', 'default').lower()
-
-        # Determine type color
-        if 'hardener' in name.lower() or prod_type == 'hardener':
-            type_color = PRODUCT_TYPE_COLORS['hardener']
-        elif 'thinner' in name.lower() or prod_type == 'thinner':
-            type_color = PRODUCT_TYPE_COLORS['thinner']
-        else:
-            type_color = PRODUCT_TYPE_COLORS['base']
 
         card = BoxLayout(
-            orientation='vertical',
-            size_hint_y=None, height=dp(68),
-            padding=[dp(10), dp(8), dp(10), dp(6)],
-            spacing=dp(3),
+            orientation='vertical', size_hint_y=None, height=dp(44),
+            padding=[dp(14), dp(6), dp(10), dp(4)], spacing=dp(2),
         )
-        _draw_rounded_rect(card, (0.10, 0.12, 0.16, 1), radius=10)
-        _draw_accent_bar(card, type_color, width=dp(3), radius=2)
+        _bg(card, (0.11, 0.13, 0.17, 1), radius=8)
 
-        # Product name (bold, truncated)
+        # Product type color bar
+        lower = name.lower()
+        if 'thinner' in lower:
+            bar_color = (0.30, 0.52, 0.80, 1)
+        elif 'hardener' in lower or 'hrd' in lower:
+            bar_color = (0.90, 0.60, 0.20, 1)
+        else:
+            bar_color = (0.00, 0.72, 0.64, 1)
+        _bar(card, bar_color, w=dp(3))
+
+        # Product name — WHITE BOLD
         card.add_widget(Label(
             text=name,
-            font_size='13sp',
-            bold=True,
-            color=(0.88, 0.90, 0.94, 1),
+            font_size='14sp', bold=True,
+            color=(0.93, 0.95, 0.97, 1),
             size_hint_y=None, height=dp(20),
-            halign='left',
-            valign='middle',
-            text_size=(dp(330), dp(20)),
-            shorten=True,
-            shorten_from='right',
+            halign='left', valign='middle',
+            text_size=(dp(700), dp(20)),
+            padding=[dp(6), 0],
         ))
 
-        # Details row: ratio, coverage, thinner
-        details_row = BoxLayout(
-            size_hint_y=None, height=dp(18),
-            spacing=dp(6),
-        )
-
-        if components > 1 and ratio_base:
-            details_row.add_widget(PillBadge(
-                text=f'{ratio_base}:{ratio_hard}',
-                bg_color=(0.18, 0.20, 0.28, 1),
-                text_color=(0.65, 0.68, 0.76, 1),
-                font_size='10sp',
-                height=dp(16),
-                padding_x=6,
-            ))
-
+        # Details line (mix ratio, coverage, thinner)
+        parts = []
+        if components > 1 and base_r:
+            parts.append(f'Mix {base_r}:{hard_r}')
         if coverage:
-            details_row.add_widget(PillBadge(
-                text=f'{coverage} m\u00b2/L',
-                bg_color=(0.18, 0.20, 0.28, 1),
-                text_color=(0.65, 0.68, 0.76, 1),
-                font_size='10sp',
-                height=dp(16),
-                padding_x=6,
-            ))
-
-        details_row.add_widget(Widget())  # fill
-        card.add_widget(details_row)
-
-        # Thinner row
+            parts.append(f'{coverage} m\u00b2/L')
         if thinner:
+            parts.append(f'Thinner: {thinner}')
+
+        if parts:
             card.add_widget(Label(
-                text=f'Thinner: {thinner}',
-                font_size='10sp',
-                color=(0.42, 0.46, 0.54, 1),
+                text='   \u2022   '.join(parts),
+                font_size='11sp',
+                color=(0.50, 0.55, 0.64, 1),
                 size_hint_y=None, height=dp(14),
-                halign='left',
-                valign='middle',
-                text_size=(dp(330), dp(14)),
-                shorten=True,
-                shorten_from='right',
+                halign='left', valign='middle',
+                text_size=(dp(700), dp(14)),
+                padding=[dp(6), 0],
+                shorten=True, shorten_from='right',
             ))
         else:
             card.add_widget(Widget(size_hint_y=None, height=dp(4)))
 
         return card
 
-    # --------------------------------------------------------
+    # ════════════════════════════════════════════════
     # MARKING COLORS SECTION
-    # --------------------------------------------------------
-    def _build_markings_section(self, markings):
-        """Horizontal row of color swatches."""
-        section_height = dp(110)
+    # ════════════════════════════════════════════════
+    def _markings_section(self, markings):
+        header_h = dp(34)
+        row_h = dp(36)
+        total = header_h + (row_h + dp(4)) * len(markings) + dp(8)
 
         section = BoxLayout(
-            orientation='vertical',
-            size_hint_y=None,
-            height=section_height,
-            spacing=dp(6),
+            orientation='vertical', size_hint_y=None, height=total,
+            spacing=dp(4),
         )
 
-        # Section header
-        header_row = BoxLayout(size_hint_y=None, height=dp(28),
-                               padding=[dp(4), 0])
-        header_row.add_widget(Label(
-            text='\U0001F3AF  MARKING COLORS',
-            font_size='15sp',
-            bold=True,
+        section.add_widget(Label(
+            text=f'\U0001F3AF  MARKING COLORS  ({len(markings)})',
+            font_size='15sp', bold=True,
             color=(0.98, 0.76, 0.22, 1),
-            halign='left',
-            valign='middle',
-            text_size=(dp(300), dp(28)),
+            size_hint_y=None, height=dp(28),
+            halign='left', valign='middle',
+            text_size=(dp(700), dp(28)),
+            padding=[dp(4), 0],
         ))
-        header_row.add_widget(Widget())
-        section.add_widget(header_row)
-
-        # Card background for swatch area
-        swatch_card = BoxLayout(
-            size_hint_y=None,
-            height=dp(72),
-            padding=[dp(12), dp(6)],
-            spacing=dp(8),
-        )
-        _draw_rounded_rect(swatch_card, (0.10, 0.12, 0.16, 1), radius=10)
 
         for mc in markings:
             purpose = mc.get('purpose', '?')
             mc_color_name = mc.get('color', '?')
-            swatch_rgba = _color_for_name(mc_color_name)
+            paint_rgba = _resolve_color(mc_color_name)
 
-            swatch_card.add_widget(ColorSwatch(
-                color_name=f'{purpose}\n{mc_color_name}',
-                swatch_color=swatch_rgba,
+            row = BoxLayout(
+                size_hint_y=None, height=dp(32),
+                padding=[dp(14), dp(4), dp(10), dp(4)],
+                spacing=dp(10),
+            )
+            _bg(row, (0.11, 0.13, 0.17, 1), radius=8)
+
+            # Color dot
+            if paint_rgba:
+                row.add_widget(_dot_widget(paint_rgba, size=18))
+            else:
+                row.add_widget(
+                    Widget(size_hint=(None, None), size=(dp(18), dp(18))))
+
+            # Purpose — WHITE BOLD
+            row.add_widget(Label(
+                text=purpose,
+                font_size='13sp', bold=True,
+                color=(0.93, 0.95, 0.97, 1),
+                halign='left', valign='middle',
+                text_size=(dp(350), dp(28)),
             ))
 
-        swatch_card.add_widget(Widget())  # fill remaining space
-        section.add_widget(swatch_card)
+            # Color name — muted right side
+            row.add_widget(Label(
+                text=mc_color_name,
+                font_size='12sp',
+                color=(0.58, 0.62, 0.70, 1),
+                size_hint_x=None, width=dp(160),
+                halign='right', valign='middle',
+                text_size=(dp(160), dp(28)),
+            ))
+
+            section.add_widget(row)
 
         return section
 
-    # --------------------------------------------------------
+    # ════════════════════════════════════════════════
     # EMPTY STATE
-    # --------------------------------------------------------
-    def _build_no_chart(self, content):
-        """Show a friendly empty state when no chart is synced."""
-        content.add_widget(Widget(size_hint_y=0.15))
+    # ════════════════════════════════════════════════
+    def _empty_state(self, content):
+        content.add_widget(Widget(size_hint_y=0.2))
 
-        # Empty state card
-        empty_card = BoxLayout(
+        card = BoxLayout(
             orientation='vertical',
-            size_hint=(0.8, None),
-            height=dp(180),
+            size_hint=(0.8, None), height=dp(160),
             pos_hint={'center_x': 0.5},
-            padding=[dp(24), dp(20)],
-            spacing=dp(12),
+            padding=[dp(24), dp(20)], spacing=dp(10),
         )
-        _draw_rounded_rect(empty_card, (0.10, 0.12, 0.16, 1), radius=16)
+        _bg(card, (0.11, 0.13, 0.17, 1), radius=14)
 
-        empty_card.add_widget(Label(
+        card.add_widget(Label(
             text='\U0001F4CB',
-            font_size='42sp',
-            size_hint_y=None, height=dp(50),
+            font_size='40sp',
+            size_hint_y=None, height=dp(48),
             halign='center',
         ))
-
-        empty_card.add_widget(Label(
+        card.add_widget(Label(
             text='No Chart Available',
-            font_size='22sp',
-            bold=True,
-            color=(0.55, 0.58, 0.65, 1),
-            size_hint_y=None, height=dp(30),
-            halign='center',
-            text_size=(dp(500), None),
+            font_size='20sp', bold=True,
+            color=(0.60, 0.63, 0.70, 1),
+            size_hint_y=None, height=dp(28),
+            halign='center', text_size=(dp(400), None),
         ))
-
-        empty_card.add_widget(Label(
-            text='Pair this device with the cloud\nand upload a maintenance chart\nfor the vessel.',
+        card.add_widget(Label(
+            text='Pair with cloud and upload\na maintenance chart.',
             font_size='14sp',
-            color=(0.38, 0.42, 0.50, 1),
-            size_hint_y=None, height=dp(52),
-            halign='center',
-            text_size=(dp(400), None),
+            color=(0.42, 0.46, 0.54, 1),
+            size_hint_y=None, height=dp(40),
+            halign='center', text_size=(dp(400), None),
         ))
 
-        content.add_widget(empty_card)
+        content.add_widget(card)
         content.add_widget(Widget(size_hint_y=1))
