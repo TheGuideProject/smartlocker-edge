@@ -95,6 +95,7 @@ class SyncEngine:
     def force_sync(self) -> None:
         """Force an immediate sync cycle (called from UI or events)."""
         self._last_sync_time = 0  # Reset timer to trigger immediate sync
+        self._last_heartbeat_time = 0  # Also trigger heartbeat (updates cloud status)
 
     # ============================================================
     # SYNC LOOP
