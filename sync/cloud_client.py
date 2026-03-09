@@ -163,6 +163,7 @@ class CloudClient:
         driver_status: Dict[str, str],
         sensors: Dict,
         db_ref=None,
+        system_monitor=None,
     ) -> None:
         """
         Set references for device monitoring (called after init by the app).
@@ -171,10 +172,12 @@ class CloudClient:
             driver_status: {"rfid": "real"|"fake", "weight": ..., "led": ..., "buzzer": ...}
             sensors: {"rfid": rfid_driver, "weight": weight_driver, ...}
             db_ref: Reference to Database instance for size/pending info
+            system_monitor: Reference to SystemMonitor for hardware telemetry
         """
         self._driver_status = driver_status
         self._sensors = sensors
         self._db_ref = db_ref
+        self._system_monitor_ref = system_monitor
         self._start_time = time.time()
         logger.info(f"Monitoring refs set: drivers={driver_status}")
 
@@ -232,7 +235,12 @@ class CloudClient:
         return health
 
     def _collect_system_info(self, sync_queue_depth: int = 0) -> Dict[str, Any]:
-        """Collect system information for heartbeat."""
+        """Collect system information for heartbeat.
+
+        Includes hardware telemetry from SystemMonitor when available:
+        cpu_temp, ram_pct, disk_pct, clock_sync, under_voltage,
+        cpu_throttled, sd_health, throttle_bits.
+        """
         info = {
             "uptime_seconds": round(time.time() - self._start_time, 1),
             "events_pending_sync": sync_queue_depth,
@@ -247,6 +255,42 @@ class CloudClient:
                     info["db_size_mb"] = round(size_bytes / (1024 * 1024), 2)
             except Exception:
                 pass
+
+        # ── Hardware telemetry from SystemMonitor ──────────────
+        monitor = getattr(self, '_system_monitor_ref', None)
+        if monitor:
+            try:
+                last = monitor.get_last_check()
+                if last:
+                    # CPU temperature (°C)
+                    if last.get("cpu_temp") is not None:
+                        info["cpu_temp"] = round(last["cpu_temp"], 1)
+                    # RAM usage (%)
+                    if last.get("ram_pct") is not None:
+                        info["ram_pct"] = round(last["ram_pct"], 1)
+                    # Disk usage (%)
+                    if last.get("disk_pct") is not None:
+                        info["disk_pct"] = round(last["disk_pct"], 1)
+                    # Clock sync (NTP)
+                    if "clock_sync" in last:
+                        info["clock_sync"] = last["clock_sync"]
+                    # Under-voltage detected
+                    if "under_voltage" in last:
+                        info["under_voltage"] = last["under_voltage"]
+                    # CPU throttled
+                    if "cpu_throttled" in last:
+                        info["cpu_throttled"] = last["cpu_throttled"]
+                    # SD card health
+                    if "sd_health" in last:
+                        info["sd_health"] = last["sd_health"]
+                    # Raw throttle bitmask
+                    if "throttle_bits" in last:
+                        info["throttle_bits"] = last["throttle_bits"]
+                    # Timestamp of last check
+                    if "timestamp" in last:
+                        info["telemetry_timestamp"] = last["timestamp"]
+            except Exception as e:
+                logger.debug(f"Could not collect telemetry: {e}")
 
         return info
 

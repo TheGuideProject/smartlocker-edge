@@ -535,7 +535,7 @@ class SmartLockerApp(App):
         self.cloud = CloudClient()
         self.sync_engine = SyncEngine(self.db, self.cloud)
 
-        # Set monitoring references so heartbeats include sensor health
+        # Set monitoring references so heartbeats include sensor health + telemetry
         self.cloud.set_monitoring_refs(
             driver_status=self.driver_status,
             sensors={
@@ -543,6 +543,7 @@ class SmartLockerApp(App):
                 'weight': self.weight,
             },
             db_ref=self.db,
+            system_monitor=self.system_monitor,
         )
 
         # Paint Now context (for passing data between screens)
