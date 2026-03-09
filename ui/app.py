@@ -331,6 +331,7 @@ class SmartLockerApp(App):
         from ui.screens.chart_viewer import ChartViewerScreen
         from ui.screens.admin import AdminScreen
         from ui.screens.alarm_screen import AlarmScreen
+        from ui.screens.system_health import SystemHealthScreen
 
         # Add pairing screen FIRST (so it's the default if not paired)
         self.sm.add_widget(PairingScreen(name='pairing'))
@@ -343,6 +344,7 @@ class SmartLockerApp(App):
         self.sm.add_widget(ChartViewerScreen(name='chart_viewer'))
         self.sm.add_widget(AdminScreen(name='admin'))
         self.sm.add_widget(AlarmScreen(name='alarm'))
+        self.sm.add_widget(SystemHealthScreen(name='system_health'))
 
         # ---- Alarm callbacks (v1.0.6) ----
         self._previous_screen = 'home'

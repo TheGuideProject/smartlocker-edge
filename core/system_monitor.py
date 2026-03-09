@@ -1,18 +1,25 @@
 """
 System Monitor - Hardware health checks for Raspberry Pi.
 
-Monitors CPU temperature, RAM usage, disk space, SD card health.
+Monitors CPU temperature, RAM usage, disk space, SD card health,
+NTP clock sync, and power supply voltage.
 Raises alarms via AlarmManager when thresholds are exceeded.
 Auto-resolves alarms when conditions return to normal.
+Keeps a rolling history buffer for UI graphs (last 60 samples = 1 hour).
 """
 
 import os
 import time
 import logging
+import datetime
 import threading
-from typing import Dict, Any, Optional
+from collections import deque
+from typing import Dict, Any, List, Optional
 
 logger = logging.getLogger("smartlocker.monitor")
+
+# History buffer size (60 samples @ 60s interval = 1 hour)
+HISTORY_MAX = 60
 
 
 class SystemMonitor:
@@ -23,7 +30,8 @@ class SystemMonitor:
         self._thread = None
         self._running = False
         self._interval = 60  # Check every 60 seconds
-        self._last_check = {}
+        self._last_check: Dict[str, Any] = {}
+        self._history: deque = deque(maxlen=HISTORY_MAX)
 
     def start(self, interval_s: int = 60):
         """Start background monitoring."""
@@ -57,26 +65,27 @@ class SystemMonitor:
         """Run all health checks. Returns status dict."""
         from core.error_codes import ErrorCode
 
-        result = {}
+        result = {
+            "timestamp": time.time(),
+        }
 
-        # CPU Temperature
+        # ── CPU Temperature ──────────────────────────────────
         cpu_temp = self._get_cpu_temp()
         result["cpu_temp"] = cpu_temp
         if cpu_temp is not None:
             if cpu_temp >= 80:
                 self.alarm_manager.raise_alarm(
                     ErrorCode.E020_CPU_OVERTEMP,
-                    f"CPU at {cpu_temp:.1f}\u00b0C",
+                    f"CPU at {cpu_temp:.1f}°C",
                     "system",
                 )
             elif cpu_temp >= 70:
                 self.alarm_manager.raise_alarm(
                     ErrorCode.E021_CPU_HIGH_TEMP,
-                    f"CPU at {cpu_temp:.1f}\u00b0C",
+                    f"CPU at {cpu_temp:.1f}°C",
                     "system",
                 )
             else:
-                # Clear temperature alarms if they were raised
                 self.alarm_manager.resolve_by_code(
                     ErrorCode.E020_CPU_OVERTEMP, "system"
                 )
@@ -84,17 +93,39 @@ class SystemMonitor:
                     ErrorCode.E021_CPU_HIGH_TEMP, "system"
                 )
 
-        # Check CPU throttling
-        throttled = self._check_throttling()
-        result["cpu_throttled"] = throttled
-        if throttled:
+        # ── Throttling + Power (vcgencmd bitmask) ────────────
+        throttle_bits = self._get_throttle_bits()
+        result["throttle_bits"] = throttle_bits
+
+        # Under-voltage: bit 0 (now) or bit 16 (since boot)
+        under_voltage = bool(throttle_bits & 0x50001)
+        result["under_voltage"] = under_voltage
+        if under_voltage:
             self.alarm_manager.raise_alarm(
-                ErrorCode.E022_CPU_THROTTLING,
-                "CPU frequency limited",
+                ErrorCode.E030_POWER_UNSTABLE,
+                f"Under-voltage detected (0x{throttle_bits:x})",
                 "system",
             )
+        else:
+            self.alarm_manager.resolve_by_code(
+                ErrorCode.E030_POWER_UNSTABLE, "system"
+            )
 
-        # RAM Usage
+        # CPU throttled: bit 2 (now) or bit 18 (since boot)
+        cpu_throttled = bool(throttle_bits & 0x40004)
+        result["cpu_throttled"] = cpu_throttled
+        if cpu_throttled:
+            self.alarm_manager.raise_alarm(
+                ErrorCode.E022_CPU_THROTTLING,
+                f"CPU throttled (0x{throttle_bits:x})",
+                "system",
+            )
+        else:
+            self.alarm_manager.resolve_by_code(
+                ErrorCode.E022_CPU_THROTTLING, "system"
+            )
+
+        # ── RAM Usage ────────────────────────────────────────
         ram_pct = self._get_ram_usage()
         result["ram_pct"] = ram_pct
         if ram_pct is not None:
@@ -118,7 +149,7 @@ class SystemMonitor:
                     ErrorCode.E024_RAM_HIGH, "system"
                 )
 
-        # Disk Usage
+        # ── Disk Usage ───────────────────────────────────────
         disk_pct = self._get_disk_usage()
         result["disk_pct"] = disk_pct
         if disk_pct is not None:
@@ -142,19 +173,42 @@ class SystemMonitor:
                     ErrorCode.E026_DISK_HIGH, "system"
                 )
 
-        # SD Card health
+        # ── SD Card Health ───────────────────────────────────
         sd_ok = self._check_sd_health()
         result["sd_health"] = "ok" if sd_ok else "error"
 
+        # ── Clock Sync (NTP) ─────────────────────────────────
+        clock_ok = self._check_clock_sync()
+        result["clock_sync"] = clock_ok
+        if not clock_ok:
+            self.alarm_manager.raise_alarm(
+                ErrorCode.E029_SYSTEM_CLOCK_ERROR,
+                "NTP not synchronized",
+                "system",
+            )
+        else:
+            self.alarm_manager.resolve_by_code(
+                ErrorCode.E029_SYSTEM_CLOCK_ERROR, "system"
+            )
+
+        # ── Save to history and cache ────────────────────────
         self._last_check = result
+        self._history.append(result)
+
         return result
 
     def get_last_check(self) -> Dict[str, Any]:
         """Return results from the most recent health check."""
         return dict(self._last_check)
 
-    # --- Platform-specific checks ---
+    def get_history(self) -> List[Dict[str, Any]]:
+        """Return the rolling history buffer (up to 60 samples)."""
+        return list(self._history)
+
+    # ================================================================
+    # Platform-specific checks
     # Work on RPi, gracefully degrade on other platforms
+    # ================================================================
 
     def _get_cpu_temp(self) -> Optional[float]:
         """Read CPU temperature. Works on RPi, returns None elsewhere."""
@@ -187,8 +241,19 @@ class SystemMonitor:
             pass
         return None
 
-    def _check_throttling(self) -> bool:
-        """Check if CPU is being throttled (RPi specific)."""
+    def _get_throttle_bits(self) -> int:
+        """Get RPi throttle bitmask via vcgencmd. Returns 0 if unavailable.
+
+        Bit meanings:
+            0: Under-voltage detected (now)
+            1: Arm frequency capped (now)
+            2: Currently throttled (now)
+            3: Soft temperature limit active
+           16: Under-voltage has occurred (since boot)
+           17: Arm frequency capped has occurred
+           18: Throttling has occurred
+           19: Soft temperature limit has occurred
+        """
         try:
             import subprocess
             result = subprocess.run(
@@ -198,12 +263,11 @@ class SystemMonitor:
                 timeout=5,
             )
             if result.returncode == 0:
-                # throttled=0x0 means no throttling
                 val = result.stdout.strip().split("=")[1]
-                return int(val, 16) != 0
+                return int(val, 16)
         except Exception:
             pass
-        return False
+        return 0
 
     def _get_ram_usage(self) -> Optional[float]:
         """Get RAM usage percentage."""
@@ -282,3 +346,27 @@ class SystemMonitor:
             pass
 
         return True
+
+    def _check_clock_sync(self) -> bool:
+        """Check if system clock is NTP synchronized.
+
+        Uses timedatectl on Linux, falls back to year check on other platforms.
+        """
+        # Try timedatectl (systemd Linux)
+        try:
+            import subprocess
+            result = subprocess.run(
+                ["timedatectl", "show", "--property=NTPSynchronized"],
+                capture_output=True,
+                text=True,
+                timeout=5,
+            )
+            if result.returncode == 0:
+                return "yes" in result.stdout.strip().lower()
+        except (FileNotFoundError, OSError):
+            pass
+        except Exception:
+            pass
+
+        # Fallback: check if year is reasonable (for Windows / test mode)
+        return datetime.datetime.now().year >= 2025

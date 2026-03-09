@@ -343,6 +343,25 @@ Builder.load_string('''
                                 size: self.size
                                 radius: [10]
 
+                BoxLayout:
+                    size_hint_y: None
+                    height: '48dp'
+                    Button:
+                        text: 'SYSTEM HEALTH'
+                        font_size: '14sp'
+                        bold: True
+                        background_normal: ''
+                        background_color: 0, 0, 0, 0
+                        color: 0.00, 0.82, 0.73, 1
+                        on_release: app.go_screen('system_health')
+                        canvas.before:
+                            Color:
+                                rgba: 0.06, 0.12, 0.12, 1
+                            RoundedRectangle:
+                                pos: self.pos
+                                size: self.size
+                                radius: [10]
+
                 # ==== ADMIN ACCESS ====
                 BoxLayout:
                     size_hint_y: None
