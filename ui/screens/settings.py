@@ -366,6 +366,9 @@ Builder.load_string('''
 ''')
 
 
+from sync.update_manager import read_version
+
+
 class SettingsScreen(Screen):
 
     def on_enter(self):
@@ -411,6 +414,8 @@ class SettingsScreen(Screen):
             self.ids.drivers_label.markup = True
         else:
             self.ids.drivers_label.text = f'Drivers: all fake'
+
+        self.ids.version_label.text = f'Software: v{read_version()}'
 
         total_events = len(app.event_log)
         self.ids.events_label.text = f'Events in memory: {total_events}'

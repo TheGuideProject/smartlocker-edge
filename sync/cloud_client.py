@@ -23,6 +23,16 @@ from config import settings
 logger = logging.getLogger("smartlocker.cloud")
 
 
+def _read_version():
+    """Read version from config/VERSION."""
+    vf = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "config", "VERSION")
+    try:
+        with open(vf) as f:
+            return f.read().strip()
+    except FileNotFoundError:
+        return "1.0.0"
+
+
 class CloudClient:
     """
     HTTP client for SmartLocker Cloud Backend.
@@ -68,7 +78,7 @@ class CloudClient:
             "pairing_code": pairing_code.strip().upper(),
             "device_id": self.device_id,
             "device_name": f"SmartLocker {self.device_id}",
-            "software_version": "1.0.0",
+            "software_version": _read_version(),
         }
 
         success, data = self._http_post(url, payload)
@@ -256,7 +266,7 @@ class CloudClient:
         system_info = self._collect_system_info(sync_queue_depth)
 
         payload = {
-            "software_version": "1.0.0",
+            "software_version": _read_version(),
             "uptime_hours": uptime_hours,
             "sync_queue_depth": sync_queue_depth,
             "driver_status": self._driver_status,
@@ -295,6 +305,27 @@ class CloudClient:
             received = data.get("received", 0)
             logger.info(f"Health logs uploaded: {received} entries")
         return success
+
+    # ============================================================
+    # OTA UPDATE STATUS
+    # ============================================================
+
+    def report_update_status(self, status, version="", error=""):
+        """Report OTA update progress to cloud."""
+        if not self.is_paired:
+            return False
+        url = f"{self.cloud_url}/api/devices/{self.device_uuid}/update-status"
+        payload = {
+            "update_status": status,
+            "software_version": version or _read_version(),
+            "error_message": error,
+        }
+        try:
+            success, _ = self._http_post(url, payload, auth=True, timeout=10)
+            return success
+        except Exception as e:
+            logger.warning(f"Failed to report update status: {e}")
+            return False
 
     # ============================================================
     # INVENTORY SNAPSHOT SYNC

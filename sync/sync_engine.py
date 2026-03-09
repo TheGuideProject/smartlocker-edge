@@ -51,6 +51,9 @@ class SyncEngine:
         self._last_inventory_sync_time = 0.0
         self._start_time = time.time()
 
+        from sync.update_manager import UpdateManager
+        self._update_manager = UpdateManager(cloud, db)
+
     def start(self) -> None:
         """Start the background sync thread."""
         if not self.cloud.is_paired:
@@ -233,6 +236,17 @@ class SyncEngine:
                 logger.info("Admin password updated from cloud")
 
             logger.info(f"Config synced: {len(products)} products, {len(recipes)} recipes")
+
+            # Check for OTA update command
+            update_cmd = config.get("update")
+            if update_cmd:
+                update_info = self._update_manager.check_update(config)
+                if update_info:
+                    logger.info(f"OTA update starting: → v{update_info.get('version', '?')}")
+                    success, error = self._update_manager.apply_update(update_info)
+                    if not success:
+                        logger.error(f"OTA update failed: {error}")
+                    # If success, app restarts and we never get here
 
         except Exception as e:
             logger.error(f"Config sync error: {e}")

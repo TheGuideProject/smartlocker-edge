@@ -1,0 +1,21 @@
+[Unit]
+Description=SmartLocker Edge - Paint Inventory & Mixing System
+After=network.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=jacopo22295
+WorkingDirectory=/home/jacopo22295/smartlocker-edge
+ExecStart=/usr/bin/python3 main.py
+Restart=always
+RestartSec=5
+Environment=PYTHONUNBUFFERED=1
+Environment=DISPLAY=:0
+
+# Logging
+StandardOutput=append:/home/jacopo22295/smartlocker-edge/logs/service.log
+StandardError=append:/home/jacopo22295/smartlocker-edge/logs/service.log
+
+[Install]
+WantedBy=multi-user.target
