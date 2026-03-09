@@ -54,8 +54,12 @@ class SyncEngine:
         self._last_inventory_sync_time = 0.0
         self._start_time = time.time()
 
-        from sync.update_manager import UpdateManager
-        self._update_manager = UpdateManager(cloud, db)
+        try:
+            from sync.update_manager import UpdateManager
+            self._update_manager = UpdateManager(cloud, db)
+        except Exception as e:
+            logger.warning(f"UpdateManager not available: {e}")
+            self._update_manager = None
 
     def start(self) -> None:
         """Start the background sync thread."""
@@ -242,7 +246,7 @@ class SyncEngine:
 
             # Check for OTA update command
             update_cmd = config.get("update")
-            if update_cmd:
+            if update_cmd and self._update_manager:
                 update_info = self._update_manager.check_update(config)
                 if update_info:
                     logger.info(f"OTA update starting: → v{update_info.get('version', '?')}")
