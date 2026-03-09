@@ -51,6 +51,12 @@ class EventType(Enum):
     CONFIG_UPDATED = "config_updated"
     CALIBRATION_DONE = "calibration_done"
 
+    # Alarm events (v1.0.6)
+    ALARM_RAISED = "alarm_raised"
+    ALARM_ACKNOWLEDGED = "alarm_acknowledged"
+    ALARM_RESOLVED = "alarm_resolved"
+    SUPPORT_REQUESTED = "support_requested"
+
 
 @dataclass
 class Event:

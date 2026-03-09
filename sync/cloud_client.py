@@ -360,6 +360,32 @@ class CloudClient:
         return success
 
     # ============================================================
+    # SUPPORT REQUEST (v1.0.6)
+    # ============================================================
+
+    def send_support_request(self, alarm_data: dict) -> bool:
+        """
+        Send a support request to the cloud for a specific alarm.
+
+        Args:
+            alarm_data: Dict with alarm details (error_code, error_title, details, etc.)
+
+        Returns:
+            True if the support request was sent successfully
+        """
+        if not self.is_paired:
+            return False
+        try:
+            url = f"{self.cloud_url}/api/devices/{self.device_id}/support-request"
+            success, _ = self._http_post(url, alarm_data, auth=True, timeout=10)
+            if success:
+                logger.info(f"Support request sent: {alarm_data.get('error_code', '?')}")
+            return success
+        except Exception as e:
+            logger.warning(f"Support request send failed: {e}")
+            return False
+
+    # ============================================================
     # CONFIG SYNC
     # ============================================================
 

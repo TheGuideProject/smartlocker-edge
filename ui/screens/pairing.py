@@ -175,6 +175,12 @@ Builder.load_string('''
                             size: self.size
                             radius: [12]
 
+            # Virtual keyboard container (v1.0.6)
+            BoxLayout:
+                id: keyboard_container
+                size_hint_y: None
+                height: '0dp'
+
             Widget:
                 size_hint_y: 1
 
@@ -195,6 +201,10 @@ class PairingScreen(Screen):
     device_info_text = StringProperty('')
     _status_color = [0.38, 0.42, 0.50, 1]
 
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+        self._keyboard = None
+
     def on_enter(self):
         """Called when screen is displayed."""
         app = App.get_running_app()
@@ -205,6 +215,9 @@ class PairingScreen(Screen):
         self.ids.pair_button.text = 'CONNECT'
         self.ids.pair_button.disabled = False
         self.ids.pairing_code_input.text = ''
+
+        # Setup virtual keyboard (v1.0.6)
+        self._setup_virtual_keyboard()
 
     def do_pairing(self):
         """Execute the pairing process."""
@@ -329,3 +342,49 @@ class PairingScreen(Screen):
             self._status_color = [0.38, 0.42, 0.50, 1]    # Gray
         # Force UI refresh
         self.ids.status_label.color = self._status_color
+
+    # ---- Virtual Keyboard Integration (v1.0.6) ----
+
+    def _setup_virtual_keyboard(self):
+        """Create and bind the numeric virtual keyboard for pairing code entry."""
+        from ui.widgets.virtual_keyboard import VirtualKeyboard
+
+        container = self.ids.keyboard_container
+
+        # Only create once
+        if self._keyboard is None:
+            self._keyboard = VirtualKeyboard(mode='numeric')
+            self._keyboard.bind_to(self.ids.pairing_code_input)
+
+        # Bind focus events to show/hide keyboard
+        code_input = self.ids.pairing_code_input
+        code_input.bind(focus=self._on_input_focus)
+
+        # Disable system keyboard so only our virtual one is used
+        code_input.keyboard_mode = 'managed'
+
+    def _on_input_focus(self, instance, focused):
+        """Show keyboard when input gets focus, hide when unfocused."""
+        container = self.ids.keyboard_container
+        if focused:
+            self._show_keyboard()
+        else:
+            self._hide_keyboard()
+
+    def _show_keyboard(self):
+        """Show the virtual keyboard below the input."""
+        container = self.ids.keyboard_container
+        if self._keyboard and self._keyboard.parent is None:
+            container.add_widget(self._keyboard)
+        container.height = self._keyboard.NUMERIC_HEIGHT if self._keyboard else 220
+
+    def _hide_keyboard(self):
+        """Hide the virtual keyboard."""
+        container = self.ids.keyboard_container
+        if self._keyboard and self._keyboard.parent == container:
+            container.remove_widget(self._keyboard)
+        container.height = 0
+
+    def on_leave(self):
+        """Clean up when leaving the screen."""
+        self._hide_keyboard()

@@ -192,5 +192,30 @@ CREATE TABLE IF NOT EXISTS sync_state (
     config_version INTEGER DEFAULT 0
 );
 
+-- ============================================================
+-- ALARM LOG (v1.0.6)
+-- ============================================================
+
+CREATE TABLE IF NOT EXISTS alarm_log (
+    alarm_id TEXT PRIMARY KEY,
+    error_code TEXT NOT NULL,
+    error_title TEXT NOT NULL,
+    severity TEXT NOT NULL,
+    category TEXT NOT NULL,
+    details TEXT DEFAULT '',
+    source TEXT DEFAULT '',
+    status TEXT DEFAULT 'active',
+    raised_at REAL NOT NULL,
+    acknowledged_at REAL,
+    resolved_at REAL,
+    support_requested INTEGER DEFAULT 0,
+    support_requested_at REAL,
+    synced INTEGER DEFAULT 0
+);
+
+CREATE INDEX IF NOT EXISTS idx_alarm_log_status ON alarm_log(status);
+CREATE INDEX IF NOT EXISTS idx_alarm_log_severity ON alarm_log(severity);
+CREATE INDEX IF NOT EXISTS idx_alarm_log_raised ON alarm_log(raised_at);
+
 -- Initialize singleton sync state
 INSERT OR IGNORE INTO sync_state (id) VALUES (1);

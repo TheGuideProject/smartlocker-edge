@@ -479,3 +479,112 @@ class Database:
         )
         row = cursor.fetchone()
         return dict(row) if row else None
+
+    # ============================================================
+    # ALARM LOG (v1.0.6)
+    # ============================================================
+
+    def save_alarm(self, alarm_dict: Dict[str, Any]) -> None:
+        """Save a new alarm to the alarm log."""
+        self.conn.execute(
+            """INSERT OR IGNORE INTO alarm_log
+               (alarm_id, error_code, error_title, severity, category,
+                details, source, status, raised_at, support_requested, synced)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)""",
+            (
+                alarm_dict["alarm_id"],
+                alarm_dict["error_code"],
+                alarm_dict["error_title"],
+                alarm_dict["severity"],
+                alarm_dict["category"],
+                alarm_dict.get("details", ""),
+                alarm_dict.get("source", ""),
+                alarm_dict.get("status", "active"),
+                alarm_dict["raised_at"],
+                1 if alarm_dict.get("support_requested") else 0,
+            ),
+        )
+        self.conn.commit()
+
+    def update_alarm(self, alarm_id: str, updates: Dict[str, Any]) -> None:
+        """Update alarm fields."""
+        allowed = {
+            "status", "acknowledged_at", "resolved_at",
+            "support_requested", "support_requested_at", "synced",
+        }
+        sets = []
+        vals = []
+        for key, val in updates.items():
+            if key in allowed:
+                sets.append(f"{key} = ?")
+                vals.append(1 if isinstance(val, bool) and val else val)
+        if not sets:
+            return
+        vals.append(alarm_id)
+        self.conn.execute(
+            f"UPDATE alarm_log SET {', '.join(sets)} WHERE alarm_id = ?",
+            vals,
+        )
+        self.conn.commit()
+
+    def get_active_alarms(self) -> List[Dict[str, Any]]:
+        """Get all active (unresolved) alarms."""
+        cursor = self.conn.execute(
+            """SELECT * FROM alarm_log
+               WHERE status IN ('active', 'acknowledged')
+               ORDER BY raised_at DESC"""
+        )
+        return [dict(row) for row in cursor.fetchall()]
+
+    def get_alarm_history(self, limit: int = 50) -> List[Dict[str, Any]]:
+        """Get alarm history (all statuses)."""
+        cursor = self.conn.execute(
+            """SELECT * FROM alarm_log
+               ORDER BY raised_at DESC
+               LIMIT ?""",
+            (limit,),
+        )
+        return [dict(row) for row in cursor.fetchall()]
+
+    def get_unsynced_alarms(self, limit: int = 50) -> List[Dict[str, Any]]:
+        """Get alarms not yet synced to cloud."""
+        cursor = self.conn.execute(
+            """SELECT * FROM alarm_log
+               WHERE synced = 0
+               ORDER BY raised_at ASC
+               LIMIT ?""",
+            (limit,),
+        )
+        return [dict(row) for row in cursor.fetchall()]
+
+    def mark_alarms_synced(self, alarm_ids: List[str]) -> None:
+        """Mark alarms as synced to cloud."""
+        if not alarm_ids:
+            return
+        placeholders = ",".join("?" * len(alarm_ids))
+        self.conn.execute(
+            f"UPDATE alarm_log SET synced = 1 WHERE alarm_id IN ({placeholders})",
+            alarm_ids,
+        )
+        self.conn.commit()
+
+    # ============================================================
+    # CONFIG HELPERS
+    # ============================================================
+
+    def save_config(self, key: str, value: str) -> None:
+        """Save a key-value config pair."""
+        self.conn.execute(
+            """INSERT OR REPLACE INTO config (key, value, updated_at)
+               VALUES (?, ?, CURRENT_TIMESTAMP)""",
+            (key, value),
+        )
+        self.conn.commit()
+
+    def get_config(self, key: str) -> Optional[str]:
+        """Get a config value by key."""
+        cursor = self.conn.execute(
+            "SELECT value FROM config WHERE key = ?", (key,)
+        )
+        row = cursor.fetchone()
+        return row[0] if row else None

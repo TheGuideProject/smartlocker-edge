@@ -104,6 +104,13 @@ class SyncEngine:
         """Main sync loop (runs in background thread)."""
         logger.info("Sync loop started")
 
+        # Immediate heartbeat on startup (important after OTA restart)
+        try:
+            self._do_heartbeat()
+            logger.info("Startup heartbeat sent")
+        except Exception as e:
+            logger.warning(f"Startup heartbeat failed: {e}")
+
         # Initial sync on startup
         time.sleep(5)  # Wait for system to stabilize
         self._do_event_sync()
@@ -177,6 +184,11 @@ class SyncEngine:
     def _do_heartbeat(self) -> None:
         """Send heartbeat to cloud."""
         try:
+            # Always read fresh VERSION from file (important after OTA update)
+            from sync.update_manager import read_version
+            current_version = read_version()
+            logger.debug(f"Heartbeat version: {current_version}")
+
             uptime_hours = (time.time() - self._start_time) / 3600
             unsynced = self.db.get_event_count(synced=False)
 
@@ -249,7 +261,12 @@ class SyncEngine:
             if update_cmd and self._update_manager:
                 update_info = self._update_manager.check_update(config)
                 if update_info:
-                    logger.info(f"OTA update starting: → v{update_info.get('version', '?')}")
+                    logger.info(f"OTA update starting: -> v{update_info.get('version', '?')}")
+                    # Force a heartbeat with current version BEFORE restart
+                    try:
+                        self._do_heartbeat()
+                    except Exception:
+                        pass
                     success, error = self._update_manager.apply_update(update_info)
                     if not success:
                         logger.error(f"OTA update failed: {error}")

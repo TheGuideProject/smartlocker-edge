@@ -231,6 +231,15 @@ Builder.load_string('''
             Widget:
                 size_hint_y: 1
 
+            # ===== ALARM INDICATOR (dynamic, v1.0.6) =====
+            BoxLayout:
+                id: alarm_indicator
+                orientation: 'horizontal'
+                size_hint_y: None
+                height: '0dp'
+                padding: [0, 0]
+                spacing: 0
+
             # ===== ACTIVE MIX INDICATOR (dynamic) =====
             BoxLayout:
                 id: mix_indicator
@@ -320,10 +329,100 @@ class HomeScreen(Screen):
             state = app.mixing.current_state.value.replace('_', ' ').upper()
             summary += f"   |   [color=00d1ba]MIX: {state}[/color]"
 
+        # Alarm status (v1.0.6)
+        alarm_count = app.alarm_manager.active_count() if hasattr(app, 'alarm_manager') else 0
+        if alarm_count > 0:
+            has_critical = app.alarm_manager.has_critical()
+            color = "ed4552" if has_critical else "fac232"
+            summary += f"   |   [color={color}]ALARM{'S' if alarm_count > 1 else ''}: {alarm_count}[/color]"
+
         self.ids.slot_summary.text = summary
+
+        # Update alarm indicator bar (v1.0.6)
+        self._update_alarm_indicator(app)
 
         # Update active mix indicator bar
         self._update_mix_indicator(app)
+
+    def _update_alarm_indicator(self, app):
+        """Show or hide the alarm indicator bar (v1.0.6)."""
+        indicator = self.ids.alarm_indicator
+        alarm_count = app.alarm_manager.active_count() if hasattr(app, 'alarm_manager') else 0
+
+        if alarm_count > 0:
+            has_critical = app.alarm_manager.has_critical()
+
+            # Choose color: red for critical, amber for warnings
+            if has_critical:
+                bg_color = (0.93, 0.27, 0.32, 0.25)   # Red tint
+                text_color = (0.93, 0.27, 0.32, 1)
+                bar_text = 'CRITICAL ALARM -- Tap to view'
+            else:
+                bg_color = (0.98, 0.76, 0.22, 0.20)   # Amber tint
+                text_color = (0.98, 0.76, 0.22, 1)
+                bar_text = f'{alarm_count} warning{"s" if alarm_count > 1 else ""}'
+
+            # Rebuild indicator content only if needed
+            if indicator.height < 40:
+                indicator.clear_widgets()
+                indicator.height = 44
+                indicator.padding = [8, 4]
+                indicator.spacing = 8
+
+                # Background canvas
+                indicator.canvas.before.clear()
+                with indicator.canvas.before:
+                    Color(*bg_color)
+                    self._alarm_indicator_bg = RoundedRectangle(
+                        pos=indicator.pos,
+                        size=indicator.size,
+                        radius=[8],
+                    )
+                indicator.bind(
+                    pos=lambda inst, val: setattr(self._alarm_indicator_bg, 'pos', val),
+                    size=lambda inst, val: setattr(self._alarm_indicator_bg, 'size', val),
+                )
+
+                # Alarm label
+                self._alarm_indicator_label = Label(
+                    text='',
+                    font_size='14sp',
+                    bold=True,
+                    color=text_color,
+                    size_hint_x=0.7,
+                    halign='left',
+                    valign='middle',
+                    markup=True,
+                )
+                self._alarm_indicator_label.bind(
+                    size=self._alarm_indicator_label.setter('text_size'),
+                )
+                indicator.add_widget(self._alarm_indicator_label)
+
+                # View button
+                view_btn = Button(
+                    text='VIEW',
+                    font_size='14sp',
+                    bold=True,
+                    background_normal='',
+                    background_color=text_color,
+                    color=(0.02, 0.05, 0.08, 1),
+                    size_hint_x=0.3,
+                )
+                view_btn.bind(on_release=lambda x: app.go_screen('alarm'))
+                indicator.add_widget(view_btn)
+
+            # Update the label text every refresh
+            if hasattr(self, '_alarm_indicator_label'):
+                self._alarm_indicator_label.text = bar_text
+        else:
+            # Hide indicator when no alarms
+            if indicator.height > 0:
+                indicator.clear_widgets()
+                indicator.canvas.before.clear()
+                indicator.height = 0
+                indicator.padding = [0, 0]
+                indicator.spacing = 0
 
     def _update_mix_indicator(self, app):
         """Show or hide the active mix indicator bar."""

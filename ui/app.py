@@ -330,6 +330,7 @@ class SmartLockerApp(App):
         from ui.screens.paint_now import PaintNowScreen
         from ui.screens.chart_viewer import ChartViewerScreen
         from ui.screens.admin import AdminScreen
+        from ui.screens.alarm_screen import AlarmScreen
 
         # Add pairing screen FIRST (so it's the default if not paired)
         self.sm.add_widget(PairingScreen(name='pairing'))
@@ -341,6 +342,19 @@ class SmartLockerApp(App):
         self.sm.add_widget(PaintNowScreen(name='paint_now'))
         self.sm.add_widget(ChartViewerScreen(name='chart_viewer'))
         self.sm.add_widget(AdminScreen(name='admin'))
+        self.sm.add_widget(AlarmScreen(name='alarm'))
+
+        # ---- Alarm callbacks (v1.0.6) ----
+        self._previous_screen = 'home'
+
+        def _on_critical_alarm(alarm):
+            def _show(dt):
+                if self.sm.current != 'alarm':
+                    self._previous_screen = self.sm.current
+                    self.sm.current = 'alarm'
+            Clock.schedule_once(_show, 0)
+
+        self.alarm_manager.on_critical_alarm = _on_critical_alarm
 
         # Decide initial screen based on pairing status
         if self.cloud.is_paired:
@@ -350,10 +364,17 @@ class SmartLockerApp(App):
             # Start background sync
             self.sync_engine.start()
             print("  Cloud: PAIRED -- sync started")
+
+            # Start system monitor (paired mode)
+            self.system_monitor.start(interval_s=60)
         else:
             # Not paired -> show pairing screen
             self.sm.current = 'pairing'
             print("  Cloud: NOT PAIRED -- showing pairing screen")
+
+            # Start system monitor in test mode too
+            if self.mode == 'test':
+                self.system_monitor.start(interval_s=60)
 
         # Start sensor polling loop (every 500ms)
         Clock.schedule_interval(self._poll_sensors, 0.5)
@@ -500,6 +521,13 @@ class SmartLockerApp(App):
             buzzer=self.buzzer, event_bus=self.event_bus,
         )
         self.usage = UsageCalculator(event_bus=self.event_bus)
+
+        # ---- Alarm System (v1.0.6) ----
+        from core.alarm_manager import AlarmManager
+        from core.system_monitor import SystemMonitor
+
+        self.alarm_manager = AlarmManager(self.event_bus, self.db)
+        self.system_monitor = SystemMonitor(self.alarm_manager)
 
         # ---- Cloud Sync ----
         self.cloud = CloudClient()
@@ -733,9 +761,14 @@ class SmartLockerApp(App):
         """Go back to home screen."""
         self.sm.current = 'home'
 
+    def dismiss_alarm(self):
+        """Called when user acknowledges all critical alarms. Returns to previous screen."""
+        self.sm.current = self._previous_screen if self._previous_screen != 'alarm' else 'home'
+
     def on_stop(self):
         """Clean shutdown when app closes."""
         try:
+            self.system_monitor.stop()
             self.sync_engine.stop()
             self.inventory.shutdown()
             self.db.close()
