@@ -802,7 +802,11 @@ class MixingScreen(Screen):
                 size_hint=(0.7, None), height=55,
                 pos_hint={'center_x': 0.5},
             )
-            sim_btn.bind(on_release=lambda x: self._simulate_return_cans())
+            def _on_simulate_return(btn_instance):
+                btn_instance.text = '\u2713 Returning cans...'
+                btn_instance.disabled = True
+                self._simulate_return_cans()
+            sim_btn.bind(on_release=_on_simulate_return)
             content.add_widget(sim_btn)
 
             content.add_widget(Widget(size_hint_y=0.03))
@@ -1269,11 +1273,14 @@ class MixingScreen(Screen):
 
     def _simulate_return_cans(self):
         """TEST mode: simulate returning all cans."""
+        from kivy.clock import Clock
         app = App.get_running_app()
         app.rfid.add_tag('shelf1_slot1', 'TAG-BASE-001')
         app.rfid.add_tag('shelf1_slot2', 'TAG-HARD-001')
         app.weight.set_weight('shelf1', 13800)
         app.inventory.poll()
+        # Show visual feedback then complete
+        Clock.schedule_once(lambda dt: self._complete_session(), 1.0)
 
     def _complete_session(self):
         """Complete the mixing session."""
