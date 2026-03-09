@@ -863,6 +863,148 @@ Builder.load_string('''
                         halign: 'left'
                         text_size: self.size
 
+                # ==== SECTION 6: ALARM SIMULATION ====
+                Label:
+                    text: 'Alarm Simulation'
+                    font_size: '14sp'
+                    bold: True
+                    color: 0.00, 0.82, 0.73, 1
+                    size_hint_y: None
+                    height: '22dp'
+                    halign: 'left'
+                    text_size: self.size
+                    padding: [4, 0]
+
+                BoxLayout:
+                    orientation: 'vertical'
+                    size_hint_y: None
+                    height: self.minimum_height
+                    padding: [10, 8]
+                    spacing: 6
+                    canvas.before:
+                        Color:
+                            rgba: 0.10, 0.12, 0.16, 1
+                        RoundedRectangle:
+                            pos: self.pos
+                            size: self.size
+                            radius: [10]
+
+                    Label:
+                        text: 'Trigger test alarms to verify notification system'
+                        font_size: '11sp'
+                        color: 0.38, 0.42, 0.50, 1
+                        size_hint_y: None
+                        height: '18dp'
+                        halign: 'left'
+                        text_size: self.size
+
+                    # Single alarm simulation row
+                    BoxLayout:
+                        size_hint_y: None
+                        height: '44dp'
+                        spacing: 6
+
+                        TextInput:
+                            id: input_alarm_code
+                            hint_text: 'E001'
+                            font_size: '14sp'
+                            multiline: False
+                            size_hint_x: 0.3
+                            size_hint_y: None
+                            height: '40dp'
+                            background_color: 0.07, 0.09, 0.13, 1
+                            foreground_color: 0.96, 0.97, 0.98, 1
+                            cursor_color: 0.00, 0.82, 0.73, 1
+                            hint_text_color: 0.20, 0.22, 0.28, 1
+                            padding: [8, 6]
+
+                        Button:
+                            text: 'TRIGGER ALARM'
+                            font_size: '13sp'
+                            bold: True
+                            background_normal: ''
+                            background_color: 0, 0, 0, 0
+                            color: 0.02, 0.05, 0.08, 1
+                            size_hint_x: 0.7
+                            on_release: root.sim_trigger_alarm()
+                            canvas.before:
+                                Color:
+                                    rgba: 0.98, 0.65, 0.25, 1
+                                RoundedRectangle:
+                                    pos: self.pos
+                                    size: self.size
+                                    radius: [8]
+
+                    # Demo sequence + All categories
+                    BoxLayout:
+                        size_hint_y: None
+                        height: '44dp'
+                        spacing: 6
+
+                        Button:
+                            text: 'DEMO SEQUENCE'
+                            font_size: '12sp'
+                            bold: True
+                            background_normal: ''
+                            background_color: 0, 0, 0, 0
+                            color: 0.02, 0.05, 0.08, 1
+                            size_hint_x: 0.5
+                            on_release: root.sim_demo_sequence()
+                            canvas.before:
+                                Color:
+                                    rgba: 0.98, 0.76, 0.22, 1
+                                RoundedRectangle:
+                                    pos: self.pos
+                                    size: self.size
+                                    radius: [8]
+
+                        Button:
+                            text: 'ALL CATEGORIES'
+                            font_size: '12sp'
+                            bold: True
+                            background_normal: ''
+                            background_color: 0, 0, 0, 0
+                            color: 0.02, 0.05, 0.08, 1
+                            size_hint_x: 0.5
+                            on_release: root.sim_all_categories()
+                            canvas.before:
+                                Color:
+                                    rgba: 0.98, 0.76, 0.22, 1
+                                RoundedRectangle:
+                                    pos: self.pos
+                                    size: self.size
+                                    radius: [8]
+
+                    # Clear all alarms
+                    Button:
+                        text: 'CLEAR ALL ALARMS'
+                        font_size: '13sp'
+                        bold: True
+                        background_normal: ''
+                        background_color: 0, 0, 0, 0
+                        color: 1, 1, 1, 1
+                        size_hint_y: None
+                        height: '40dp'
+                        on_release: root.sim_clear_all()
+                        canvas.before:
+                            Color:
+                                rgba: 0.33, 0.58, 0.85, 1
+                            RoundedRectangle:
+                                pos: self.pos
+                                size: self.size
+                                radius: [8]
+
+                    Label:
+                        id: sim_status
+                        text: ''
+                        font_size: '12sp'
+                        color: 0.38, 0.42, 0.50, 1
+                        size_hint_y: None
+                        height: '18dp'
+                        halign: 'left'
+                        text_size: self.size
+                        markup: True
+
                 # ==== BOTTOM STATUS ====
                 Label:
                     id: admin_status_label
@@ -1301,6 +1443,64 @@ class AdminScreen(Screen):
             '[color=fac238]Factory reset complete. Restart app to apply.[/color]'
         )
         self.ids.admin_status_label.markup = True
+
+    # --- Alarm Simulation Methods ---
+
+    def sim_trigger_alarm(self):
+        """Trigger a single alarm by error code from the text input."""
+        app = App.get_running_app()
+        code = self.ids.input_alarm_code.text.strip().upper()
+        if not code:
+            self.ids.sim_status.text = '[color=ed4550]Enter an error code (e.g. E001)[/color]'
+            return
+
+        try:
+            alarm = app.alarm_manager.simulate_alarm(code, "Manual simulation from Admin")
+            if alarm:
+                self.ids.sim_status.text = (
+                    f'[color=fac238]Triggered {code}: {alarm.error_code.description}[/color]'
+                )
+            else:
+                self.ids.sim_status.text = (
+                    f'[color=ed4550]Unknown error code: {code}[/color]'
+                )
+        except Exception as e:
+            self.ids.sim_status.text = f'[color=ed4550]Error: {e}[/color]'
+
+    def sim_demo_sequence(self):
+        """Run the demo alarm sequence (E021 → E066 → E001 → E020)."""
+        app = App.get_running_app()
+        try:
+            app.alarm_manager.simulate_demo_sequence()
+            self.ids.sim_status.text = (
+                '[color=fac238]Demo sequence started (4 alarms over ~10s)...[/color]'
+            )
+        except Exception as e:
+            self.ids.sim_status.text = f'[color=ed4550]Error: {e}[/color]'
+
+    def sim_all_categories(self):
+        """Simulate one alarm from each category."""
+        app = App.get_running_app()
+        try:
+            app.alarm_manager.simulate_all_categories()
+            count = app.alarm_manager.active_count()
+            self.ids.sim_status.text = (
+                f'[color=fac238]All categories triggered — {count} active alarms[/color]'
+            )
+        except Exception as e:
+            self.ids.sim_status.text = f'[color=ed4550]Error: {e}[/color]'
+
+    def sim_clear_all(self):
+        """Clear all active alarms."""
+        app = App.get_running_app()
+        try:
+            count = app.alarm_manager.active_count()
+            app.alarm_manager.clear_all()
+            self.ids.sim_status.text = (
+                f'[color=33d17a]Cleared {count} alarms[/color]'
+            )
+        except Exception as e:
+            self.ids.sim_status.text = f'[color=ed4550]Error: {e}[/color]'
 
     def go_back(self):
         """Navigate back to settings screen."""
