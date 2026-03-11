@@ -283,6 +283,11 @@ class SyncEngine:
             if success and acked_ids:
                 self.db.mark_events_synced(acked_ids)
                 logger.info(f"Synced and acked {len(acked_ids)} events")
+                # Force immediate heartbeat to update cloud pending counter
+                try:
+                    self._do_heartbeat()
+                except Exception:
+                    pass
             elif not success and len(events) > 1:
                 # Batch failed — try individual events to find the broken one(s)
                 logger.warning(f"Batch sync failed for {len(events)} events, trying one-by-one...")
@@ -304,6 +309,11 @@ class SyncEngine:
                 if individual_acked:
                     self.db.mark_events_synced(individual_acked)
                     logger.info(f"Individual sync: {len(individual_acked)}/{len(events)} events resolved")
+                    # Force heartbeat to update cloud pending counter
+                    try:
+                        self._do_heartbeat()
+                    except Exception:
+                        pass
             elif not success:
                 logger.warning("Event sync failed, will retry next cycle")
 
@@ -321,10 +331,22 @@ class SyncEngine:
             uptime_hours = (time.time() - self._start_time) / 3600
             unsynced = self.db.get_event_count(synced=False)
 
-            self.cloud.send_heartbeat(
+            success, hb_data = self.cloud.send_heartbeat(
                 uptime_hours=round(uptime_hours, 2),
                 sync_queue_depth=unsynced,
             )
+
+            # Process commands delivered via heartbeat response (fast delivery path)
+            if success and isinstance(hb_data, dict):
+                pending_cmds = hb_data.get("pending_commands", [])
+                for cmd in pending_cmds:
+                    cmd_type = cmd.get("command_type", "")
+                    logger.info(f"Processing heartbeat-delivered command: {cmd_type}")
+                    try:
+                        self._handle_ws_command(cmd)
+                    except Exception as ce:
+                        logger.error(f"Error processing heartbeat command {cmd_type}: {ce}")
+
         except Exception as e:
             logger.error(f"Heartbeat error: {e}")
 

@@ -41,8 +41,9 @@ from kivy.graphics import Color, RoundedRectangle, Rectangle, Ellipse
 from kivy.metrics import dp
 
 
-# ── Paint color name -> RGBA ──
+# ── Paint color name -> RGBA (expanded for marine paint names) ──
 PAINT_COLORS = {
+    # Basic colors
     'red':       (0.90, 0.25, 0.25, 1),
     'dark red':  (0.70, 0.15, 0.15, 1),
     'brown':     (0.60, 0.38, 0.20, 1),
@@ -64,6 +65,32 @@ PAINT_COLORS = {
     'silver':    (0.72, 0.74, 0.78, 1),
     'aluminum':  (0.68, 0.70, 0.74, 1),
     'aluminium': (0.68, 0.70, 0.74, 1),
+    # Marine / PPG compound colors
+    'redbrown':       (0.71, 0.27, 0.16, 1),
+    'red brown':      (0.71, 0.27, 0.16, 1),
+    'reddish brown':  (0.71, 0.27, 0.16, 1),
+    'light grey':     (0.69, 0.71, 0.74, 1),
+    'light gray':     (0.69, 0.71, 0.74, 1),
+    'dark grey':      (0.35, 0.37, 0.40, 1),
+    'dark gray':      (0.35, 0.37, 0.40, 1),
+    'rust':           (0.77, 0.36, 0.16, 1),
+    'rust red':       (0.77, 0.36, 0.16, 1),
+    'oxide red':      (0.71, 0.27, 0.16, 1),
+    'navy':           (0.12, 0.20, 0.40, 1),
+    'navy blue':      (0.12, 0.20, 0.40, 1),
+    'mid grey':       (0.47, 0.49, 0.53, 1),
+    'mid gray':       (0.47, 0.49, 0.53, 1),
+    'off white':      (0.88, 0.86, 0.82, 1),
+    'pale grey':      (0.78, 0.80, 0.83, 1),
+    'pale gray':      (0.78, 0.80, 0.83, 1),
+    'signal red':     (0.85, 0.18, 0.18, 1),
+    'vermilion':      (0.89, 0.26, 0.20, 1),
+    'teal':           (0.00, 0.82, 0.73, 1),
+    'primer':         (0.72, 0.58, 0.42, 1),
+    'tan':            (0.82, 0.71, 0.55, 1),
+    'buff':           (0.85, 0.78, 0.62, 1),
+    'oxide':          (0.71, 0.27, 0.16, 1),
+    'charcoal':       (0.30, 0.31, 0.34, 1),
 }
 
 # ── Type accent colors ──
@@ -199,17 +226,47 @@ def _hex_to_rgba(hex_str):
 
 
 def _resolve_color(name):
-    """Get RGBA for a paint color name or hex code."""
+    """Get RGBA for a paint color name or hex code.
+
+    Matching strategy (same as cloud _color_name_to_hex):
+    1. Exact match
+    2. Strip product code numbers (e.g. "Redbrown 6179" -> "redbrown")
+    3. First word match
+    4. Substring match (both directions)
+    """
     if not name:
         return None
     # Handle hex codes directly
     if name.startswith('#'):
         return _hex_to_rgba(name)
+
     key = name.strip().lower()
+    words = key.split()
+
+    # Strip numeric codes: "redbrown 6179" -> "redbrown"
+    name_only = ' '.join(w for w in words if not w.isdigit())
+    if not name_only:
+        name_only = key
+
+    # 1. Exact match
     if key in PAINT_COLORS:
         return PAINT_COLORS[key]
-    first_word = key.split()[0] if key else ''
-    return PAINT_COLORS.get(first_word)
+
+    # 2. Name without numbers
+    if name_only in PAINT_COLORS:
+        return PAINT_COLORS[name_only]
+
+    # 3. First word match
+    first = words[0] if words else ''
+    if first in PAINT_COLORS:
+        return PAINT_COLORS[first]
+
+    # 4. Substring match (both directions)
+    for color_key, rgba_val in PAINT_COLORS.items():
+        if color_key in name_only or name_only in color_key:
+            return rgba_val
+
+    return None
 
 
 def _progress_bar(parent, fill_pct, color, height=8):

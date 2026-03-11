@@ -335,10 +335,14 @@ class CloudClient:
     # HEARTBEAT
     # ============================================================
 
-    def send_heartbeat(self, uptime_hours: float = 0, sync_queue_depth: int = 0) -> bool:
-        """Send a heartbeat with sensor health data to the cloud."""
+    def send_heartbeat(self, uptime_hours: float = 0, sync_queue_depth: int = 0):
+        """Send a heartbeat with sensor health data to the cloud.
+
+        Returns:
+            (success: bool, response_data: dict) — response may contain pending_commands.
+        """
         if not self.is_paired:
-            return False
+            return False, {}
 
         url = f"{self.cloud_url}/api/devices/{self.device_id}/heartbeat"
 
@@ -355,10 +359,10 @@ class CloudClient:
             "system_info": system_info,
         }
 
-        success, _ = self._http_post(url, payload, auth=True)
+        success, data = self._http_post(url, payload, auth=True)
         if success:
             logger.debug("Heartbeat sent OK (with health data)")
-        return success
+        return success, data or {}
 
     # ============================================================
     # HEALTH LOG SYNC (batch upload of offline health logs)
