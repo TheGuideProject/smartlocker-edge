@@ -373,6 +373,16 @@ class SyncEngine:
 
             logger.info(f"Config synced: {len(products)} products, {len(recipes)} recipes")
 
+            # Process pending commands delivered via HTTP config
+            pending_cmds = config.get("pending_commands", [])
+            for cmd in pending_cmds:
+                cmd_type = cmd.get("command_type", "")
+                logger.info(f"Processing HTTP-delivered command: {cmd_type}")
+                try:
+                    self._handle_ws_command(cmd)
+                except Exception as e:
+                    logger.error(f"Error processing pending command {cmd_type}: {e}")
+
             # Check for OTA update command
             update_cmd = config.get("update")
             if update_cmd and self._update_manager:
@@ -583,6 +593,7 @@ class SyncEngine:
                         "hazard_class": p.get("hazard_class", ""),
                         "can_sizes_ml": p.get("can_sizes_ml", []),
                         "can_tare_weight_g": p.get("can_tare_weight_g", {}),
+                        "colors_json": p.get("colors_json", []),
                     })
                 logger.info(f"[WS] Product sync: {len(products)} products updated")
 
