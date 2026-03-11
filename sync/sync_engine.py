@@ -60,6 +60,10 @@ class SyncEngine:
         self._last_mixing_session_sync_time = 0.0
         self._start_time = time.time()
 
+        # Install Mode (overclock): when active, config sync drops to 5s
+        self._install_mode_until = 0.0  # timestamp when install mode expires (0 = disabled)
+        self.INSTALL_MODE_CONFIG_INTERVAL_S = 5
+
         try:
             from sync.update_manager import UpdateManager
             self._update_manager = UpdateManager(cloud, db)
@@ -221,8 +225,16 @@ class SyncEngine:
                     self._do_heartbeat()
                     self._last_heartbeat_time = now
 
-                # Config sync (every 2 minutes — fast OTA + product updates)
-                config_interval = getattr(settings, 'WS_FALLBACK_CONFIG_INTERVAL_S', 600) if (self._realtime and self._realtime.is_connected) else self.CONFIG_SYNC_INTERVAL_S
+                # Config sync — Install Mode: 5s, normal: 120s (or WS fallback: 600s)
+                if self._install_mode_until and now < self._install_mode_until:
+                    config_interval = self.INSTALL_MODE_CONFIG_INTERVAL_S
+                elif self._install_mode_until and now >= self._install_mode_until:
+                    # Install mode expired — auto-disable
+                    logger.info("Install Mode expired (3h limit) — returning to normal sync")
+                    self._install_mode_until = 0.0
+                    config_interval = self.CONFIG_SYNC_INTERVAL_S
+                else:
+                    config_interval = getattr(settings, 'WS_FALLBACK_CONFIG_INTERVAL_S', 600) if (self._realtime and self._realtime.is_connected) else self.CONFIG_SYNC_INTERVAL_S
                 if now - self._last_config_sync_time >= config_interval:
                     self._do_config_sync()
                     self._last_config_sync_time = now
@@ -706,6 +718,16 @@ class SyncEngine:
             elif cmd_type == "reboot_device":
                 logger.info("[WS] Received reboot_device command from cloud")
                 self._reboot_device()
+
+            elif cmd_type == "enable_install_mode":
+                duration_hours = payload.get("duration_hours", 3)
+                self._install_mode_until = time.time() + (duration_hours * 3600)
+                self._last_config_sync_time = 0  # Force immediate config sync
+                logger.info(f"[CMD] Install Mode ENABLED — sync every {self.INSTALL_MODE_CONFIG_INTERVAL_S}s for {duration_hours}h")
+
+            elif cmd_type == "disable_install_mode":
+                self._install_mode_until = 0.0
+                logger.info("[CMD] Install Mode DISABLED — returning to normal sync interval")
 
             else:
                 logger.warning(f"[WS] Unknown command type: {cmd_type}")
