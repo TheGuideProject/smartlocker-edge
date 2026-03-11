@@ -22,9 +22,9 @@ Serial protocol (Arduino -> RPi):
 Required library:
   pip install pyserial
 
-This is a STUB driver. Methods log warnings and return safe defaults
-when the hardware is not connected, so the system never crashes.
-Flesh out the TODOs when your Arduino + HX711 arrive.
+Graceful fallback: if pyserial is not installed (e.g., on a dev machine without
+serial hardware), all methods log warnings and return safe defaults without
+crashing.
 """
 
 import logging
@@ -35,6 +35,18 @@ from typing import List, Dict, Optional
 from hal.interfaces import WeightDriverInterface, WeightReading
 
 logger = logging.getLogger("smartlocker.sensor")
+
+# ---------- Graceful import with fallback ----------
+try:
+    import serial
+    HAS_SERIAL = True
+except ImportError:
+    HAS_SERIAL = False
+    serial = None  # type: ignore[assignment, misc]
+    logger.warning(
+        "[REAL WEIGHT] pyserial library not installed. "
+        "Weight sensor will be non-functional. Install with: pip install pyserial"
+    )
 
 
 class RealWeightDriver(WeightDriverInterface):
@@ -60,46 +72,52 @@ class RealWeightDriver(WeightDriverInterface):
         Open serial connection to the Arduino Nano.
         Sends a ping command to verify communication.
         Returns True if Arduino responds, False otherwise.
+        If pyserial is not installed, returns False and logs a warning.
         """
-        try:
-            # TODO: Uncomment when Arduino hardware is connected
-            # -------------------------------------------------------
-            # import serial
-            #
-            # self._serial = serial.Serial(
-            #     port=self._port,
-            #     baudrate=self._baud,
-            #     timeout=2.0,
-            # )
-            #
-            # # Wait for Arduino to boot (it resets on serial connect)
-            # time.sleep(2.0)
-            #
-            # # Flush any boot messages
-            # self._serial.reset_input_buffer()
-            #
-            # # Send ping to verify communication
-            # self._send_command({"cmd": "ping"})
-            # response = self._read_response(timeout=3.0)
-            #
-            # if response and response.get("status") == "ok":
-            #     logger.info(f"[REAL WEIGHT] Arduino connected on {self._port}")
-            #     self._initialized = True
-            #     return True
-            # else:
-            #     logger.error("[REAL WEIGHT] Arduino did not respond to ping")
-            #     return False
-            # -------------------------------------------------------
-
+        if not HAS_SERIAL:
             logger.warning(
-                "[REAL WEIGHT] STUB: Arduino serial driver not yet implemented. "
-                "Uncomment the initialization code when hardware is connected."
+                "[REAL WEIGHT] Cannot initialize: pyserial library not available. "
+                "All weight operations will return zero readings."
             )
-            self._initialized = True
-            return True
+            self._initialized = False
+            return False
+
+        try:
+            self._serial = serial.Serial(
+                port=self._port,
+                baudrate=self._baud,
+                timeout=2.0,
+            )
+
+            # Wait for Arduino to boot (it resets on serial connect)
+            time.sleep(2.0)
+
+            # Flush any boot messages
+            self._serial.reset_input_buffer()
+
+            # Send ping to verify communication
+            self._send_command({"cmd": "ping"})
+            response = self._read_response(timeout=3.0)
+
+            if response and response.get("status") == "ok":
+                logger.info(f"[REAL WEIGHT] Arduino connected on {self._port}")
+                self._initialized = True
+                return True
+            else:
+                logger.error("[REAL WEIGHT] Arduino did not respond to ping")
+                self._serial.close()
+                self._serial = None
+                self._initialized = False
+                return False
 
         except Exception as e:
             logger.error(f"[REAL WEIGHT] Failed to initialize serial: {e}")
+            if self._serial is not None:
+                try:
+                    self._serial.close()
+                except Exception:
+                    pass
+            self._serial = None
             self._initialized = False
             return False
 
@@ -108,7 +126,9 @@ class RealWeightDriver(WeightDriverInterface):
         Request a weight reading from the Arduino for a specific channel.
         Returns the last known reading if communication fails.
         """
-        if not self._initialized:
+        if not self._initialized or not HAS_SERIAL:
+            if not HAS_SERIAL:
+                logger.warning(f"[REAL WEIGHT] No-op read_weight('{channel}'): library not available")
             return WeightReading(grams=0.0, channel=channel, stable=False)
 
         if channel not in self._channels:
@@ -116,23 +136,19 @@ class RealWeightDriver(WeightDriverInterface):
             return WeightReading(grams=0.0, channel=channel, stable=False)
 
         try:
-            # TODO: Uncomment when Arduino hardware is connected
-            # -------------------------------------------------------
-            # self._send_command({"cmd": "read", "channel": channel})
-            # response = self._read_response(timeout=1.0)
-            #
-            # if response and "grams" in response:
-            #     reading = WeightReading(
-            #         grams=float(response["grams"]),
-            #         channel=channel,
-            #         stable=bool(response.get("stable", False)),
-            #         raw_value=int(response.get("raw", 0)),
-            #         timestamp=time.time(),
-            #     )
-            #     self._last_readings[channel] = reading
-            #     return reading
-            # -------------------------------------------------------
-            pass
+            self._send_command({"cmd": "read", "channel": channel})
+            response = self._read_response(timeout=1.0)
+
+            if response and "grams" in response:
+                reading = WeightReading(
+                    grams=float(response["grams"]),
+                    channel=channel,
+                    stable=bool(response.get("stable", False)),
+                    raw_value=int(response.get("raw", 0)),
+                    timestamp=time.time(),
+                )
+                self._last_readings[channel] = reading
+                return reading
 
         except Exception as e:
             logger.error(f"[REAL WEIGHT] Read error on '{channel}': {e}")
@@ -148,25 +164,23 @@ class RealWeightDriver(WeightDriverInterface):
         Send tare (zero) command to Arduino for a specific channel.
         Returns True if the Arduino acknowledges the tare.
         """
-        if not self._initialized:
+        if not self._initialized or not HAS_SERIAL:
+            if not HAS_SERIAL:
+                logger.warning(f"[REAL WEIGHT] No-op tare('{channel}'): library not available")
             return False
 
         try:
-            # TODO: Uncomment when Arduino hardware is connected
-            # -------------------------------------------------------
-            # self._send_command({"cmd": "tare", "channel": channel})
-            # response = self._read_response(timeout=2.0)
-            #
-            # if response and response.get("status") == "ok":
-            #     logger.info(f"[REAL WEIGHT] Tared '{channel}'")
-            #     return True
-            # else:
-            #     logger.warning(f"[REAL WEIGHT] Tare failed for '{channel}'")
-            #     return False
-            # -------------------------------------------------------
+            self._send_command({"cmd": "tare", "channel": channel})
+            response = self._read_response(timeout=2.0)
 
-            logger.warning(f"[REAL WEIGHT] STUB: tare('{channel}') called but not implemented")
-            return True
+            if response and response.get("status") == "ok":
+                logger.info(f"[REAL WEIGHT] Tared '{channel}'")
+                # Clear cached reading for this channel after tare
+                self._last_readings.pop(channel, None)
+                return True
+            else:
+                logger.warning(f"[REAL WEIGHT] Tare failed for '{channel}'")
+                return False
 
         except Exception as e:
             logger.error(f"[REAL WEIGHT] Tare error on '{channel}': {e}")
@@ -178,18 +192,15 @@ class RealWeightDriver(WeightDriverInterface):
 
     def is_healthy(self) -> bool:
         """Check if Arduino serial connection is alive."""
-        if not self._initialized:
+        if not self._initialized or not HAS_SERIAL:
             return False
 
-        # TODO: Send a ping and check response
-        # try:
-        #     self._send_command({"cmd": "ping"})
-        #     response = self._read_response(timeout=1.0)
-        #     return response is not None and response.get("status") == "ok"
-        # except Exception:
-        #     return False
-
-        return True
+        try:
+            self._send_command({"cmd": "ping"})
+            response = self._read_response(timeout=1.0)
+            return response is not None and response.get("status") == "ok"
+        except Exception:
+            return False
 
     def shutdown(self) -> None:
         """Close serial connection to Arduino."""

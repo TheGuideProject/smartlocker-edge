@@ -125,7 +125,7 @@ LED_BRIGHTNESS = 128             # 0-255 brightness level
 
 # Buzzer - GPIO PWM
 # Library: RPi.GPIO or gpiozero
-BUZZER_GPIO_PIN = 18             # BCM pin number (PWM-capable)
+BUZZER_GPIO_PIN = 13             # BCM pin 13 (PWM-capable). Moved from 18 to avoid conflict with LED_GPIO_PIN.
 
 # ============================================================
 # LOGGING
@@ -140,3 +140,10 @@ else:
     _any_real = any(d == "real" for d in [DRIVER_RFID, DRIVER_WEIGHT, DRIVER_LED, DRIVER_BUZZER])
     LOG_LEVEL = "INFO" if _any_real else "DEBUG"
 LOG_DIR = "logs"
+
+# ============================================================
+# BACKUP SETTINGS
+# ============================================================
+BACKUP_INTERVAL_H = 6
+BACKUP_MAX_COPIES = 5
+BACKUP_DIR = "data/backups"

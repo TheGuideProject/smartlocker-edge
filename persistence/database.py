@@ -53,6 +53,12 @@ class Database:
         else:
             logger.warning(f"Schema file not found: {schema_path}")
 
+        # Migration: add 'synced' column to mixing_session if missing
+        try:
+            self._conn.execute("ALTER TABLE mixing_session ADD COLUMN synced INTEGER DEFAULT 0")
+        except Exception:
+            pass  # Column already exists
+
         # Create sensor health log table (added for offline health logging)
         self._conn.execute('''
             CREATE TABLE IF NOT EXISTS sensor_health_log (
@@ -565,6 +571,87 @@ class Database:
         self.conn.execute(
             f"UPDATE alarm_log SET synced = 1 WHERE alarm_id IN ({placeholders})",
             alarm_ids,
+        )
+        self.conn.commit()
+
+    # ============================================================
+    # MIXING SESSION PERSISTENCE
+    # ============================================================
+
+    def save_mixing_session(self, session, status: str = "completed") -> None:
+        """Save (INSERT OR REPLACE) a mixing session to the database."""
+        self.conn.execute(
+            """INSERT OR REPLACE INTO mixing_session
+               (session_id, recipe_id, job_id, user_name,
+                started_at, completed_at,
+                base_product_id, base_tag_id,
+                base_weight_target_g, base_weight_actual_g,
+                hardener_product_id, hardener_tag_id,
+                hardener_weight_target_g, hardener_weight_actual_g,
+                thinner_product_id, thinner_weight_g,
+                ratio_achieved, ratio_in_spec,
+                override_reason, application_method,
+                pot_life_started_at, pot_life_expires_at,
+                status, confirmation, synced)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)""",
+            (
+                session.session_id,
+                session.recipe_id,
+                session.job_id or "",
+                session.user_name,
+                session.started_at,
+                session.completed_at,
+                session.base_product_id,
+                session.base_tag_id,
+                session.base_weight_target_g,
+                session.base_weight_actual_g,
+                session.hardener_product_id,
+                session.hardener_tag_id,
+                session.hardener_weight_target_g,
+                session.hardener_weight_actual_g,
+                session.thinner_product_id,
+                session.thinner_weight_g,
+                session.ratio_achieved,
+                1 if session.ratio_in_spec else 0,
+                session.override_reason,
+                session.application_method.value if hasattr(session.application_method, 'value') else str(session.application_method),
+                session.pot_life_started_at,
+                session.pot_life_expires_at,
+                status,
+                session.confirmation.value if hasattr(session.confirmation, 'value') else str(session.confirmation),
+            ),
+        )
+        self.conn.commit()
+
+    def get_mixing_sessions(self, limit: int = 50) -> List[Dict[str, Any]]:
+        """Get recent mixing sessions."""
+        cursor = self.conn.execute(
+            """SELECT * FROM mixing_session
+               ORDER BY started_at DESC
+               LIMIT ?""",
+            (limit,),
+        )
+        return [dict(row) for row in cursor.fetchall()]
+
+    def get_unsynced_mixing_sessions(self, limit: int = 20) -> List[Dict[str, Any]]:
+        """Get mixing sessions not yet synced to cloud."""
+        cursor = self.conn.execute(
+            """SELECT * FROM mixing_session
+               WHERE synced = 0
+               ORDER BY started_at ASC
+               LIMIT ?""",
+            (limit,),
+        )
+        return [dict(row) for row in cursor.fetchall()]
+
+    def mark_mixing_sessions_synced(self, session_ids: List[str]) -> None:
+        """Mark mixing sessions as synced to cloud."""
+        if not session_ids:
+            return
+        placeholders = ",".join("?" * len(session_ids))
+        self.conn.execute(
+            f"UPDATE mixing_session SET synced = 1 WHERE session_id IN ({placeholders})",
+            session_ids,
         )
         self.conn.commit()
 

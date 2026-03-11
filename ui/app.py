@@ -378,6 +378,9 @@ class SmartLockerApp(App):
             if self.mode == 'test':
                 self.system_monitor.start(interval_s=60)
 
+        # Start backup manager
+        self.backup_manager.start()
+
         # Start sensor polling loop (every 500ms)
         Clock.schedule_interval(self._poll_sensors, 0.5)
 
@@ -465,6 +468,10 @@ class SmartLockerApp(App):
         self.db = Database()
         self.db.connect()
 
+        # Create backup manager (daemon thread, started in build())
+        from core.backup_manager import BackupManager
+        self.backup_manager = BackupManager(db_path=self.db.db_path)
+
         # Event log for UI display
         self.event_log = []
 
@@ -522,6 +529,9 @@ class SmartLockerApp(App):
             weight=self.weight, led=self.led,
             buzzer=self.buzzer, event_bus=self.event_bus,
         )
+        self.mixing.set_inventory(self.inventory)
+        self.mixing.set_database(self.db)
+
         self.usage = UsageCalculator(event_bus=self.event_bus)
 
         # ---- Alarm System (v1.0.6) ----
@@ -771,6 +781,7 @@ class SmartLockerApp(App):
     def on_stop(self):
         """Clean shutdown when app closes."""
         try:
+            self.backup_manager.stop()
             self.system_monitor.stop()
             self.sync_engine.stop()
             self.inventory.shutdown()

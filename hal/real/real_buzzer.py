@@ -6,20 +6,16 @@ on the Raspberry Pi. Generates tones at specific frequencies
 for audio feedback (confirmation beeps, warnings, errors).
 
 Hardware setup:
-  - Passive buzzer (NOT active buzzer) connected to GPIO 18 (default)
+  - Passive buzzer (NOT active buzzer) connected to GPIO 13 (PWM1)
   - Active buzzers only make one tone; passive buzzers can play frequencies
   - Connect buzzer between GPIO pin and GND (through a transistor if needed)
+  - GPIO 13 is used (not 18!) to avoid conflict with LED strip on GPIO 18
 
-Required library (pick one):
-  Option A: RPi.GPIO (pre-installed on Raspberry Pi OS)
-    import RPi.GPIO as GPIO
+Required library (pre-installed on Raspberry Pi OS):
+  import RPi.GPIO as GPIO
 
-  Option B: gpiozero (higher-level, also pre-installed)
-    from gpiozero import TonalBuzzer
-
-This is a STUB driver. Methods log warnings and return safe defaults
-when the hardware is not connected, so the system never crashes.
-Flesh out the TODOs when your buzzer arrives.
+Graceful fallback: if RPi.GPIO is not installed (e.g., on Windows or a dev
+machine), all methods log warnings and return safely without crashing.
 """
 
 import logging
@@ -30,6 +26,18 @@ from typing import Optional
 from hal.interfaces import BuzzerDriverInterface, BuzzerPattern
 
 logger = logging.getLogger("smartlocker.sensor")
+
+# ---------- Graceful import with fallback ----------
+try:
+    import RPi.GPIO as GPIO
+    HAS_GPIO = True
+except ImportError:
+    HAS_GPIO = False
+    GPIO = None  # type: ignore[assignment, misc]
+    logger.warning(
+        "[REAL BUZZER] RPi.GPIO library not installed. "
+        "Buzzer will be non-functional. Install with: pip install RPi.GPIO"
+    )
 
 # Frequency and timing definitions for each pattern
 _PATTERN_DEFINITIONS = {
@@ -76,27 +84,26 @@ class RealBuzzerDriver(BuzzerDriverInterface):
         """
         Set up GPIO pin for PWM output.
         Returns True if GPIO is configured, False on error.
+        If RPi.GPIO is not installed, returns False and logs a warning.
         """
-        try:
-            # TODO: Uncomment when buzzer hardware is connected
-            # -------------------------------------------------------
-            # import RPi.GPIO as GPIO
-            #
-            # GPIO.setmode(GPIO.BCM)
-            # GPIO.setup(self._gpio_pin, GPIO.OUT)
-            #
-            # # Create PWM instance (start with 1kHz, 0% duty = silent)
-            # self._pwm = GPIO.PWM(self._gpio_pin, 1000)
-            # self._pwm.start(0)  # 0% duty cycle = no sound
-            #
-            # logger.info(f"[REAL BUZZER] Initialized on GPIO {self._gpio_pin}")
-            # -------------------------------------------------------
-
+        if not HAS_GPIO:
             logger.warning(
-                "[REAL BUZZER] STUB: GPIO buzzer driver not yet implemented. "
-                "Uncomment the initialization code when hardware is connected."
+                "[REAL BUZZER] Cannot initialize: RPi.GPIO library not available. "
+                "All buzzer operations will be no-ops."
             )
+            self._initialized = False
+            return False
+
+        try:
+            GPIO.setmode(GPIO.BCM)
+            GPIO.setup(self._gpio_pin, GPIO.OUT)
+
+            # Create PWM instance (start with 1kHz, 0% duty = silent)
+            self._pwm = GPIO.PWM(self._gpio_pin, 1000)
+            self._pwm.start(0)  # 0% duty cycle = no sound
+
             self._initialized = True
+            logger.info(f"[REAL BUZZER] Initialized on GPIO {self._gpio_pin}")
             return True
 
         except Exception as e:
@@ -110,7 +117,9 @@ class RealBuzzerDriver(BuzzerDriverInterface):
         Non-blocking: starts the sound and returns immediately.
         If another pattern is already playing, it is stopped first.
         """
-        if not self._initialized:
+        if not self._initialized or not HAS_GPIO:
+            if not HAS_GPIO:
+                logger.warning(f"[REAL BUZZER] No-op play({pattern.value}): library not available")
             return
 
         # Stop any currently playing pattern
@@ -135,18 +144,15 @@ class RealBuzzerDriver(BuzzerDriverInterface):
                 break
 
             try:
-                # TODO: Uncomment when buzzer hardware is connected
-                # -------------------------------------------------------
-                # if freq == 0:
-                #     # Silence: set duty cycle to 0
-                #     self._pwm.ChangeDutyCycle(0)
-                # else:
-                #     # Play tone: change frequency and set 50% duty cycle
-                #     self._pwm.ChangeFrequency(freq)
-                #     self._pwm.ChangeDutyCycle(50)
-                # -------------------------------------------------------
+                if freq == 0:
+                    # Silence: set duty cycle to 0
+                    self._pwm.ChangeDutyCycle(0)
+                else:
+                    # Play tone: change frequency and set 50% duty cycle
+                    self._pwm.ChangeFrequency(freq)
+                    self._pwm.ChangeDutyCycle(50)
 
-                logger.info(f"[REAL BUZZER] Tone: {freq}Hz for {duration}s")
+                logger.debug(f"[REAL BUZZER] Tone: {freq}Hz for {duration}s")
 
             except Exception as e:
                 logger.error(f"[REAL BUZZER] Play error: {e}")
@@ -161,9 +167,8 @@ class RealBuzzerDriver(BuzzerDriverInterface):
 
         # Silence after pattern completes
         try:
-            # TODO: Uncomment when hardware is connected
-            # self._pwm.ChangeDutyCycle(0)
-            pass
+            if self._pwm:
+                self._pwm.ChangeDutyCycle(0)
         except Exception:
             pass
 
@@ -174,10 +179,8 @@ class RealBuzzerDriver(BuzzerDriverInterface):
             self._play_thread.join(timeout=1.0)
 
         try:
-            # TODO: Uncomment when hardware is connected
-            # if self._pwm:
-            #     self._pwm.ChangeDutyCycle(0)
-            pass
+            if self._pwm and HAS_GPIO:
+                self._pwm.ChangeDutyCycle(0)
         except Exception:
             pass
 
@@ -186,12 +189,10 @@ class RealBuzzerDriver(BuzzerDriverInterface):
         self.stop()
 
         try:
-            # TODO: Uncomment when hardware is connected
-            # if self._pwm:
-            #     self._pwm.stop()
-            # import RPi.GPIO as GPIO
-            # GPIO.cleanup(self._gpio_pin)
-            pass
+            if self._pwm:
+                self._pwm.stop()
+            if HAS_GPIO:
+                GPIO.cleanup(self._gpio_pin)
         except Exception:
             pass
 

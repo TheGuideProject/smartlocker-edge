@@ -18,7 +18,7 @@ This is the highest-value feature in the system.
 
 import logging
 import time
-from typing import Optional, Callable, Dict, Any
+from typing import Optional, Callable, Dict, Any, TYPE_CHECKING
 
 from config import settings
 from core.models import (
@@ -31,6 +31,10 @@ from hal.interfaces import (
     WeightDriverInterface, LEDDriverInterface, BuzzerDriverInterface,
     LEDColor, LEDPattern, BuzzerPattern, WeightReading,
 )
+
+if TYPE_CHECKING:
+    from core.inventory_engine import InventoryEngine
+    from persistence.database import Database
 
 logger = logging.getLogger("smartlocker")
 
@@ -75,9 +79,23 @@ class MixingEngine:
         # Callback for UI updates
         self._on_state_change: Optional[Callable[[MixingState, Dict], None]] = None
 
+        # Cross-engine references (set after init via setters)
+        self._inventory: Optional['InventoryEngine'] = None
+        self._db: Optional['Database'] = None
+
         # Weight monitoring
         self._last_weight_reading: Optional[WeightReading] = None
         self._weight_stable_since: float = 0.0
+
+    def set_inventory(self, inv: 'InventoryEngine') -> None:
+        """Set the inventory engine reference for LED slot guidance."""
+        self._inventory = inv
+        logger.info("MixingEngine: inventory reference set")
+
+    def set_database(self, db: 'Database') -> None:
+        """Set the database reference for persisting mixing sessions."""
+        self._db = db
+        logger.info("MixingEngine: database reference set")
 
     def set_state_change_callback(self, callback: Callable[[MixingState, Dict], None]):
         """Register a callback for UI updates when state changes."""
@@ -178,10 +196,12 @@ class MixingEngine:
         self.session.state = MixingState.PICK_BASE
 
         # Light up the correct shelf slot for base product
-        # (In full version, find the slot with matching product via inventory engine)
         self.led.clear_all()
-        # TODO: get actual slot from inventory engine
-        # self.led.set_slot(base_slot_id, LEDColor.GREEN, LEDPattern.BLINK_SLOW)
+        if self._inventory:
+            base_slot_id = self._inventory.get_slot_id_for_product(self.session.base_product_id)
+            if base_slot_id:
+                self.led.set_slot(base_slot_id, LEDColor.GREEN, LEDPattern.BLINK_SLOW)
+                logger.info(f"LED guidance: base product slot {base_slot_id}")
 
         self.buzzer.play(BuzzerPattern.TICK)
         self._notify_ui({"instruction": "Pick the BASE can from the lit shelf slot"})
@@ -230,8 +250,11 @@ class MixingEngine:
 
         # Light up hardener slot
         self.led.clear_all()
-        # TODO: get actual slot from inventory engine
-        # self.led.set_slot(hardener_slot_id, LEDColor.GREEN, LEDPattern.BLINK_SLOW)
+        if self._inventory:
+            hardener_slot_id = self._inventory.get_slot_id_for_product(self.session.hardener_product_id)
+            if hardener_slot_id:
+                self.led.set_slot(hardener_slot_id, LEDColor.GREEN, LEDPattern.BLINK_SLOW)
+                logger.info(f"LED guidance: hardener product slot {hardener_slot_id}")
 
         self._notify_ui({
             "instruction": "Pick the HARDENER can from the lit shelf slot",
@@ -392,7 +415,18 @@ class MixingEngine:
         self.session.state = MixingState.RETURN_CANS
 
         # Light up correct slots for can returns
-        # TODO: get actual slots from inventory engine
+        self.led.clear_all()
+        if self._inventory:
+            if self.session.base_tag_id:
+                base_slot_id = self._inventory.get_slot_id_for_tag(self.session.base_tag_id)
+                if base_slot_id:
+                    self.led.set_slot(base_slot_id, LEDColor.BLUE, LEDPattern.BLINK_SLOW)
+                    logger.info(f"LED guidance: return base to slot {base_slot_id}")
+            if self.session.hardener_tag_id:
+                hardener_slot_id = self._inventory.get_slot_id_for_tag(self.session.hardener_tag_id)
+                if hardener_slot_id:
+                    self.led.set_slot(hardener_slot_id, LEDColor.BLUE, LEDPattern.BLINK_SLOW)
+                    logger.info(f"LED guidance: return hardener to slot {hardener_slot_id}")
         self._notify_ui({"instruction": "Return all cans to their slots"})
 
     def complete_session(self) -> None:
@@ -432,6 +466,10 @@ class MixingEngine:
             f"in_spec={self.session.ratio_in_spec}"
         )
 
+        # Persist to database
+        if self._db:
+            self._save_session_to_db(self.session, status="completed")
+
         # Reset
         self.session = None
 
@@ -448,6 +486,11 @@ class MixingEngine:
         ))
 
         self.led.clear_all()
+
+        # Persist to database before clearing session
+        if self._db and self.session:
+            self._save_session_to_db(self.session, status="aborted")
+
         self.session = None
         self._notify_ui({"instruction": "Session aborted"})
         logger.info(f"Mixing session aborted: {reason}")
@@ -551,6 +594,14 @@ class MixingEngine:
     @property
     def is_active(self) -> bool:
         return self.session is not None and self.session.state != MixingState.IDLE
+
+    def _save_session_to_db(self, session: 'MixingSession', status: str = "completed") -> None:
+        """Persist mixing session to database."""
+        try:
+            self._db.save_mixing_session(session, status=status)
+            logger.info(f"Mixing session saved to DB: {session.session_id} ({status})")
+        except Exception as e:
+            logger.error(f"Failed to save mixing session to DB: {e}")
 
     def _notify_ui(self, data: Dict[str, Any]) -> None:
         """Send state change notification to UI callback."""

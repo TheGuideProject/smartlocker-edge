@@ -18,9 +18,8 @@ Alternative library:
 
 NOTE: rpi_ws281x requires root access (sudo) for PWM/DMA control.
 
-This is a STUB driver. Methods log warnings and return safe defaults
-when the hardware is not connected, so the system never crashes.
-Flesh out the TODOs when your LED strip arrives.
+Graceful fallback: if rpi_ws281x is not installed (e.g., on Windows or a dev
+machine), all methods log warnings and return safely without crashing.
 """
 
 import logging
@@ -31,6 +30,19 @@ from typing import Dict, Tuple, Optional
 from hal.interfaces import LEDDriverInterface, LEDColor, LEDPattern
 
 logger = logging.getLogger("smartlocker.sensor")
+
+# ---------- Graceful import with fallback ----------
+try:
+    from rpi_ws281x import PixelStrip, Color
+    HAS_WS281X = True
+except ImportError:
+    HAS_WS281X = False
+    PixelStrip = None  # type: ignore[assignment, misc]
+    Color = None  # type: ignore[assignment, misc]
+    logger.warning(
+        "[REAL LED] rpi_ws281x library not installed. "
+        "LED strip will be non-functional. Install with: sudo pip install rpi_ws281x"
+    )
 
 
 class RealLEDDriver(LEDDriverInterface):
@@ -68,36 +80,46 @@ class RealLEDDriver(LEDDriverInterface):
         """
         Initialize the WS2812B LED strip via rpi_ws281x.
         Returns True if the strip is initialized, False on error.
+        If the library is not installed, returns False and logs a warning.
         """
-        try:
-            # TODO: Uncomment when LED strip hardware is connected
-            # -------------------------------------------------------
-            # from rpi_ws281x import PixelStrip, Color
-            #
-            # self._strip = PixelStrip(
-            #     num=self._led_count,
-            #     pin=self._gpio_pin,
-            #     freq_hz=800000,      # LED signal frequency (800kHz for WS2812B)
-            #     dma=10,              # DMA channel (10 avoids conflicts)
-            #     invert=False,        # True if using NPN transistor level shift
-            #     brightness=self._brightness,
-            #     channel=0,           # PWM channel (0 for GPIO 18, 1 for GPIO 13)
-            # )
-            # self._strip.begin()
-            #
-            # # Turn all LEDs off initially
-            # for i in range(self._led_count):
-            #     self._strip.setPixelColor(i, Color(0, 0, 0))
-            # self._strip.show()
-            #
-            # logger.info(f"[REAL LED] WS2812B strip initialized: {self._led_count} LEDs on GPIO {self._gpio_pin}")
-            # -------------------------------------------------------
-
+        if not HAS_WS281X:
             logger.warning(
-                "[REAL LED] STUB: WS2812B driver not yet implemented. "
-                "Uncomment the initialization code when hardware is connected."
+                "[REAL LED] Cannot initialize: rpi_ws281x library not available. "
+                "All LED operations will be no-ops."
             )
+            self._initialized = False
+            return False
+
+        try:
+            self._strip = PixelStrip(
+                num=self._led_count,
+                pin=self._gpio_pin,
+                freq_hz=800000,      # LED signal frequency (800kHz for WS2812B)
+                dma=10,              # DMA channel (10 avoids conflicts)
+                invert=False,        # True if using NPN transistor level shift
+                brightness=self._brightness,
+                channel=0,           # PWM channel (0 for GPIO 18, 1 for GPIO 13)
+            )
+            self._strip.begin()
+
+            # Turn all LEDs off initially
+            for i in range(self._led_count):
+                self._strip.setPixelColor(i, Color(0, 0, 0))
+            self._strip.show()
+
+            # Start the animation thread for blink/pulse patterns
+            self._animation_running = True
+            self._animation_thread = threading.Thread(
+                target=self._animation_loop,
+                daemon=True,
+            )
+            self._animation_thread.start()
+
             self._initialized = True
+            logger.info(
+                f"[REAL LED] WS2812B strip initialized: "
+                f"{self._led_count} LEDs on GPIO {self._gpio_pin}"
+            )
             return True
 
         except Exception as e:
@@ -111,7 +133,9 @@ class RealLEDDriver(LEDDriverInterface):
         Set color and pattern for a specific slot's LED.
         Maps the slot_id to a physical LED index and sets the color.
         """
-        if not self._initialized:
+        if not self._initialized or not HAS_WS281X:
+            if not HAS_WS281X:
+                logger.warning(f"[REAL LED] No-op set_slot('{slot_id}'): library not available")
             return
 
         self._state[slot_id] = (color, pattern)
@@ -122,19 +146,11 @@ class RealLEDDriver(LEDDriverInterface):
             return
 
         try:
-            # TODO: Uncomment when LED strip hardware is connected
-            # -------------------------------------------------------
-            # from rpi_ws281x import Color
-            #
-            # r, g, b = color.value
-            # if pattern == LEDPattern.SOLID:
-            #     self._strip.setPixelColor(led_index, Color(r, g, b))
-            #     self._strip.show()
-            # else:
-            #     # For blink/pulse patterns, the animation thread handles updates
-            #     pass
-            # -------------------------------------------------------
-
+            r, g, b = color.value
+            if pattern == LEDPattern.SOLID:
+                self._strip.setPixelColor(led_index, Color(r, g, b))
+                self._strip.show()
+            # For blink/pulse patterns, the animation thread handles updates
             logger.info(f"[REAL LED] {slot_id} (LED {led_index}) -> {color.name} ({pattern.value})")
 
         except Exception as e:
@@ -142,25 +158,22 @@ class RealLEDDriver(LEDDriverInterface):
 
     def clear_slot(self, slot_id: str) -> None:
         """Turn off the LED for a specific slot."""
+        self._state.pop(slot_id, None)
         self.set_slot(slot_id, LEDColor.OFF, LEDPattern.SOLID)
 
     def clear_all(self) -> None:
         """Turn off all LEDs on the strip."""
-        if not self._initialized:
-            return
-
         self._state.clear()
 
-        try:
-            # TODO: Uncomment when LED strip hardware is connected
-            # -------------------------------------------------------
-            # from rpi_ws281x import Color
-            #
-            # for i in range(self._led_count):
-            #     self._strip.setPixelColor(i, Color(0, 0, 0))
-            # self._strip.show()
-            # -------------------------------------------------------
+        if not self._initialized or not HAS_WS281X:
+            if not HAS_WS281X:
+                logger.warning("[REAL LED] No-op clear_all(): library not available")
+            return
 
+        try:
+            for i in range(self._led_count):
+                self._strip.setPixelColor(i, Color(0, 0, 0))
+            self._strip.show()
             logger.info("[REAL LED] All LEDs cleared")
 
         except Exception as e:
@@ -176,3 +189,62 @@ class RealLEDDriver(LEDDriverInterface):
         self._strip = None
         self._initialized = False
         logger.info("[REAL LED] Shutdown")
+
+    # ---- INTERNAL: Animation loop for blink/pulse patterns ----
+
+    def _animation_loop(self) -> None:
+        """
+        Background thread that updates LEDs for non-SOLID patterns.
+        Runs at ~30 Hz and toggles LEDs for BLINK_SLOW, BLINK_FAST,
+        and smoothly fades for PULSE.
+        """
+        tick = 0
+        while self._animation_running:
+            try:
+                needs_show = False
+                for slot_id, (color, pattern) in list(self._state.items()):
+                    led_index = self._slot_map.get(slot_id)
+                    if led_index is None:
+                        continue
+
+                    r, g, b = color.value
+
+                    if pattern == LEDPattern.BLINK_SLOW:
+                        # ~1 Hz: toggle every 15 ticks at 30 Hz
+                        on = (tick % 30) < 15
+                        if on:
+                            self._strip.setPixelColor(led_index, Color(r, g, b))
+                        else:
+                            self._strip.setPixelColor(led_index, Color(0, 0, 0))
+                        needs_show = True
+
+                    elif pattern == LEDPattern.BLINK_FAST:
+                        # ~3 Hz: toggle every 5 ticks at 30 Hz
+                        on = (tick % 10) < 5
+                        if on:
+                            self._strip.setPixelColor(led_index, Color(r, g, b))
+                        else:
+                            self._strip.setPixelColor(led_index, Color(0, 0, 0))
+                        needs_show = True
+
+                    elif pattern == LEDPattern.PULSE:
+                        # Smooth sine-wave fade over ~2 seconds (60 ticks)
+                        import math
+                        phase = (tick % 60) / 60.0
+                        brightness = (math.sin(phase * 2 * math.pi - math.pi / 2) + 1) / 2
+                        pr = int(r * brightness)
+                        pg = int(g * brightness)
+                        pb = int(b * brightness)
+                        self._strip.setPixelColor(led_index, Color(pr, pg, pb))
+                        needs_show = True
+
+                    # SOLID is handled in set_slot directly, no animation needed
+
+                if needs_show and self._strip is not None:
+                    self._strip.show()
+
+            except Exception as e:
+                logger.error(f"[REAL LED] Animation loop error: {e}")
+
+            tick += 1
+            time.sleep(1.0 / 30.0)  # ~30 Hz

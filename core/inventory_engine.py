@@ -449,6 +449,22 @@ class InventoryEngine:
                 return slot
         return None
 
+    def get_slot_id_for_product(self, product_id: str) -> Optional[str]:
+        """Find slot_id containing a product."""
+        for shelf in self.shelves.values():
+            for slot in shelf.slots:
+                if slot.current_product_id == product_id and slot.status == SlotStatus.OCCUPIED:
+                    return slot.slot_id
+        return None
+
+    def get_slot_id_for_tag(self, tag_id: str) -> Optional[str]:
+        """Find slot_id where a tag was last seen."""
+        for shelf in self.shelves.values():
+            for slot in shelf.slots:
+                if slot.current_tag_id == tag_id:
+                    return slot.slot_id
+        return None
+
     def shutdown(self) -> None:
         """Clean shutdown of all hardware."""
         self.led.clear_all()

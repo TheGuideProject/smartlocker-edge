@@ -42,6 +42,9 @@ class SyncEngine:
     # Inventory snapshot sync interval: every 5 minutes
     INVENTORY_SYNC_INTERVAL_S = 300
 
+    # Mixing session sync interval: every 60 seconds
+    MIXING_SESSION_SYNC_INTERVAL_S = 60
+
     def __init__(self, db: Database, cloud: CloudClient):
         self.db = db
         self.cloud = cloud
@@ -52,6 +55,7 @@ class SyncEngine:
         self._last_config_sync_time = 0.0
         self._last_health_log_time = 0.0
         self._last_inventory_sync_time = 0.0
+        self._last_mixing_session_sync_time = 0.0
         self._start_time = time.time()
 
         try:
@@ -139,10 +143,15 @@ class SyncEngine:
                     self._do_config_sync()
                     self._last_config_sync_time = now
 
-                # Inventory snapshot sync (every 30 minutes)
+                # Inventory snapshot sync (every 5 minutes)
                 if now - self._last_inventory_sync_time >= self.INVENTORY_SYNC_INTERVAL_S:
                     self._do_inventory_sync()
                     self._last_inventory_sync_time = now
+
+                # Mixing session sync (every 60 seconds)
+                if now - self._last_mixing_session_sync_time >= self.MIXING_SESSION_SYNC_INTERVAL_S:
+                    self._do_mixing_session_sync()
+                    self._last_mixing_session_sync_time = now
 
                 # Health snapshot every 5 minutes (REGARDLESS of network)
                 if now - self._last_health_log_time >= self.HEALTH_LOG_INTERVAL_S:
@@ -312,6 +321,29 @@ class SyncEngine:
                 logger.warning("Inventory snapshot sync failed, will retry next cycle")
         except Exception as e:
             logger.error(f"Inventory sync error: {e}")
+
+    # ============================================================
+    # MIXING SESSION SYNC
+    # ============================================================
+
+    def _do_mixing_session_sync(self) -> None:
+        """Upload unsynced mixing sessions to cloud."""
+        try:
+            sessions = self.db.get_unsynced_mixing_sessions(limit=20)
+            if not sessions:
+                logger.debug("No mixing sessions to sync")
+                return
+
+            logger.info(f"Syncing {len(sessions)} mixing sessions to cloud...")
+            success, acked_ids = self.cloud.sync_mixing_sessions(sessions)
+
+            if success and acked_ids:
+                self.db.mark_mixing_sessions_synced(acked_ids)
+                logger.info(f"Synced and acked {len(acked_ids)} mixing sessions")
+            elif not success:
+                logger.warning("Mixing session sync failed, will retry next cycle")
+        except Exception as e:
+            logger.error(f"Mixing session sync error: {e}")
 
     # ============================================================
     # HEALTH LOGGING (offline-tolerant)

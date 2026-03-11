@@ -430,6 +430,68 @@ class CloudClient:
             return False
 
     # ============================================================
+    # MIXING SESSION SYNC
+    # ============================================================
+
+    def sync_mixing_sessions(self, sessions: List[Dict[str, Any]]) -> Tuple[bool, List[str]]:
+        """
+        Upload a batch of mixing sessions to the cloud.
+
+        Args:
+            sessions: List of mixing session dicts from database
+
+        Returns:
+            (success, acked_session_ids) tuple
+        """
+        if not self.is_paired:
+            logger.warning("Cannot sync mixing sessions: device not paired")
+            return False, []
+
+        url = f"{self.cloud_url}/api/devices/{self.device_id}/mixing-sessions"
+
+        # Convert to cloud-friendly format
+        cloud_sessions = []
+        for s in sessions:
+            cloud_sessions.append({
+                "session_id": s["session_id"],
+                "recipe_id": s.get("recipe_id", ""),
+                "job_id": s.get("job_id", ""),
+                "user_name": s.get("user_name", ""),
+                "started_at": s.get("started_at", 0),
+                "completed_at": s.get("completed_at", 0),
+                "base_product_id": s.get("base_product_id", ""),
+                "base_tag_id": s.get("base_tag_id", ""),
+                "base_weight_target_g": s.get("base_weight_target_g", 0),
+                "base_weight_actual_g": s.get("base_weight_actual_g", 0),
+                "hardener_product_id": s.get("hardener_product_id", ""),
+                "hardener_tag_id": s.get("hardener_tag_id", ""),
+                "hardener_weight_target_g": s.get("hardener_weight_target_g", 0),
+                "hardener_weight_actual_g": s.get("hardener_weight_actual_g", 0),
+                "thinner_product_id": s.get("thinner_product_id", ""),
+                "thinner_weight_g": s.get("thinner_weight_g", 0),
+                "ratio_achieved": s.get("ratio_achieved", 0),
+                "ratio_in_spec": bool(s.get("ratio_in_spec", 0)),
+                "override_reason": s.get("override_reason", ""),
+                "application_method": s.get("application_method", "brush"),
+                "pot_life_started_at": s.get("pot_life_started_at", 0),
+                "pot_life_expires_at": s.get("pot_life_expires_at", 0),
+                "status": s.get("status", "completed"),
+                "confirmation": s.get("confirmation", "confirmed"),
+            })
+
+        payload = {"sessions": cloud_sessions}
+        success, data = self._http_post(url, payload, auth=True)
+
+        if success:
+            acked_ids = data.get("session_ids", [s["session_id"] for s in sessions])
+            received = data.get("received", len(sessions))
+            logger.info(f"Synced {received} mixing sessions")
+            return True, acked_ids
+        else:
+            logger.error(f"Mixing session sync failed: {data}")
+            return False, []
+
+    # ============================================================
     # CONFIG SYNC
     # ============================================================
 
