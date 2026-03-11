@@ -1,0 +1,12 @@
+# SmartLocker Edge - Python Dependencies
+# Core
+kivy>=2.3.0
+
+# Real-time WebSocket sync with cloud
+websockets>=12.0
+
+# Hardware drivers (LIVE mode only — uncomment when sensors arrive)
+# adafruit-circuitpython-pn532    # RFID reader
+# pyserial                        # Arduino HX711 bridge
+# rpi-ws281x                      # NeoPixel LEDs
+# RPi.GPIO                        # GPIO access

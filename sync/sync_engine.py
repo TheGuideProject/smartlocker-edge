@@ -65,6 +65,25 @@ class SyncEngine:
             logger.warning(f"UpdateManager not available: {e}")
             self._update_manager = None
 
+        # WebSocket real-time client
+        self._realtime = None
+        if cloud.is_paired and getattr(settings, 'WS_ENABLED', False):
+            try:
+                from sync.realtime_client import RealtimeClient
+                self._realtime = RealtimeClient(
+                    cloud_url=cloud.cloud_url,
+                    api_key=cloud.api_key,
+                    device_id=cloud.device_id,
+                )
+                self._realtime.on_command = self._handle_ws_command
+                self._realtime.on_ack = self._handle_ws_ack
+                self._realtime.on_connect = self._on_ws_connect
+                self._realtime.on_disconnect = self._on_ws_disconnect
+                logger.info("WebSocket real-time client initialized")
+            except Exception as e:
+                logger.warning(f"WebSocket client not available: {e}")
+                self._realtime = None
+
     def start(self) -> None:
         """Start the background sync thread."""
         if not self.cloud.is_paired:
@@ -82,11 +101,15 @@ class SyncEngine:
             daemon=True,
         )
         self._thread.start()
+        if self._realtime:
+            self._realtime.start()
         logger.info("Sync engine started")
 
     def stop(self) -> None:
         """Stop the background sync thread."""
         self._running = False
+        if self._realtime:
+            self._realtime.stop()
         if self._thread:
             self._thread.join(timeout=5)
             self._thread = None
@@ -128,7 +151,8 @@ class SyncEngine:
                 now = time.time()
 
                 # Event sync
-                if now - self._last_sync_time >= settings.SYNC_INTERVAL_S:
+                event_interval = getattr(settings, 'WS_FALLBACK_EVENT_INTERVAL_S', 120) if (self._realtime and self._realtime.is_connected) else settings.SYNC_INTERVAL_S
+                if now - self._last_sync_time >= event_interval:
                     self._do_event_sync()
                     self._do_health_sync()  # Upload buffered health logs
                     self._last_sync_time = now
@@ -139,7 +163,8 @@ class SyncEngine:
                     self._last_heartbeat_time = now
 
                 # Config sync (every 2 minutes — fast OTA + product updates)
-                if now - self._last_config_sync_time >= self.CONFIG_SYNC_INTERVAL_S:
+                config_interval = getattr(settings, 'WS_FALLBACK_CONFIG_INTERVAL_S', 600) if (self._realtime and self._realtime.is_connected) else self.CONFIG_SYNC_INTERVAL_S
+                if now - self._last_config_sync_time >= config_interval:
                     self._do_config_sync()
                     self._last_config_sync_time = now
 
@@ -179,7 +204,15 @@ class SyncEngine:
                 logger.debug("No events to sync")
                 return
 
-            logger.info(f"Syncing {len(events)} events to cloud...")
+            # Try WebSocket first
+            if self._realtime and self._realtime.is_connected:
+                cloud_events = self._convert_events_for_cloud(events)
+                if self._realtime.send_events(cloud_events):
+                    logger.info(f"Sent {len(events)} events via WebSocket")
+                    return  # Ack will come async via on_ack callback
+
+            # Fallback to HTTP
+            logger.info(f"Syncing {len(events)} events to cloud via HTTP...")
             success, acked_ids = self.cloud.sync_events(events)
 
             if success and acked_ids:
@@ -334,7 +367,15 @@ class SyncEngine:
                 logger.debug("No mixing sessions to sync")
                 return
 
-            logger.info(f"Syncing {len(sessions)} mixing sessions to cloud...")
+            # Try WebSocket first
+            if self._realtime and self._realtime.is_connected:
+                cloud_sessions = self._convert_sessions_for_cloud(sessions)
+                if self._realtime.send_mixing_sessions(cloud_sessions):
+                    logger.info(f"Sent {len(sessions)} mixing sessions via WebSocket")
+                    return  # Ack will come async via on_ack callback
+
+            # Fallback to HTTP
+            logger.info(f"Syncing {len(sessions)} mixing sessions to cloud via HTTP...")
             success, acked_ids = self.cloud.sync_mixing_sessions(sessions)
 
             if success and acked_ids:
@@ -390,6 +431,149 @@ class SyncEngine:
             logger.warning(f"Health sync failed: {e}")
 
     # ============================================================
+    # CLOUD FORMAT CONVERTERS
+    # ============================================================
+
+    def _convert_events_for_cloud(self, events: list) -> list:
+        """Convert local event dicts to cloud format (same as CloudClient.sync_events)."""
+        cloud_events = []
+        for event in events:
+            cloud_events.append({
+                "event_id": event["event_id"],
+                "event_type": event["event_type"],
+                "timestamp": event["timestamp"],
+                "device_id": event.get("device_id", self.cloud.device_id),
+                "shelf_id": event.get("shelf_id", ""),
+                "slot_id": event.get("slot_id", ""),
+                "tag_id": event.get("tag_id", ""),
+                "session_id": event.get("session_id", ""),
+                "user_name": event.get("user_name", ""),
+                "data": json.loads(event.get("data_json", "{}")) if isinstance(event.get("data_json"), str) else event.get("data_json", {}),
+                "confirmation": event.get("confirmation", "unconfirmed"),
+                "sequence_num": event.get("sequence_num", 0),
+            })
+        return cloud_events
+
+    def _convert_sessions_for_cloud(self, sessions: list) -> list:
+        """Convert local mixing session dicts to cloud format (same as CloudClient.sync_mixing_sessions)."""
+        cloud_sessions = []
+        for s in sessions:
+            cloud_sessions.append({
+                "session_id": s["session_id"],
+                "recipe_id": s.get("recipe_id", ""),
+                "job_id": s.get("job_id", ""),
+                "user_name": s.get("user_name", ""),
+                "started_at": s.get("started_at", 0),
+                "completed_at": s.get("completed_at", 0),
+                "base_product_id": s.get("base_product_id", ""),
+                "base_tag_id": s.get("base_tag_id", ""),
+                "base_weight_target_g": s.get("base_weight_target_g", 0),
+                "base_weight_actual_g": s.get("base_weight_actual_g", 0),
+                "hardener_product_id": s.get("hardener_product_id", ""),
+                "hardener_tag_id": s.get("hardener_tag_id", ""),
+                "hardener_weight_target_g": s.get("hardener_weight_target_g", 0),
+                "hardener_weight_actual_g": s.get("hardener_weight_actual_g", 0),
+                "thinner_product_id": s.get("thinner_product_id", ""),
+                "thinner_weight_g": s.get("thinner_weight_g", 0),
+                "ratio_achieved": s.get("ratio_achieved", 0),
+                "ratio_in_spec": bool(s.get("ratio_in_spec", 0)),
+                "override_reason": s.get("override_reason", ""),
+                "application_method": s.get("application_method", "brush"),
+                "pot_life_started_at": s.get("pot_life_started_at", 0),
+                "pot_life_expires_at": s.get("pot_life_expires_at", 0),
+                "status": s.get("status", "completed"),
+                "confirmation": s.get("confirmation", "confirmed"),
+            })
+        return cloud_sessions
+
+    # ============================================================
+    # WEBSOCKET CALLBACKS
+    # ============================================================
+
+    def _handle_ws_command(self, msg: dict):
+        """Handle incoming command from cloud via WebSocket."""
+        cmd_type = msg.get("command_type", "")
+        payload = msg.get("payload", {})
+
+        try:
+            if cmd_type == "product_sync":
+                products = payload.get("products", [])
+                for p in products:
+                    self.db.upsert_product({
+                        "product_id": p.get("id", ""),
+                        "ppg_code": p.get("ppg_code", ""),
+                        "name": p.get("name", ""),
+                        "product_type": p.get("product_type", ""),
+                        "density_g_per_ml": p.get("density_g_per_ml", 1.0),
+                        "pot_life_minutes": p.get("pot_life_minutes"),
+                        "hazard_class": p.get("hazard_class", ""),
+                        "can_sizes_ml": p.get("can_sizes_ml", []),
+                        "can_tare_weight_g": p.get("can_tare_weight_g", {}),
+                    })
+                logger.info(f"[WS] Product sync: {len(products)} products updated")
+
+            elif cmd_type == "recipe_sync":
+                recipes = payload.get("recipes", [])
+                for r in recipes:
+                    self.db.upsert_recipe({
+                        "recipe_id": r.get("id", ""),
+                        "name": r.get("name", ""),
+                        "base_product_id": r.get("base_product_id", ""),
+                        "hardener_product_id": r.get("hardener_product_id", ""),
+                        "ratio_base": r.get("ratio_base", 1),
+                        "ratio_hardener": r.get("ratio_hardener", 1),
+                        "tolerance_pct": r.get("tolerance_pct", 5.0),
+                        "thinner_pct_brush": r.get("thinner_pct_brush", 5.0),
+                        "thinner_pct_roller": r.get("thinner_pct_roller", 5.0),
+                        "thinner_pct_spray": r.get("thinner_pct_spray", 10.0),
+                        "recommended_thinner_id": r.get("recommended_thinner_id"),
+                        "pot_life_minutes": r.get("pot_life_minutes", 480),
+                    })
+                logger.info(f"[WS] Recipe sync: {len(recipes)} recipes updated")
+
+            elif cmd_type == "config_update":
+                # Full config payload — reuse existing config sync logic
+                self._do_config_sync()
+
+            elif cmd_type == "ota_update":
+                if self._update_manager:
+                    update_info = {"update": payload}
+                    self._update_manager.check_and_apply(update_info)
+
+            elif cmd_type == "force_sync":
+                self.force_sync()
+
+            else:
+                logger.warning(f"[WS] Unknown command type: {cmd_type}")
+
+        except Exception as e:
+            logger.error(f"[WS] Error handling command {cmd_type}: {e}")
+
+    def _handle_ws_ack(self, msg: dict):
+        """Handle ack from cloud for events/sessions we sent via WebSocket."""
+        try:
+            if "event_ids" in msg:
+                self.db.mark_events_synced(msg["event_ids"])
+                logger.debug(f"[WS] Acked {len(msg['event_ids'])} events")
+            if "session_ids" in msg:
+                self.db.mark_mixing_sessions_synced(msg["session_ids"])
+                logger.debug(f"[WS] Acked {len(msg['session_ids'])} mixing sessions")
+        except Exception as e:
+            logger.error(f"[WS] Error handling ack: {e}")
+
+    def _on_ws_connect(self):
+        """Called when WebSocket connects."""
+        logger.info("[WS] Connected to cloud -- switching to real-time mode")
+
+    def _on_ws_disconnect(self):
+        """Called when WebSocket disconnects."""
+        logger.info("[WS] Disconnected from cloud -- falling back to HTTP polling")
+        # Reset timers to trigger immediate HTTP sync
+        self._last_sync_time = 0
+        self._last_heartbeat_time = 0
+        self._last_config_sync_time = 0
+
+    # ============================================================
     # STATUS
     # ============================================================
 
@@ -416,4 +600,5 @@ class SyncEngine:
             "events_synced": total - unsynced,
             "last_sync": self._last_sync_time,
             "uptime_hours": round((time.time() - self._start_time) / 3600, 2),
+            "ws_connected": self._realtime.is_connected if self._realtime else False,
         }

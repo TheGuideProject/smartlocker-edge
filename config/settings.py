@@ -147,3 +147,13 @@ LOG_DIR = "logs"
 BACKUP_INTERVAL_H = 6
 BACKUP_MAX_COPIES = 5
 BACKUP_DIR = "data/backups"
+
+# ============================================================
+# WEBSOCKET REAL-TIME SYNC
+# ============================================================
+WS_ENABLED = True                     # Enable WebSocket real-time sync
+WS_RECONNECT_INITIAL_S = 2           # Initial reconnect delay (seconds)
+WS_RECONNECT_MAX_S = 120             # Maximum reconnect delay (2 minutes)
+WS_PING_INTERVAL_S = 25              # WebSocket keepalive ping interval
+WS_FALLBACK_EVENT_INTERVAL_S = 120   # HTTP event sync interval when WS active (backup)
+WS_FALLBACK_CONFIG_INTERVAL_S = 600  # HTTP config sync interval when WS active (backup)
