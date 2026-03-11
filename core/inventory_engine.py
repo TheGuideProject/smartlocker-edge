@@ -58,6 +58,10 @@ class InventoryEngine:
         self.buzzer = buzzer
         self.event_bus = event_bus
 
+        # Database reference (set via set_database after init)
+        # Must be declared BEFORE _build_default_shelves() which reads it
+        self._db: Optional['Database'] = None
+
         # Build default shelf/slot configuration if not provided
         if shelves is None:
             shelves = self._build_default_shelves()
@@ -77,9 +81,6 @@ class InventoryEngine:
 
         # Whether there's an active touchscreen session (set by mixing engine)
         self.active_session = False
-
-        # Database reference (set via set_database after init)
-        self._db: Optional['Database'] = None
 
     def set_database(self, db: 'Database') -> None:
         """Set the database reference for product lookups and slot state persistence."""
