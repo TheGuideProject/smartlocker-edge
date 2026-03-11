@@ -166,6 +166,31 @@ def main_cli():
 
 def main_ui():
     """Start the Kivy touchscreen UI (default mode)."""
+    import os
+
+    # Kivy configuration MUST be set before importing kivy modules
+    os.environ.setdefault('KIVY_NO_CONSOLELOG', '1')
+    os.environ.setdefault('KIVY_LOG_LEVEL', 'warning')
+
+    from kivy.config import Config
+
+    # Window size for 4.3" touchscreen (800x480)
+    Config.set('graphics', 'width', '800')
+    Config.set('graphics', 'height', '480')
+    Config.set('graphics', 'resizable', '1')
+    Config.set('graphics', 'minimum_width', '800')
+    Config.set('graphics', 'minimum_height', '480')
+
+    # Touch input: disable multitouch emulation (red dots on right-click)
+    Config.set('input', 'mouse', 'mouse,multitouch_on_demand')
+
+    # Disable Kivy settings panel (gesture from bottom)
+    Config.set('kivy', 'exit_on_escape', '1')
+
+    # Enable docked virtual keyboard globally for touchscreen use
+    # This makes a virtual keyboard appear at bottom when any TextInput gets focus
+    Config.set('kivy', 'keyboard_mode', 'dock')
+
     from ui.app import SmartLockerApp
     SmartLockerApp().run()
 

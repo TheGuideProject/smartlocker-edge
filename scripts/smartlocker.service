@@ -1,6 +1,6 @@
 [Unit]
 Description=SmartLocker Edge - Paint Inventory & Mixing System
-After=network.target
+After=network-online.target graphical.target
 Wants=network-online.target
 
 [Service]
@@ -12,6 +12,16 @@ Restart=always
 RestartSec=5
 Environment=PYTHONUNBUFFERED=1
 Environment=DISPLAY=:0
+Environment=XAUTHORITY=/home/jacopo22295/.Xauthority
+
+# Crash protection: allow max 10 restarts within 120 seconds
+# After that systemd gives up (prevents infinite crash loops)
+StartLimitIntervalSec=120
+StartLimitBurst=10
+
+# Resource limits
+TimeoutStopSec=15
+KillMode=mixed
 
 # Logging
 StandardOutput=append:/home/jacopo22295/smartlocker-edge/logs/service.log

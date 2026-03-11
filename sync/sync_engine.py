@@ -9,10 +9,12 @@ Runs in a separate thread and handles:
 All operations are offline-tolerant: failures are logged and retried next cycle.
 """
 
+import os
 import time
 import json
 import logging
 import threading
+import subprocess
 from typing import Optional
 
 from config import settings
@@ -128,23 +130,80 @@ class SyncEngine:
     # SYNC LOOP
     # ============================================================
 
+    def _wait_for_network(self, timeout_s: int = 90, check_interval_s: int = 3) -> bool:
+        """
+        Wait for network connectivity before starting sync.
+        Tries to reach the cloud URL. Returns True if connected, False if timed out.
+        Essential after RPi reboot — network.target doesn't guarantee internet is ready.
+        """
+        import urllib.request
+        import urllib.error
+
+        # Build a simple check URL from cloud URL
+        check_url = self.cloud.cloud_url.rstrip("/") + "/health"
+        deadline = time.time() + timeout_s
+        attempt = 0
+
+        logger.info(f"Waiting for network connectivity (timeout={timeout_s}s)...")
+
+        while self._running and time.time() < deadline:
+            attempt += 1
+            try:
+                req = urllib.request.Request(check_url, method="GET")
+                req.add_header("User-Agent", "SmartLocker-Edge")
+                with urllib.request.urlopen(req, timeout=5) as resp:
+                    if resp.status < 500:
+                        logger.info(f"Network ready after {attempt} attempt(s)")
+                        return True
+            except urllib.error.URLError as e:
+                logger.debug(f"Network check #{attempt} failed: {e.reason}")
+            except Exception as e:
+                logger.debug(f"Network check #{attempt} failed: {e}")
+
+            # Sleep in small chunks so we can stop quickly
+            sleep_end = time.time() + check_interval_s
+            while self._running and time.time() < sleep_end:
+                time.sleep(0.5)
+
+        logger.warning(f"Network not available after {timeout_s}s — starting sync anyway (will retry)")
+        return False
+
     def _sync_loop(self) -> None:
         """Main sync loop (runs in background thread)."""
         logger.info("Sync loop started")
 
-        # Immediate heartbeat on startup (important after OTA restart)
-        try:
-            self._do_heartbeat()
-            logger.info("Startup heartbeat sent")
-        except Exception as e:
-            logger.warning(f"Startup heartbeat failed: {e}")
+        # Wait for network connectivity (critical after RPi reboot)
+        self._wait_for_network(timeout_s=90, check_interval_s=3)
+
+        # Startup heartbeat with retry (network may still be flaky)
+        startup_ok = False
+        for attempt in range(3):
+            if not self._running:
+                return
+            try:
+                self._do_heartbeat()
+                logger.info("Startup heartbeat sent")
+                startup_ok = True
+                break
+            except Exception as e:
+                logger.warning(f"Startup heartbeat attempt {attempt+1}/3 failed: {e}")
+                time.sleep(5)
 
         # Initial sync on startup
-        time.sleep(5)  # Wait for system to stabilize
-        self._do_event_sync()
-        self._do_heartbeat()
-        self._do_config_sync()
-        self._log_health_snapshot()  # Initial health snapshot
+        time.sleep(3)  # Brief stabilization wait
+        try:
+            self._do_event_sync()
+        except Exception as e:
+            logger.warning(f"Initial event sync failed: {e}")
+        try:
+            self._do_heartbeat()
+        except Exception as e:
+            logger.warning(f"Initial heartbeat failed: {e}")
+        try:
+            self._do_config_sync()
+        except Exception as e:
+            logger.warning(f"Initial config sync failed: {e}")
+        self._log_health_snapshot()  # Initial health snapshot (always local)
 
         while self._running:
             try:
@@ -549,6 +608,14 @@ class SyncEngine:
             elif cmd_type == "force_sync":
                 self.force_sync()
 
+            elif cmd_type == "restart_app":
+                logger.info("[WS] Received restart_app command from cloud")
+                self._restart_application()
+
+            elif cmd_type == "reboot_device":
+                logger.info("[WS] Received reboot_device command from cloud")
+                self._reboot_device()
+
             else:
                 logger.warning(f"[WS] Unknown command type: {cmd_type}")
 
@@ -578,6 +645,55 @@ class SyncEngine:
         self._last_sync_time = 0
         self._last_heartbeat_time = 0
         self._last_config_sync_time = 0
+
+    # ============================================================
+    # REMOTE CONTROL — restart / reboot
+    # ============================================================
+
+    def _restart_application(self):
+        """
+        Restart the SmartLocker application.
+        Uses sys.exit() — systemd Restart=always will restart the service automatically.
+        """
+        import sys
+        logger.info("Restarting SmartLocker application (systemd will auto-restart)...")
+
+        # Give time for the WS ack to be sent
+        time.sleep(1)
+
+        # Try graceful Kivy shutdown first
+        try:
+            from kivy.app import App
+            app = App.get_running_app()
+            if app:
+                from kivy.clock import Clock
+                Clock.schedule_once(lambda dt: app.stop(), 0.5)
+                time.sleep(2)
+        except Exception:
+            pass
+
+        # Force exit — systemd Restart=always will bring us back
+        os._exit(0)
+
+    def _reboot_device(self):
+        """
+        Reboot the entire Raspberry Pi device.
+        Requires sudo privileges (configured in sudoers or running as root).
+        """
+        logger.info("Rebooting device in 3 seconds...")
+
+        # Give time for WS ack + log flush
+        time.sleep(3)
+
+        try:
+            subprocess.run(["sudo", "reboot"], check=True)
+        except Exception as e:
+            logger.error(f"Reboot failed: {e}")
+            # Fallback: try systemctl
+            try:
+                subprocess.run(["sudo", "systemctl", "reboot"], check=True)
+            except Exception as e2:
+                logger.error(f"Reboot fallback also failed: {e2}")
 
     # ============================================================
     # STATUS
