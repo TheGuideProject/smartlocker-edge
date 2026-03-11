@@ -123,23 +123,53 @@ class CloudClient:
 
         url = f"{self.cloud_url}/api/devices/{self.device_id}/events"
 
-        # Convert local event format to cloud format
+        # Convert local event format to cloud format (per-event error handling)
         cloud_events = []
+        skipped_ids = []  # Events we can't convert — mark synced to unblock queue
+
         for event in events:
-            cloud_events.append({
-                "event_id": event["event_id"],
-                "event_type": event["event_type"],
-                "timestamp": event["timestamp"],
-                "device_id": event.get("device_id", self.device_id),
-                "shelf_id": event.get("shelf_id", ""),
-                "slot_id": event.get("slot_id", ""),
-                "tag_id": event.get("tag_id", ""),
-                "session_id": event.get("session_id", ""),
-                "user_name": event.get("user_name", ""),
-                "data": json.loads(event.get("data_json", "{}")) if isinstance(event.get("data_json"), str) else event.get("data_json", {}),
-                "confirmation": event.get("confirmation", "unconfirmed"),
-                "sequence_num": event.get("sequence_num", 0),
-            })
+            try:
+                # Safe JSON parse for data_json
+                data_json = event.get("data_json", "{}")
+                if isinstance(data_json, str):
+                    try:
+                        data = json.loads(data_json)
+                    except (json.JSONDecodeError, ValueError):
+                        data = {"_raw": data_json[:500]}  # Preserve raw data
+                else:
+                    data = data_json if data_json else {}
+
+                # Safe timestamp: ensure it's a number
+                ts = event.get("timestamp", 0)
+                if isinstance(ts, str):
+                    try:
+                        ts = float(ts)
+                    except (ValueError, TypeError):
+                        ts = time.time()  # Fallback to now
+
+                cloud_events.append({
+                    "event_id": event["event_id"],
+                    "event_type": event.get("event_type", "unknown"),
+                    "timestamp": ts,
+                    "device_id": event.get("device_id", self.device_id),
+                    "shelf_id": event.get("shelf_id", "") or "",
+                    "slot_id": event.get("slot_id", "") or "",
+                    "tag_id": event.get("tag_id", "") or "",
+                    "session_id": event.get("session_id", "") or "",
+                    "user_name": event.get("user_name", "") or "",
+                    "data": data,
+                    "confirmation": event.get("confirmation", "unconfirmed"),
+                    "sequence_num": event.get("sequence_num", 0),
+                })
+            except Exception as e:
+                eid = event.get("event_id", "?")
+                logger.warning(f"Skipping malformed event {eid}: {e}")
+                skipped_ids.append(eid)
+
+        if not cloud_events and skipped_ids:
+            # All events were malformed — mark them synced to unblock queue
+            logger.warning(f"All {len(skipped_ids)} events in batch were malformed, marking synced")
+            return True, skipped_ids
 
         payload = {"events": cloud_events}
         success, data = self._http_post(url, payload, auth=True)
@@ -148,10 +178,17 @@ class CloudClient:
             acked_ids = data.get("event_ids", [])
             received = data.get("received", 0)
             duplicates = data.get("duplicates", 0)
-            logger.info(f"Synced {received} events ({duplicates} duplicates)")
+            # Include skipped (malformed) events in acked list
+            acked_ids.extend(skipped_ids)
+            logger.info(f"Synced {received} events ({duplicates} duplicates, {len(skipped_ids)} skipped)")
             return True, acked_ids
         else:
-            logger.error(f"Event sync failed: {data}")
+            status_code = data.get("status_code", "?") if isinstance(data, dict) else "?"
+            detail = data.get("detail", str(data)[:200]) if isinstance(data, dict) else str(data)[:200]
+            logger.error(f"Event sync failed (HTTP {status_code}): {detail}")
+            # Still return skipped_ids so malformed events don't block queue
+            if skipped_ids:
+                return True, skipped_ids
             return False, []
 
     # ============================================================

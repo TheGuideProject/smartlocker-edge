@@ -241,11 +241,13 @@ class InventoryScreen(Screen):
         super().__init__(**kwargs)
         self._refresh_event = None
         self._built = False
+        self._last_data_hash = None  # Cache to avoid rebuild when data unchanged
 
     def on_enter(self):
         """Start refresh loop on screen enter."""
         self._built = False
-        self._refresh_event = Clock.schedule_interval(self._refresh, 1.0)
+        self._last_data_hash = None  # Force rebuild on enter
+        self._refresh_event = Clock.schedule_interval(self._refresh, 2.0)
         self._refresh(0)
 
     def on_leave(self):
@@ -683,14 +685,40 @@ class InventoryScreen(Screen):
 
     # ── Refresh ──
 
+    def _compute_data_hash(self, merged_inv, slot_data=None):
+        """Compute a fingerprint of current data to detect changes."""
+        parts = []
+        for name in sorted(merged_inv.keys()):
+            info = merged_inv[name]
+            parts.append(f"{name}:{info.get('liters',0):.1f}:{info.get('fill_pct',0):.0f}:{info.get('cans',0)}")
+        if slot_data:
+            for s in slot_data:
+                parts.append(f"s:{s.status.value}")
+        return "|".join(parts)
+
     def _refresh(self, dt):
-        """Rebuild the entire product list and slot strip."""
+        """Rebuild the product list only when data changes (prevents animation glitch)."""
         app = App.get_running_app()
         content = self.ids.content_area
-        content.clear_widgets()
 
         # Get merged data (vessel stock + RFID enrichment)
         merged_inv = self._build_merged_inventory()
+
+        # Get slot data for hash (detect slot status changes too)
+        try:
+            slots = app.inventory.get_all_slots()
+        except Exception:
+            slots = []
+
+        # Check if data changed since last refresh
+        data_hash = self._compute_data_hash(merged_inv, slots)
+        if self._last_data_hash == data_hash and self._built:
+            return  # No change — skip rebuild to avoid animation glitch
+        self._last_data_hash = data_hash
+        self._built = True
+
+        content.clear_widgets()
+
         product_colors = self._get_product_colors()
         hardener_map = self._get_hardener_map()
 

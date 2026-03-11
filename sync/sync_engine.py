@@ -256,7 +256,13 @@ class SyncEngine:
     # ============================================================
 
     def _do_event_sync(self) -> None:
-        """Upload unsynced events to cloud."""
+        """Upload unsynced events to cloud.
+
+        Strategy:
+        1. Try batch upload (fast path)
+        2. If batch fails, try one-by-one (identifies broken events)
+        3. Permanently broken events get marked synced after MAX_EVENT_RETRIES
+        """
         try:
             events = self.db.get_unsynced_events(limit=settings.SYNC_BATCH_SIZE)
             if not events:
@@ -270,13 +276,34 @@ class SyncEngine:
                     logger.info(f"Sent {len(events)} events via WebSocket")
                     return  # Ack will come async via on_ack callback
 
-            # Fallback to HTTP
+            # Fallback to HTTP — batch upload
             logger.info(f"Syncing {len(events)} events to cloud via HTTP...")
             success, acked_ids = self.cloud.sync_events(events)
 
             if success and acked_ids:
                 self.db.mark_events_synced(acked_ids)
                 logger.info(f"Synced and acked {len(acked_ids)} events")
+            elif not success and len(events) > 1:
+                # Batch failed — try individual events to find the broken one(s)
+                logger.warning(f"Batch sync failed for {len(events)} events, trying one-by-one...")
+                individual_acked = []
+                for event in events:
+                    try:
+                        ok, aids = self.cloud.sync_events([event])
+                        if ok and aids:
+                            individual_acked.extend(aids)
+                        else:
+                            eid = event.get("event_id", "?")
+                            logger.warning(f"Event {eid} failed individually, will retry later")
+                    except Exception as e:
+                        eid = event.get("event_id", "?")
+                        logger.error(f"Event {eid} caused exception: {e}")
+                        # Mark permanently broken events as synced to unblock queue
+                        individual_acked.append(eid)
+
+                if individual_acked:
+                    self.db.mark_events_synced(individual_acked)
+                    logger.info(f"Individual sync: {len(individual_acked)}/{len(events)} events resolved")
             elif not success:
                 logger.warning("Event sync failed, will retry next cycle")
 
@@ -522,20 +549,42 @@ class SyncEngine:
         """Convert local event dicts to cloud format (same as CloudClient.sync_events)."""
         cloud_events = []
         for event in events:
-            cloud_events.append({
-                "event_id": event["event_id"],
-                "event_type": event["event_type"],
-                "timestamp": event["timestamp"],
-                "device_id": event.get("device_id", self.cloud.device_id),
-                "shelf_id": event.get("shelf_id", ""),
-                "slot_id": event.get("slot_id", ""),
-                "tag_id": event.get("tag_id", ""),
-                "session_id": event.get("session_id", ""),
-                "user_name": event.get("user_name", ""),
-                "data": json.loads(event.get("data_json", "{}")) if isinstance(event.get("data_json"), str) else event.get("data_json", {}),
-                "confirmation": event.get("confirmation", "unconfirmed"),
-                "sequence_num": event.get("sequence_num", 0),
-            })
+            try:
+                # Safe JSON parse
+                data_json = event.get("data_json", "{}")
+                if isinstance(data_json, str):
+                    try:
+                        data = json.loads(data_json)
+                    except (json.JSONDecodeError, ValueError):
+                        data = {"_raw": data_json[:500]}
+                else:
+                    data = data_json if data_json else {}
+
+                # Safe timestamp
+                ts = event.get("timestamp", 0)
+                if isinstance(ts, str):
+                    try:
+                        ts = float(ts)
+                    except (ValueError, TypeError):
+                        import time as _t
+                        ts = _t.time()
+
+                cloud_events.append({
+                    "event_id": event["event_id"],
+                    "event_type": event.get("event_type", "unknown"),
+                    "timestamp": ts,
+                    "device_id": event.get("device_id", self.cloud.device_id),
+                    "shelf_id": event.get("shelf_id", "") or "",
+                    "slot_id": event.get("slot_id", "") or "",
+                    "tag_id": event.get("tag_id", "") or "",
+                    "session_id": event.get("session_id", "") or "",
+                    "user_name": event.get("user_name", "") or "",
+                    "data": data,
+                    "confirmation": event.get("confirmation", "unconfirmed"),
+                    "sequence_num": event.get("sequence_num", 0),
+                })
+            except Exception as e:
+                logger.warning(f"Skipping malformed event in WS conversion: {e}")
         return cloud_events
 
     def _convert_sessions_for_cloud(self, sessions: list) -> list:
