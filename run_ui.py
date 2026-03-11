@@ -38,6 +38,9 @@ Config.set('input', 'mouse', 'mouse,multitouch_on_demand')
 # Disable Kivy settings panel (gesture from bottom)
 Config.set('kivy', 'exit_on_escape', '1')
 
+# Enable docked virtual keyboard globally for touchscreen use
+Config.set('kivy', 'keyboard_mode', 'dock')
+
 from ui.app import SmartLockerApp
 
 

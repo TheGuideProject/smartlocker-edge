@@ -332,6 +332,7 @@ class SmartLockerApp(App):
         from ui.screens.admin import AdminScreen
         from ui.screens.alarm_screen import AlarmScreen
         from ui.screens.system_health import SystemHealthScreen
+        from ui.screens.shelf_map import ShelfMapScreen
 
         # Add pairing screen FIRST (so it's the default if not paired)
         self.sm.add_widget(PairingScreen(name='pairing'))
@@ -345,6 +346,7 @@ class SmartLockerApp(App):
         self.sm.add_widget(AdminScreen(name='admin'))
         self.sm.add_widget(AlarmScreen(name='alarm'))
         self.sm.add_widget(SystemHealthScreen(name='system_health'))
+        self.sm.add_widget(ShelfMapScreen(name='shelf_map'))
 
         # ---- Alarm callbacks (v1.0.6) ----
         self._previous_screen = 'home'
@@ -524,6 +526,7 @@ class SmartLockerApp(App):
             event_bus=self.event_bus,
         )
         self.inventory.set_database(self.db)
+        self.inventory.rebuild_shelves()
 
         self.mixing = MixingEngine(
             weight=self.weight, led=self.led,

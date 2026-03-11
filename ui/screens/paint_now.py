@@ -455,6 +455,7 @@ class PaintNowScreen(Screen):
             font_size='30sp',
             multiline=False,
             input_filter='float',
+            input_type='number',
             background_color=(0.07, 0.09, 0.13, 1),
             foreground_color=(0.00, 0.82, 0.73, 1),
             cursor_color=(0.00, 0.82, 0.73, 1),

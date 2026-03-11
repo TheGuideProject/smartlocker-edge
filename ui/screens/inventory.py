@@ -191,6 +191,29 @@ def _resolve_color(name):
     return PAINT_COLORS.get(first_word)
 
 
+def _progress_bar(parent, fill_pct, color, height=8):
+    """Draw a rounded progress bar on a widget via canvas."""
+    fill_pct = max(0.0, min(100.0, fill_pct))
+    with parent.canvas.before:
+        Color(0.20, 0.22, 0.28, 1)
+        track = RoundedRectangle(pos=parent.pos, size=parent.size, radius=[4])
+    with parent.canvas.after:
+        Color(*color)
+        bar = RoundedRectangle(
+            pos=parent.pos,
+            size=(parent.width * fill_pct / 100.0, parent.height),
+            radius=[4],
+        )
+
+    def _upd(w, *_):
+        track.pos = w.pos
+        track.size = w.size
+        bar.pos = w.pos
+        bar.size = (w.width * fill_pct / 100.0, w.height)
+
+    parent.bind(pos=_upd, size=_upd)
+
+
 class InventoryScreen(Screen):
 
     def __init__(self, **kwargs):
@@ -244,10 +267,10 @@ class InventoryScreen(Screen):
         return bicomp
 
     def _get_current_inventory(self):
-        """Build product inventory from occupied slots."""
+        """Build product inventory from occupied slots, with progress bar data."""
         app = App.get_running_app()
         slots = app.inventory.get_all_slots()
-        product_inventory = {}  # {name: {cans, weight_g, density, type}}
+        product_inventory = {}
         for slot in slots:
             if slot.status.value == 'occupied' and slot.current_tag_id:
                 try:
@@ -258,12 +281,14 @@ class InventoryScreen(Screen):
                     name = product.get('name', 'Unknown')
                     entry = product_inventory.setdefault(name, {
                         'cans': 0,
-                        'weight_g': 0,
+                        'weight_current_g': 0,
+                        'weight_full_g': 0,
                         'density': product.get('density_g_per_ml', 1.0),
                         'type': product.get('product_type', 'base_paint'),
                     })
                     entry['cans'] += 1
-                    entry['weight_g'] += slot.weight_current_g
+                    entry['weight_current_g'] += slot.weight_current_g
+                    entry['weight_full_g'] += slot.weight_when_placed_g if slot.weight_when_placed_g > 0 else slot.weight_current_g
         return product_inventory
 
     # ── UI building ──
@@ -274,9 +299,14 @@ class InventoryScreen(Screen):
         accent = TYPE_ACCENTS.get(ptype, (0.50, 0.55, 0.64, 1))
         badge_text = TYPE_BADGES.get(ptype, 'Product')
         cans = info['cans']
-        weight_g = info['weight_g']
+        weight_current_g = info.get('weight_current_g', 0)
+        weight_full_g = info.get('weight_full_g', 0)
         density = info.get('density', 1.0) or 1.0
-        liters = (weight_g / density) / 1000.0 if density > 0 else 0
+        liters = (weight_current_g / density) / 1000.0 if density > 0 else 0
+        if weight_full_g > 0:
+            fill_pct = (weight_current_g / weight_full_g) * 100
+        else:
+            fill_pct = 100 if weight_current_g > 0 else 0
 
         # Card container
         card = BoxLayout(
@@ -289,7 +319,7 @@ class InventoryScreen(Screen):
         # Calculate card height based on content
         has_colors = name in product_colors and product_colors[name]
         has_hardener = name in hardener_map
-        card_height = 62  # base height for name + badge + quantity row
+        card_height = 78  # base: name row + progress bar row (was 62)
         if has_colors:
             card_height += 26
         if has_hardener:
@@ -357,6 +387,35 @@ class InventoryScreen(Screen):
         row1.add_widget(liters_label)
 
         card.add_widget(row1)
+
+        # ── Row 1.5: Progress Bar ──
+        bar_row = BoxLayout(
+            orientation='horizontal',
+            size_hint_y=None, height=dp(16),
+            spacing=8,
+            padding=[4, 2, 4, 2],
+        )
+        bar_container = Widget(size_hint_x=0.78, size_hint_y=None, height=dp(8))
+        if fill_pct > 50:
+            bar_color = (0.00, 0.82, 0.73, 1)  # Teal
+        elif fill_pct > 25:
+            bar_color = (0.98, 0.76, 0.22, 1)  # Yellow
+        else:
+            bar_color = (0.93, 0.27, 0.32, 1)  # Red
+        _progress_bar(bar_container, fill_pct, bar_color)
+        bar_row.add_widget(bar_container)
+
+        pct_label = Label(
+            text=f'{fill_pct:.0f}%',
+            font_size='11sp',
+            color=(0.50, 0.55, 0.64, 1),
+            size_hint_x=0.22,
+            halign='right',
+            valign='middle',
+        )
+        pct_label.bind(size=lambda w, s: setattr(w, 'text_size', s))
+        bar_row.add_widget(pct_label)
+        card.add_widget(bar_row)
 
         # ── Row 2: Color dots (if any) ──
         if has_colors:
@@ -545,6 +604,21 @@ class InventoryScreen(Screen):
         scroll.add_widget(product_list)
         content.add_widget(scroll)
 
-        # ── Mini slot strip ──
-        slot_strip = self._build_slot_strip()
-        content.add_widget(slot_strip)
+        # ── "Check Shelves" button ──
+        from kivy.uix.button import Button
+        btn_box = BoxLayout(
+            size_hint_y=None, height=dp(74),
+            padding=[dp(10), dp(5), dp(10), dp(5)],
+        )
+        check_btn = Button(
+            text='CHECK SHELVES',
+            font_size='18sp',
+            bold=True,
+            size_hint=(1, 1),
+            background_normal='',
+            background_color=(0.00, 0.82, 0.73, 1),
+            color=(0.02, 0.05, 0.08, 1),
+        )
+        check_btn.bind(on_release=lambda x: app.go_screen('shelf_map'))
+        btn_box.add_widget(check_btn)
+        content.add_widget(btn_box)

@@ -360,8 +360,7 @@ class PairingScreen(Screen):
         code_input = self.ids.pairing_code_input
         code_input.bind(focus=self._on_input_focus)
 
-        # Disable system keyboard so only our virtual one is used
-        code_input.keyboard_mode = 'managed'
+        # Global dock keyboard mode is set in run_ui.py — no override needed here
 
     def _on_input_focus(self, instance, focused):
         """Show keyboard when input gets focus, hide when unfocused."""

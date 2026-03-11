@@ -270,6 +270,7 @@ Builder.load_string('''
                             cursor_color: 0.00, 0.82, 0.73, 1
                             padding: [8, 6]
                             input_filter: 'int'
+                            input_type: 'number'
                         Label:
                             text: 'Addr (hex):'
                             font_size: '12sp'
@@ -349,6 +350,7 @@ Builder.load_string('''
                             cursor_color: 0.00, 0.82, 0.73, 1
                             padding: [8, 6]
                             input_filter: 'int'
+                            input_type: 'number'
 
                     # LED hardware settings
                     Label:
@@ -388,6 +390,7 @@ Builder.load_string('''
                             cursor_color: 0.00, 0.82, 0.73, 1
                             padding: [8, 6]
                             input_filter: 'int'
+                            input_type: 'number'
                         Label:
                             text: 'Count:'
                             font_size: '12sp'
@@ -409,6 +412,7 @@ Builder.load_string('''
                             cursor_color: 0.00, 0.82, 0.73, 1
                             padding: [8, 6]
                             input_filter: 'int'
+                            input_type: 'number'
                         Label:
                             text: 'Bright:'
                             font_size: '12sp'
@@ -430,6 +434,7 @@ Builder.load_string('''
                             cursor_color: 0.00, 0.82, 0.73, 1
                             padding: [8, 6]
                             input_filter: 'int'
+                            input_type: 'number'
 
                     # Buzzer hardware settings
                     Label:
@@ -469,6 +474,7 @@ Builder.load_string('''
                             cursor_color: 0.00, 0.82, 0.73, 1
                             padding: [8, 6]
                             input_filter: 'int'
+                            input_type: 'number'
                         Widget:
                             size_hint_x: 0.4
 
@@ -523,6 +529,7 @@ Builder.load_string('''
                             cursor_color: 0.00, 0.82, 0.73, 1
                             padding: [8, 6]
                             input_filter: 'int'
+                            input_type: 'number'
 
                     BoxLayout:
                         size_hint_y: None
@@ -549,6 +556,7 @@ Builder.load_string('''
                             cursor_color: 0.00, 0.82, 0.73, 1
                             padding: [8, 6]
                             input_filter: 'int'
+                            input_type: 'number'
 
                     BoxLayout:
                         size_hint_y: None
@@ -600,6 +608,7 @@ Builder.load_string('''
                             cursor_color: 0.00, 0.82, 0.73, 1
                             padding: [8, 6]
                             input_filter: 'int'
+                            input_type: 'number'
 
                 # ==== SECTION 4: MIXING PARAMETERS ====
                 Label:

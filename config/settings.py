@@ -123,6 +123,9 @@ LED_COUNT = 12                   # Total LEDs in strip (one per slot)
 LED_GPIO_PIN = 18                # Data pin (must support PWM: 12, 13, 18, 19)
 LED_BRIGHTNESS = 128             # 0-255 brightness level
 
+# Slot Configuration (cloud-configurable; default 4 for dev)
+SLOT_COUNT = 4
+
 # Buzzer - GPIO PWM
 # Library: RPi.GPIO or gpiozero
 BUZZER_GPIO_PIN = 13             # BCM pin 13 (PWM-capable). Moved from 18 to avoid conflict with LED_GPIO_PIN.

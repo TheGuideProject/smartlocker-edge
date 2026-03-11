@@ -297,6 +297,12 @@ class SyncEngine:
                 self.db.set_admin_password_hash(hash_str)
                 logger.info("Admin password updated from cloud")
 
+            # Update slot count if changed
+            slot_count = config.get("slot_count")
+            if slot_count and isinstance(slot_count, int) and slot_count >= 1:
+                self.db.save_config("slot_count", str(slot_count))
+                logger.info(f"Slot count updated from cloud: {slot_count}")
+
             logger.info(f"Config synced: {len(products)} products, {len(recipes)} recipes")
 
             # Check for OTA update command

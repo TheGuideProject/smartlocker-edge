@@ -126,9 +126,22 @@ class InventoryEngine:
             logger.warning(f"Failed to persist slot state for {slot.slot_id}: {e}")
 
     def _build_default_shelves(self) -> List[Shelf]:
-        """Create a default shelf with 4 slots for initial development."""
+        """Create default shelf(s) with configurable slot count."""
+        slot_count = getattr(settings, 'SLOT_COUNT', 4)
+
+        # Try reading from local DB config (cloud-synced value)
+        if self._db:
+            try:
+                db_val = self._db.get_config("slot_count")
+                if db_val and db_val.isdigit():
+                    slot_count = int(db_val)
+            except Exception:
+                pass
+
+        slot_count = max(1, min(60, slot_count))
+
         slots = []
-        for i in range(1, 5):
+        for i in range(1, slot_count + 1):
             slots.append(Slot(
                 slot_id=f"shelf1_slot{i}",
                 shelf_id="shelf1",
@@ -142,6 +155,16 @@ class InventoryEngine:
             weight_channel="shelf1",
             slots=slots,
         )]
+
+    def rebuild_shelves(self) -> None:
+        """Rebuild shelf/slot config from DB (call after set_database)."""
+        shelves = self._build_default_shelves()
+        self.shelves = {s.shelf_id: s for s in shelves}
+        self._reader_to_slot = {}
+        for shelf in shelves:
+            for slot in shelf.slots:
+                self._reader_to_slot[slot.rfid_reader_id] = slot
+        logger.info(f"Shelves rebuilt: {len(self._reader_to_slot)} slots configured")
 
     def initialize(self) -> bool:
         """Initialize all hardware and set initial state."""
