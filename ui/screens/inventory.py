@@ -180,10 +180,31 @@ def _dot_widget(color_rgba, size=14):
     return dot
 
 
+def _hex_to_rgba(hex_str):
+    """Convert hex color string (#RRGGBB) to RGBA tuple."""
+    if not hex_str or not hex_str.startswith('#'):
+        return None
+    try:
+        h = hex_str.lstrip('#')
+        if len(h) == 3:
+            h = ''.join(c * 2 for c in h)
+        if len(h) != 6:
+            return None
+        r = int(h[0:2], 16) / 255.0
+        g = int(h[2:4], 16) / 255.0
+        b = int(h[4:6], 16) / 255.0
+        return (r, g, b, 1)
+    except (ValueError, IndexError):
+        return None
+
+
 def _resolve_color(name):
-    """Get RGBA for a paint color name."""
+    """Get RGBA for a paint color name or hex code."""
     if not name:
         return None
+    # Handle hex codes directly
+    if name.startswith('#'):
+        return _hex_to_rgba(name)
     key = name.strip().lower()
     if key in PAINT_COLORS:
         return PAINT_COLORS[key]
@@ -235,20 +256,61 @@ class InventoryScreen(Screen):
     # ── Data helpers ──
 
     def _get_product_colors(self):
-        """Extract product -> colors mapping from maintenance chart."""
+        """Extract product -> colors mapping.
+
+        Priority: product.colors_json (DB, from color picker) > maintenance chart.
+        Returns dict of {product_name: [{"name": str, "hex": str}, ...]}.
+        """
+        import json as _json
         app = App.get_running_app()
-        chart = getattr(app, 'maintenance_chart', None)
-        if not chart:
-            return {}
         colors = {}
-        for area in chart.get('areas', []):
-            for layer in area.get('layers', []):
-                product = layer.get('product', '')
-                color = layer.get('color', '')
-                if product and color:
-                    colors.setdefault(product, [])
-                    if color not in colors[product]:
-                        colors[product].append(color)
+
+        # Fallback: maintenance chart colors (string names)
+        chart = getattr(app, 'maintenance_chart', None)
+        if chart:
+            for area in chart.get('areas', []):
+                for layer in area.get('layers', []):
+                    product = layer.get('product', '')
+                    color = layer.get('color', '')
+                    if product and color:
+                        colors.setdefault(product, [])
+                        if not any(c.get('name') == color for c in colors[product]):
+                            colors[product].append({'name': color, 'hex': ''})
+
+        # Override: DB-stored product colors (from cloud color picker)
+        try:
+            products = app.db.get_products()
+            for p in products:
+                raw = p.get("colors_json", "[]")
+                if isinstance(raw, str):
+                    try:
+                        db_colors = _json.loads(raw)
+                    except (ValueError, TypeError):
+                        db_colors = []
+                else:
+                    db_colors = raw or []
+                if db_colors:
+                    colors[p["name"]] = db_colors
+        except Exception:
+            pass
+
+        # Also include colors from vessel_stock
+        try:
+            vessel_stock = app.db.get_vessel_stock()
+            for vs in vessel_stock:
+                raw = vs.get("colors_json", "[]")
+                if isinstance(raw, str):
+                    try:
+                        vs_colors = _json.loads(raw)
+                    except (ValueError, TypeError):
+                        vs_colors = []
+                else:
+                    vs_colors = raw or []
+                if vs_colors and vs["product_name"] not in colors:
+                    colors[vs["product_name"]] = vs_colors
+        except Exception:
+            pass
+
         return colors
 
     def _get_hardener_map(self):
@@ -267,7 +329,7 @@ class InventoryScreen(Screen):
         return bicomp
 
     def _get_current_inventory(self):
-        """Build product inventory from occupied slots, with progress bar data."""
+        """Build product inventory from occupied RFID slots."""
         app = App.get_running_app()
         slots = app.inventory.get_all_slots()
         product_inventory = {}
@@ -291,6 +353,64 @@ class InventoryScreen(Screen):
                     entry['weight_full_g'] += slot.weight_when_placed_g if slot.weight_when_placed_g > 0 else slot.weight_current_g
         return product_inventory
 
+    def _get_vessel_stock(self):
+        """Get vessel-level stock from cloud sync cache."""
+        app = App.get_running_app()
+        try:
+            return app.db.get_vessel_stock()
+        except Exception:
+            return []
+
+    def _build_merged_inventory(self):
+        """Merge vessel stock (primary) with RFID slot data (enrichment).
+
+        Returns dict of {product_name: {liters, initial_liters, fill_pct,
+                                         cans, density, type, source}}.
+        """
+        vessel_stock = self._get_vessel_stock()
+        rfid_inv = self._get_current_inventory()
+
+        merged = {}
+
+        # Primary source: cloud vessel stock
+        for vs in vessel_stock:
+            name = vs["product_name"]
+            initial = vs.get("initial_liters", 0) or 0
+            current = vs.get("current_liters", 0) or 0
+            fill_pct = (current / initial * 100) if initial > 0 else (100 if current > 0 else 0)
+            merged[name] = {
+                'cans': 0,
+                'liters': current,
+                'initial_liters': initial,
+                'fill_pct': fill_pct,
+                'density': vs.get("density_g_per_ml", 1.0) or 1.0,
+                'type': vs.get("product_type", "base_paint"),
+                'source': 'cloud',
+            }
+
+        # Enrich with RFID data (add cans count)
+        for name, rfid_data in rfid_inv.items():
+            if name in merged:
+                merged[name]['cans'] = rfid_data['cans']
+            else:
+                # Product on shelf but not in vessel stock (RFID-only)
+                weight_g = rfid_data.get('weight_current_g', 0)
+                full_g = rfid_data.get('weight_full_g', 0)
+                density = rfid_data.get('density', 1.0) or 1.0
+                liters = (weight_g / density) / 1000.0
+                fill_pct = (weight_g / full_g * 100) if full_g > 0 else (100 if weight_g > 0 else 0)
+                merged[name] = {
+                    'cans': rfid_data['cans'],
+                    'liters': round(liters, 1),
+                    'initial_liters': 0,
+                    'fill_pct': fill_pct,
+                    'density': density,
+                    'type': rfid_data.get('type', 'base_paint'),
+                    'source': 'rfid',
+                }
+
+        return merged
+
     # ── UI building ──
 
     def _build_product_card(self, name, info, product_colors, hardener_map):
@@ -298,15 +418,9 @@ class InventoryScreen(Screen):
         ptype = info.get('type', 'base_paint')
         accent = TYPE_ACCENTS.get(ptype, (0.50, 0.55, 0.64, 1))
         badge_text = TYPE_BADGES.get(ptype, 'Product')
-        cans = info['cans']
-        weight_current_g = info.get('weight_current_g', 0)
-        weight_full_g = info.get('weight_full_g', 0)
-        density = info.get('density', 1.0) or 1.0
-        liters = (weight_current_g / density) / 1000.0 if density > 0 else 0
-        if weight_full_g > 0:
-            fill_pct = (weight_current_g / weight_full_g) * 100
-        else:
-            fill_pct = 100 if weight_current_g > 0 else 0
+        cans = info.get('cans', 0)
+        liters = info.get('liters', 0)
+        fill_pct = info.get('fill_pct', 0)
 
         # Card container
         card = BoxLayout(
@@ -361,9 +475,10 @@ class InventoryScreen(Screen):
         badge_label.bind(size=lambda w, s: setattr(w, 'text_size', s))
         row1.add_widget(badge_label)
 
-        # Can count
+        # Can count (show only if > 0)
+        count_text = f'x{cans}' if cans > 0 else ''
         count_label = Label(
-            text=f'x{cans}',
+            text=count_text,
             font_size='15sp',
             bold=True,
             color=(0.93, 0.95, 0.97, 1),
@@ -439,24 +554,34 @@ class InventoryScreen(Screen):
             clabel.bind(size=lambda w, s: setattr(w, 'text_size', s))
             color_row.add_widget(clabel)
 
-            for cname in product_colors[name][:5]:  # max 5 colors
-                rgba = _resolve_color(cname)
+            for cinfo in product_colors[name][:5]:  # max 5 colors
+                # Support both dict format {"name": "X", "hex": "#Y"} and legacy string
+                if isinstance(cinfo, dict):
+                    cname = cinfo.get('name', '')
+                    chex = cinfo.get('hex', '')
+                    rgba = _hex_to_rgba(chex) if chex else _resolve_color(cname)
+                else:
+                    cname = str(cinfo)
+                    rgba = _resolve_color(cname)
+
                 if rgba:
                     dot = _dot_widget(rgba, size=12)
                     color_row.add_widget(dot)
 
                 # Color name text
-                ctxt = Label(
-                    text=cname.capitalize(),
-                    font_size='11sp',
-                    color=(0.60, 0.64, 0.72, 1),
-                    size_hint=(None, 1),
-                    halign='left',
-                    valign='middle',
-                )
-                ctxt.bind(texture_size=lambda w, ts: setattr(w, 'width', ts[0] + 4))
-                ctxt.bind(size=lambda w, s: setattr(w, 'text_size', s))
-                color_row.add_widget(ctxt)
+                display_name = cname.capitalize() if cname else ''
+                if display_name:
+                    ctxt = Label(
+                        text=display_name,
+                        font_size='11sp',
+                        color=(0.60, 0.64, 0.72, 1),
+                        size_hint=(None, 1),
+                        halign='left',
+                        valign='middle',
+                    )
+                    ctxt.bind(texture_size=lambda w, ts: setattr(w, 'width', ts[0] + 4))
+                    ctxt.bind(size=lambda w, s: setattr(w, 'text_size', s))
+                    color_row.add_widget(ctxt)
 
             # Spacer to fill right side
             color_row.add_widget(Widget())
@@ -497,7 +622,7 @@ class InventoryScreen(Screen):
         _bg(card, (0.11, 0.13, 0.17, 1), radius=10)
 
         lbl = Label(
-            text='No products in locker.\nPlace cans on slots to begin tracking.',
+            text='No products in inventory.\nAdd stock via cloud or place cans on slots.',
             font_size='14sp',
             color=(0.50, 0.55, 0.64, 1),
             halign='center',
@@ -564,14 +689,18 @@ class InventoryScreen(Screen):
         content = self.ids.content_area
         content.clear_widgets()
 
-        # Get data
-        product_inv = self._get_current_inventory()
+        # Get merged data (vessel stock + RFID enrichment)
+        merged_inv = self._build_merged_inventory()
         product_colors = self._get_product_colors()
         hardener_map = self._get_hardener_map()
 
-        # Update item count in status bar
-        total = sum(v['cans'] for v in product_inv.values())
-        self.ids.item_count.text = f'{total} item{"s" if total != 1 else ""}'
+        # Update status bar: total liters
+        total_liters = sum(v['liters'] for v in merged_inv.values())
+        if total_liters > 0:
+            self.ids.item_count.text = f'{total_liters:.0f} L total'
+        else:
+            total_items = sum(v.get('cans', 0) for v in merged_inv.values())
+            self.ids.item_count.text = f'{total_items} item{"s" if total_items != 1 else ""}'
 
         # ── ScrollView with product cards ──
         scroll = ScrollView(do_scroll_x=False)
@@ -585,11 +714,11 @@ class InventoryScreen(Screen):
             minimum_height=product_list.setter('height')
         )
 
-        if product_inv:
+        if merged_inv:
             # Sort: base paints first, then hardeners, thinners, primers
             type_order = {'base_paint': 0, 'primer': 1, 'hardener': 2, 'thinner': 3}
             sorted_products = sorted(
-                product_inv.items(),
+                merged_inv.items(),
                 key=lambda x: (type_order.get(x[1]['type'], 9), x[0])
             )
 

@@ -309,7 +309,7 @@ class SyncEngine:
                 logger.warning("Config sync failed, will retry later")
                 return
 
-            # Update products
+            # Update products (including colors)
             products = config.get("products", [])
             for p in products:
                 self.db.upsert_product({
@@ -322,6 +322,7 @@ class SyncEngine:
                     "hazard_class": p.get("hazard_class", ""),
                     "can_sizes_ml": p.get("can_sizes_ml", []),
                     "can_tare_weight_g": p.get("can_tare_weight_g", {}),
+                    "colors_json": p.get("colors_json", []),
                 })
 
             # Update recipes
@@ -347,6 +348,14 @@ class SyncEngine:
             if chart:
                 self.db.save_maintenance_chart(chart)
                 logger.info(f"Maintenance chart synced: {chart.get('vessel_name', '?')}")
+
+            # Save vessel inventory from cloud
+            vessel_inv = config.get("vessel_inventory")
+            if vessel_inv is not None:
+                self.db.clear_vessel_stock()
+                for item in vessel_inv:
+                    self.db.upsert_vessel_stock(item)
+                logger.info(f"Vessel inventory synced: {len(vessel_inv)} products")
 
             # Update admin password if sent from cloud
             new_password = config.get("admin_password")

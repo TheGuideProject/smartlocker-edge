@@ -80,6 +80,27 @@ class Database:
             'CREATE INDEX IF NOT EXISTS idx_health_log_sensor '
             'ON sensor_health_log(sensor)'
         )
+
+        # Create vessel_stock table (cloud-synced vessel inventory)
+        self._conn.execute('''
+            CREATE TABLE IF NOT EXISTS vessel_stock (
+                product_id TEXT PRIMARY KEY,
+                product_name TEXT NOT NULL,
+                product_type TEXT DEFAULT 'base_paint',
+                current_liters REAL DEFAULT 0.0,
+                initial_liters REAL DEFAULT 0.0,
+                density_g_per_ml REAL DEFAULT 1.0,
+                colors_json TEXT DEFAULT '[]',
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        ''')
+
+        # Migration: add colors_json column to product if missing
+        try:
+            self._conn.execute("ALTER TABLE product ADD COLUMN colors_json TEXT DEFAULT '[]'")
+        except Exception:
+            pass  # Column already exists
+
         self._conn.commit()
 
     def close(self) -> None:
@@ -254,11 +275,17 @@ class Database:
 
     def upsert_product(self, product: Dict[str, Any]) -> None:
         """Insert or update a product in the local catalog."""
+        colors = product.get("colors_json", [])
+        if isinstance(colors, str):
+            colors_str = colors
+        else:
+            colors_str = json.dumps(colors) if colors else "[]"
         self.conn.execute(
             """INSERT OR REPLACE INTO product
                (product_id, ppg_code, name, product_type, density_g_per_ml,
-                pot_life_minutes, hazard_class, can_sizes_ml, can_tare_weight_g)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                pot_life_minutes, hazard_class, can_sizes_ml, can_tare_weight_g,
+                colors_json)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (
                 product["product_id"],
                 product.get("ppg_code", ""),
@@ -269,6 +296,7 @@ class Database:
                 product.get("hazard_class", ""),
                 json.dumps(product.get("can_sizes_ml", [])),
                 json.dumps(product.get("can_tare_weight_g", {})),
+                colors_str,
             ),
         )
         self.conn.commit()
@@ -289,6 +317,51 @@ class Database:
         )
         row = cursor.fetchone()
         return dict(row) if row else None
+
+    # ============================================================
+    # VESSEL STOCK (cloud-synced vessel inventory)
+    # ============================================================
+
+    def upsert_vessel_stock(self, stock: Dict[str, Any]) -> None:
+        """Insert or update a vessel stock entry from cloud sync."""
+        colors = stock.get("colors_json", [])
+        if isinstance(colors, str):
+            colors_str = colors
+        else:
+            colors_str = json.dumps(colors) if colors else "[]"
+        self.conn.execute(
+            """INSERT OR REPLACE INTO vessel_stock
+               (product_id, product_name, product_type,
+                current_liters, initial_liters, density_g_per_ml,
+                colors_json, updated_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)""",
+            (
+                stock["product_id"],
+                stock["product_name"],
+                stock.get("product_type", "base_paint"),
+                stock.get("current_liters", 0.0),
+                stock.get("initial_liters", 0.0),
+                stock.get("density_g_per_ml", 1.0),
+                colors_str,
+            ),
+        )
+        self.conn.commit()
+
+    def get_vessel_stock(self) -> List[Dict[str, Any]]:
+        """Get all vessel stock entries (from cloud sync)."""
+        cursor = self.conn.execute(
+            "SELECT * FROM vessel_stock ORDER BY product_name"
+        )
+        return [dict(row) for row in cursor.fetchall()]
+
+    def clear_vessel_stock(self) -> None:
+        """Clear vessel stock table before full refresh."""
+        self.conn.execute("DELETE FROM vessel_stock")
+        self.conn.commit()
+
+    # ============================================================
+    # MIXING RECIPES
+    # ============================================================
 
     def upsert_recipe(self, recipe: Dict[str, Any]) -> None:
         """Insert or update a mixing recipe."""
