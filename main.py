@@ -73,8 +73,13 @@ def main_cli():
 
     # ---- RFID Driver ----
     if drv_rfid == "real":
-        from hal.real.real_rfid import RealRFIDDriver
-        rfid = RealRFIDDriver()
+        from config.settings import RFID_MODULE
+        if RFID_MODULE == "rc522":
+            from hal.real.real_rfid_rc522 import RealRFIDDriverRC522
+            rfid = RealRFIDDriverRC522()
+        else:
+            from hal.real.real_rfid import RealRFIDDriver
+            rfid = RealRFIDDriver()
     else:
         from hal.fake.fake_rfid import FakeRFIDDriver
         rfid = FakeRFIDDriver()

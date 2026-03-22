@@ -33,7 +33,8 @@ MODE = "auto"
 #   mixed     -> "hybrid" mode
 #   all real  -> "live" mode
 # ============================================================
-DRIVER_RFID = "fake"       # "fake" or "real" - PN532 NFC/RFID reader via I2C
+DRIVER_RFID = "fake"       # "fake" or "real"
+RFID_MODULE = "rc522"      # "rc522" (SPI, MFRC522) or "pn532" (I2C, Adafruit)
 DRIVER_WEIGHT = "fake"     # "fake" or "real" - Arduino Nano HX711 bridge via Serial
 DRIVER_LED = "fake"        # "fake" or "real" - WS2812B LED strip via SPI
 DRIVER_BUZZER = "fake"     # "fake" or "real" - GPIO PWM buzzer
