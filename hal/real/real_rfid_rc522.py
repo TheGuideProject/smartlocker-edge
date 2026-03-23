@@ -1,28 +1,11 @@
 """
 Real RFID Driver - RC522 (MFRC522) NFC/RFID Reader via SPI
 
-Connects to an RC522 RFID reader on the Raspberry Pi's SPI bus.
-Reads ISO14443A (NTAG215) tags placed under paint cans.
-Reads both UID and product data stored on the tag.
+Reads NTAG215 tags: UID + product data (PPG_CODE/BATCH/PRODUCT_NAME/COLOR).
 
-Tag data format: PPG_CODE/BATCH/PRODUCT_NAME/COLOR
-Example: 616826/80008800/SIGMAPRIME-200/YELLOWGREEN
+Hardware: SDA→GPIO8, SCK→GPIO11, MOSI→GPIO10, MISO→GPIO9, RST→GPIO25, 3.3V, GND
 
-Hardware setup (RPi5):
-  - SDA (SS)  → GPIO 8  (Pin 24, CE0)
-  - SCK       → GPIO 11 (Pin 23)
-  - MOSI      → GPIO 10 (Pin 19)
-  - MISO      → GPIO 9  (Pin 21)
-  - RST       → GPIO 25 (Pin 22)
-  - GND       → Pin 6
-  - 3.3V      → Pin 1   (NEVER 5V!)
-  - IRQ       → Not connected
-
-Required library (install on RPi):
-  pip install mfrc522
-
-Graceful fallback: if mfrc522 is not installed (e.g., on Windows),
-all methods log warnings and return safely without crashing.
+Graceful fallback on Windows/non-RPi.
 """
 
 import logging
@@ -33,7 +16,6 @@ from hal.interfaces import RFIDDriverInterface, TagReading
 
 logger = logging.getLogger("smartlocker.sensor")
 
-# ---------- Graceful import with fallback ----------
 try:
     from mfrc522 import SimpleMFRC522
     import RPi.GPIO as GPIO
@@ -41,82 +23,100 @@ try:
 except ImportError:
     HAS_RC522 = False
     SimpleMFRC522 = None  # type: ignore[assignment, misc]
-    logger.warning(
-        "[REAL RFID] mfrc522 library not installed. "
-        "RFID reader will be non-functional. Install with: "
-        "pip install mfrc522"
-    )
+    logger.warning("[REAL RFID] mfrc522 library not installed.")
 
-# NTAG215 constants
-NTAG_READ_CMD = 0x30
 USER_PAGE_START = 4
-USER_PAGE_END = 129
 
 
 class RealRFIDDriverRC522(RFIDDriverInterface):
-    """
-    Real RC522 (MFRC522) RFID driver over SPI.
-
-    Reads NFC tags (NTAG215) attached to paint can bottoms.
-    Returns both UID and product data stored on the tag.
-    """
+    """RC522 RFID driver — reads NTAG215 UID + product data via SPI."""
 
     def __init__(self):
         self._reader = None
-        self._rdr = None  # Low-level MFRC522
+        self._rdr = None
         self._initialized = False
         self._reader_ids = ["shelf1_slot1", "shelf1_slot2", "shelf1_slot3", "shelf1_slot4"]
 
     def initialize(self) -> bool:
         if not HAS_RC522:
-            logger.warning(
-                "[REAL RFID] Cannot initialize: mfrc522 library not available."
-            )
             self._initialized = False
             return False
-
         try:
             self._reader = SimpleMFRC522()
             self._rdr = self._reader.READER
             self._initialized = True
-            logger.info("[REAL RFID] RC522 initialized via SPI (GPIO 8 CE0)")
+            logger.info("[REAL RFID] RC522 initialized via SPI")
             return True
         except Exception as e:
-            logger.error(f"[REAL RFID] Failed to initialize RC522: {e}")
+            logger.error(f"[REAL RFID] Init failed: {e}")
             self._initialized = False
             return False
 
-    def _ntag_read_data(self) -> Optional[str]:
-        """Read product data from NTAG215 user pages (4+). Returns decoded string or None."""
-        if not self._rdr:
+    def _ntag_read_page(self, page):
+        """Read 16 bytes (4 pages) from NTAG215 using manual CRC."""
+        rdr = self._rdr
+        if not rdr:
             return None
 
-        raw = bytearray()
         try:
-            for page in range(USER_PAGE_START, min(USER_PAGE_START + 16, USER_PAGE_END)):
-                # Read 4 pages at once (16 bytes)
-                buf = [NTAG_READ_CMD, page]
-                (status, data, _) = self._rdr.MFRC522_ToCard(
-                    self._rdr.PCD_TRANSCEIVE, buf
-                )
-                if status != self._rdr.MI_OK or not data:
-                    break
-                raw.extend(data[:4])
-                # Stop if null terminator found
-                if 0x00 in data[:4]:
-                    break
+            # Disable CRC on RX
+            rdr.Write_MFRC522(0x13, 0x00)
 
-            if raw:
-                text = raw.split(b'\x00')[0].decode('utf-8')
-                return text if text else None
+            # Calculate CRC_A for READ command
+            rdr.Write_MFRC522(0x01, 0x00)  # Idle
+            rdr.Write_MFRC522(0x05, 0x04)  # Clear DivIrq
+            rdr.Write_MFRC522(0x0A, 0x80)  # Flush FIFO
+            rdr.Write_MFRC522(0x09, 0x30)  # READ cmd
+            rdr.Write_MFRC522(0x09, page)  # Page number
+            rdr.Write_MFRC522(0x01, 0x03)  # CalcCRC
+
+            time.sleep(0.05)
+
+            crc_lo = rdr.Read_MFRC522(0x22)
+            crc_hi = rdr.Read_MFRC522(0x21)
+
+            buf = [0x30, page, crc_lo, crc_hi]
+            (status, recv, _) = rdr.MFRC522_ToCard(rdr.PCD_TRANSCEIVE, buf)
+
+            if status == rdr.MI_OK and recv and len(recv) >= 16:
+                return recv[:16]
         except Exception as e:
-            logger.debug(f"[REAL RFID] Could not read tag data: {e}")
+            logger.debug(f"[REAL RFID] Read page {page} error: {e}")
+
+        return None
+
+    def _read_product_data(self) -> Optional[str]:
+        """Read product data string from NTAG215 user pages."""
+        raw = bytearray()
+
+        for page in range(USER_PAGE_START, USER_PAGE_START + 32, 4):
+            data = self._ntag_read_page(page)
+            if data is None:
+                break
+            raw.extend(data)
+            if 0x00 in data:
+                break
+
+        if not raw:
+            return None
+
+        try:
+            text = raw.decode('latin-1')
+            # Find PPG_CODE/BATCH/NAME/COLOR pattern (skip NDEF header if present)
+            for i in range(len(text)):
+                remaining = text[i:]
+                if '/' in remaining:
+                    parts = remaining.split('\x00')[0]
+                    segments = parts.split('/')
+                    if len(segments) >= 4 and len(segments[0]) > 0:
+                        return parts
+        except Exception:
+            pass
 
         return None
 
     @staticmethod
-    def _parse_product_data(text: str) -> dict:
-        """Parse PPG_CODE/BATCH/PRODUCT_NAME/COLOR format."""
+    def _parse_product(text: str) -> dict:
         parts = text.split('/')
         if len(parts) >= 4:
             return {
@@ -128,33 +128,27 @@ class RealRFIDDriverRC522(RFIDDriverInterface):
         return {}
 
     def poll_tags(self) -> List[TagReading]:
-        """
-        Poll the RC522 for NFC tags.
-        Returns UID + product data if available.
-        """
         if not self._initialized or not HAS_RC522 or not self._rdr:
             return []
 
         try:
-            # Request tag presence
-            (status, _) = self._rdr.MFRC522_Request(self._rdr.PICC_REQIDL)
-            if status != self._rdr.MI_OK:
+            rdr = self._rdr
+            (status, _) = rdr.MFRC522_Request(rdr.PICC_REQIDL)
+            if status != rdr.MI_OK:
                 return []
 
-            # Anti-collision — get UID
-            (status, uid_bytes) = self._rdr.MFRC522_Anticoll()
-            if status != self._rdr.MI_OK:
+            (status, uid_bytes) = rdr.MFRC522_Anticoll()
+            if status != rdr.MI_OK:
                 return []
 
-            # Select tag (required for reading data pages)
-            self._rdr.MFRC522_SelectTag(uid_bytes)
+            rdr.MFRC522_SelectTag(uid_bytes)
+            rdr.MFRC522_StopCrypto1()
 
-            # Convert UID to hex string
             tag_id = ":".join(f"{b:02X}" for b in uid_bytes if b != 0)
 
-            # Try to read product data from NTAG
-            product_data = self._ntag_read_data()
-            parsed = self._parse_product_data(product_data) if product_data else {}
+            # Read product data from NTAG pages
+            product_data = self._read_product_data()
+            parsed = self._parse_product(product_data) if product_data else {}
 
             return [TagReading(
                 tag_id=tag_id,
