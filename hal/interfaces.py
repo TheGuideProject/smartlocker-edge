@@ -27,6 +27,12 @@ class TagReading:
     reader_id: str              # Which reader detected it (e.g., "shelf1_slot1")
     signal_strength: int = 0    # 0-100 relative signal quality
     timestamp: float = field(default_factory=time.time)
+    # Product data read from NTAG (format: PPG_CODE/BATCH/PRODUCT_NAME/COLOR)
+    product_data: Optional[str] = None
+    ppg_code: Optional[str] = None
+    batch_number: Optional[str] = None
+    product_name: Optional[str] = None
+    color: Optional[str] = None
 
 
 @dataclass
