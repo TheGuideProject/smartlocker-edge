@@ -273,7 +273,7 @@ class SmartLockerWindow(QMainWindow):
             print(f"  Maintenance chart loaded: {chart_name}")
 
         # Slot count
-        self.slot_count = self.db.get_config_value("slot_count") or 4
+        self.slot_count = self.db.get_config("slot_count") or 4
         try:
             self.slot_count = int(self.slot_count)
         except (ValueError, TypeError):
