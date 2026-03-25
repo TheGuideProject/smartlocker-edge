@@ -35,9 +35,9 @@ MODE = "auto"
 # ============================================================
 DRIVER_RFID = "fake"       # "fake" or "real"
 RFID_MODULE = "rc522"      # "rc522" (SPI, MFRC522) or "pn532" (I2C, Adafruit)
-DRIVER_WEIGHT = "fake"     # "fake" or "real" - Arduino Nano HX711 bridge via Serial
+DRIVER_WEIGHT = "real"     # "fake" or "real" - HX711 direct GPIO (calibrated 2026-03-25)
 DRIVER_LED = "fake"        # "fake" or "real" - WS2812B LED strip via SPI
-DRIVER_BUZZER = "fake"     # "fake" or "real" - GPIO PWM buzzer
+DRIVER_BUZZER = "real"     # "fake" or "real" - GPIO PWM buzzer on GPIO 13
 
 # ============================================================
 # DEVICE IDENTITY
