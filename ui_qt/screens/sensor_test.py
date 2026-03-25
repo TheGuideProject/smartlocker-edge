@@ -36,7 +36,7 @@ class WeightChartWidget(QWidget):
         super().__init__(parent)
         self._data = deque(maxlen=self.MAX_POINTS)
         self.setMinimumHeight(120)
-        self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         self.setStyleSheet(f"background-color: {C.BG_INPUT}; border-radius: 6px;")
 
     def add_point(self, grams: float):
