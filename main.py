@@ -179,9 +179,12 @@ def main_ui():
 
     from kivy.config import Config
 
-    # Window size for 4.3" touchscreen (800x480)
-    Config.set('graphics', 'width', '800')
-    Config.set('graphics', 'height', '480')
+    # Load saved display mode (touch43=800x480, desktop=1280x800)
+    from ui.display_mode import DisplayMode, MODES
+    dm = DisplayMode.instance()
+    preset = dm.get_preset()
+    Config.set('graphics', 'width', str(preset['width']))
+    Config.set('graphics', 'height', str(preset['height']))
     Config.set('graphics', 'resizable', '1')
     Config.set('graphics', 'minimum_width', '800')
     Config.set('graphics', 'minimum_height', '480')

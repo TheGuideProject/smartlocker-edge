@@ -362,6 +362,62 @@ Builder.load_string('''
                                 size: self.size
                                 radius: [10]
 
+                # ==== SENSOR TESTING ====
+                BoxLayout:
+                    size_hint_y: None
+                    height: '48dp'
+                    Button:
+                        text: 'SENSOR TESTING'
+                        font_size: '14sp'
+                        bold: True
+                        background_normal: ''
+                        background_color: 0, 0, 0, 0
+                        color: 0.33, 0.58, 0.85, 1
+                        on_release: app.go_screen('sensor_test')
+                        canvas.before:
+                            Color:
+                                rgba: 0.06, 0.08, 0.14, 1
+                            RoundedRectangle:
+                                pos: self.pos
+                                size: self.size
+                                radius: [10]
+
+                # ==== DISPLAY MODE ====
+                BoxLayout:
+                    size_hint_y: None
+                    height: '48dp'
+                    spacing: 8
+                    Button:
+                        text: 'Touch 4.3"'
+                        font_size: '13sp'
+                        bold: True
+                        background_normal: ''
+                        background_color: 0.00, 0.55, 0.49, 1
+                        color: 1, 1, 1, 1
+                        on_release: root.switch_display('touch43')
+                        canvas.before:
+                            Color:
+                                rgba: 0.06, 0.12, 0.12, 1
+                            RoundedRectangle:
+                                pos: self.pos
+                                size: self.size
+                                radius: [10]
+                    Button:
+                        text: 'Desktop'
+                        font_size: '13sp'
+                        bold: True
+                        background_normal: ''
+                        background_color: 0.13, 0.15, 0.20, 1
+                        color: 0.60, 0.64, 0.72, 1
+                        on_release: root.switch_display('desktop')
+                        canvas.before:
+                            Color:
+                                rgba: 0.10, 0.12, 0.16, 1
+                            RoundedRectangle:
+                                pos: self.pos
+                                size: self.size
+                                radius: [10]
+
                 # ==== ADMIN ACCESS ====
                 BoxLayout:
                     size_hint_y: None
@@ -494,3 +550,60 @@ class SettingsScreen(Screen):
         from ui.screens.admin import show_admin_password_dialog
         app = App.get_running_app()
         show_admin_password_dialog(lambda: app.go_screen('admin'))
+
+    def switch_display(self, mode_name):
+        """Switch display mode with confirmation popup."""
+        from ui.display_mode import DisplayMode
+        from kivy.uix.popup import Popup
+        from kivy.uix.boxlayout import BoxLayout
+        from kivy.uix.label import Label
+        from kivy.uix.button import Button
+
+        dm = DisplayMode.instance()
+        if dm.mode == mode_name:
+            return  # Already in this mode
+
+        dm.switch_mode(mode_name)
+
+        # Confirmation popup
+        content = BoxLayout(orientation='vertical', spacing=10, padding=10)
+        content.add_widget(Label(
+            text=f'Display mode switched to {mode_name.upper()}.\n\n'
+                 f'Confirm within 15 seconds or it will revert.',
+            font_size='15sp', halign='center', valign='middle',
+            color=(0.96, 0.97, 0.98, 1),
+        ))
+
+        btn_row = BoxLayout(size_hint_y=None, height='54dp', spacing=10)
+        confirm_btn = Button(
+            text='CONFIRM', font_size='16sp', bold=True,
+            background_normal='', background_color=(0.00, 0.82, 0.73, 1),
+            color=(0.02, 0.05, 0.08, 1),
+        )
+        cancel_btn = Button(
+            text='CANCEL', font_size='16sp', bold=True,
+            background_normal='', background_color=(0.93, 0.27, 0.32, 1),
+            color=(1, 1, 1, 1),
+        )
+        btn_row.add_widget(confirm_btn)
+        btn_row.add_widget(cancel_btn)
+        content.add_widget(btn_row)
+
+        popup = Popup(
+            title='Display Mode',
+            content=content,
+            size_hint=(0.8, 0.4),
+            auto_dismiss=False,
+        )
+
+        def on_confirm(_):
+            dm.confirm()
+            popup.dismiss()
+
+        def on_cancel(_):
+            dm.cancel()
+            popup.dismiss()
+
+        confirm_btn.bind(on_release=on_confirm)
+        cancel_btn.bind(on_release=on_cancel)
+        popup.open()
