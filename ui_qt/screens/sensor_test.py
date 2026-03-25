@@ -161,7 +161,7 @@ def _status_header(driver_name: str, driver_type: str, is_healthy: bool) -> QHBo
     row.addStretch()
 
     dot_color = C.SUCCESS if is_healthy else C.DANGER
-    dot = QLabel("\u25CF")
+    dot = QLabel("*")
     dot.setStyleSheet(f"font-size: 14px; color: {dot_color};")
     row.addWidget(dot)
 
@@ -221,7 +221,7 @@ class SensorTestScreen(QWidget):
 
         # Top bar
         top = QHBoxLayout()
-        self._back_btn = _action_btn("\u2190  Back", "ghost")
+        self._back_btn = _action_btn("<  Back", "ghost")
         self._back_btn.clicked.connect(self.app.go_back)
         top.addWidget(self._back_btn)
 
@@ -241,10 +241,10 @@ class SensorTestScreen(QWidget):
         self._tabs = QTabWidget()
         root.addWidget(self._tabs, stretch=1)
 
-        self._tabs.addTab(self._build_weight_tab(), "\u2696  Weight")
-        self._tabs.addTab(self._build_rfid_tab(), "\U0001F4F6  RFID")
-        self._tabs.addTab(self._build_led_tab(), "\U0001F4A1  LED")
-        self._tabs.addTab(self._build_buzzer_tab(), "\U0001F50A  Buzzer")
+        self._tabs.addTab(self._build_weight_tab(), "Weight")
+        self._tabs.addTab(self._build_rfid_tab(), "RFID")
+        self._tabs.addTab(self._build_led_tab(), "LED")
+        self._tabs.addTab(self._build_buzzer_tab(), "Buzzer")
 
     # ──────────────────────────────────────────────────
     # WEIGHT TAB
@@ -305,6 +305,10 @@ class SensorTestScreen(QWidget):
         # Grams display
         self._weight_grams = QLabel("---")
         self._weight_grams.setObjectName("hero")
+        self._weight_grams.setStyleSheet(
+            f"font-size: 52px; font-weight: bold; color: {C.PRIMARY};"
+        )
+        self._weight_grams.setMinimumHeight(64)
         self._weight_grams.setAlignment(Qt.AlignmentFlag.AlignCenter)
         reading_layout.addWidget(self._weight_grams)
 
@@ -319,7 +323,7 @@ class SensorTestScreen(QWidget):
         # Stability indicator
         stab_row = QHBoxLayout()
         stab_row.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self._stability_dot = QLabel("\u25CF")
+        self._stability_dot = QLabel("*")
         self._stability_dot.setStyleSheet(f"font-size: 14px; color: {C.WARNING};")
         stab_row.addWidget(self._stability_dot)
         self._stability_text = QLabel("WAITING")
@@ -454,7 +458,7 @@ class SensorTestScreen(QWidget):
         layout.addLayout(hdr)
 
         # Scan button
-        self._rfid_scan_btn = _action_btn("\U0001F4E1  SCAN NOW", "primary")
+        self._rfid_scan_btn = _action_btn("SCAN NOW", "primary")
         self._rfid_scan_btn.clicked.connect(self._do_rfid_scan)
         layout.addWidget(self._rfid_scan_btn)
 
@@ -561,7 +565,7 @@ class SensorTestScreen(QWidget):
             self._rfid_uid.setText("SCAN ERROR")
             self._rfid_signal.setText(f"Error: {e}")
 
-        self._rfid_scan_btn.setText("\U0001F4E1  SCAN NOW")
+        self._rfid_scan_btn.setText("SCAN NOW")
         self._rfid_scan_btn.setEnabled(True)
 
     def _rebuild_rfid_history(self):
@@ -785,7 +789,7 @@ class SensorTestScreen(QWidget):
         for pattern, name, desc in patterns_info:
             btn_layout = QHBoxLayout()
 
-            btn = _action_btn(f"\u266B  {name}", "accent")
+            btn = _action_btn(f"{name}", "accent")
             btn.setMinimumHeight(S.BTN_H)
             btn.clicked.connect(lambda checked, p=pattern: self._play_buzzer(p))
             btn_layout.addWidget(btn, stretch=1)
@@ -805,7 +809,7 @@ class SensorTestScreen(QWidget):
             layout.addWidget(card)
 
         # STOP button
-        stop_btn = _action_btn("\u23F9  STOP", "danger")
+        stop_btn = _action_btn("STOP", "danger")
         stop_btn.setMinimumHeight(S.BTN_H_LG)
         stop_btn.clicked.connect(self._stop_buzzer)
         layout.addWidget(stop_btn)

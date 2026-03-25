@@ -51,14 +51,14 @@ class C:
 # ══════════════════════════════════════════════════════════
 
 class F:
-    """Font size constants (px)."""
-    HERO   = 42
-    H1     = 28
-    H2     = 22
-    H3     = 18
-    BODY   = 15
-    SMALL  = 13
-    TINY   = 11
+    """Font size constants (px) — optimized for 4.3" 800x480 touch."""
+    HERO   = 52
+    H1     = 32
+    H2     = 26
+    H3     = 22
+    BODY   = 18
+    SMALL  = 16
+    TINY   = 14
 
 
 # ══════════════════════════════════════════════════════════
@@ -66,14 +66,14 @@ class F:
 # ══════════════════════════════════════════════════════════
 
 class S:
-    """Spacing constants (px)."""
-    PAD       = 16
-    PAD_CARD  = 14
-    GAP       = 10
-    RADIUS    = 12
-    BTN_H     = 52
-    BTN_H_LG  = 64
-    STATUS_H  = 48
+    """Spacing constants (px) — optimized for 4.3" touch with gloves."""
+    PAD       = 12
+    PAD_CARD  = 10
+    GAP       = 8
+    RADIUS    = 10
+    BTN_H     = 56
+    BTN_H_LG  = 68
+    STATUS_H  = 50
 
 
 # ══════════════════════════════════════════════════════════
