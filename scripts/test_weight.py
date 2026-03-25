@@ -86,8 +86,9 @@ def mode_live():
         GPIO.cleanup()
         return
 
-    # Calibration: ~5275 units per kg (from user tests)
-    scale = 5.275  # units per gram
+    # Calibration: ~23450 units per kg (calibrated 2026-03-25)
+    # Note: values DECREASE with weight, so grams = (offset - raw) / scale
+    scale = 23.45  # units per gram
 
     print(f"  Tare offset: {offset}")
     print(f"  Scale factor: {scale} units/gram")
@@ -100,7 +101,7 @@ def mode_live():
         while True:
             raw = read_averaged(3)
             if raw is not None:
-                grams = (raw - offset) / scale
+                grams = (offset - raw) / scale  # Values decrease with weight
                 grams = max(0, grams)
                 kg = grams / 1000
 

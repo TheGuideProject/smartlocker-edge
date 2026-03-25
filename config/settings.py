@@ -113,7 +113,7 @@ RFID_I2C_ADDRESSES = [0x24]     # List for multi-reader setups
 WEIGHT_MODE = "hx711_direct"          # "hx711_direct" or "arduino_serial"
 HX711_DT_PIN = 5                      # GPIO pin for HX711 DOUT
 HX711_SCK_PIN = 6                     # GPIO pin for HX711 SCK
-HX711_SCALE_FACTOR = 5.275            # Raw units per gram (calibrate with test_weight.py)
+HX711_SCALE_FACTOR = 23.45            # Raw units per gram (calibrated 2026-03-25: 23450 units/kg)
 
 # Weight - Arduino Nano via Serial (HX711 bridge, for multi-channel setups)
 # Protocol: Arduino sends JSON lines: {"channel":"shelf1","grams":1234.5,"stable":true}

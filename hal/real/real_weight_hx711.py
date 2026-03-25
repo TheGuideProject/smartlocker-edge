@@ -42,7 +42,8 @@ class HX711Channel:
         self.dt_pin = dt_pin
         self.sck_pin = sck_pin
         self.offset = 0       # Raw value at zero load
-        self.scale = 5.275    # Raw units per gram (calibrated from 0-2kg tests)
+        self.scale = 23.45    # Raw units per gram (calibrated 2026-03-25)
+        self.inverted = True  # True = raw values DECREASE with weight
         self._last_raw = 0
         self._last_grams = 0.0
         self._readings_buffer = []
@@ -115,8 +116,10 @@ class HX711Channel:
         if raw is None:
             return self._last_grams
 
-        grams = (raw - self.offset) / self.scale if self.scale != 0 else 0.0
-        # Negative means lighter than tare — clamp to 0
+        if self.inverted:
+            grams = (self.offset - raw) / self.scale if self.scale != 0 else 0.0
+        else:
+            grams = (raw - self.offset) / self.scale if self.scale != 0 else 0.0
         grams = max(0.0, grams)
 
         # Check stability
