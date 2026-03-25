@@ -86,8 +86,13 @@ def main_cli():
 
     # ---- Weight Driver ----
     if drv_weight == "real":
-        from hal.real.real_weight import RealWeightDriver
-        weight = RealWeightDriver()
+        from config.settings import WEIGHT_MODE
+        if WEIGHT_MODE == "hx711_direct":
+            from hal.real.real_weight_hx711 import RealWeightDriverHX711
+            weight = RealWeightDriverHX711()
+        else:
+            from hal.real.real_weight import RealWeightDriver
+            weight = RealWeightDriver()
     else:
         from hal.fake.fake_weight import FakeWeightDriver
         weight = FakeWeightDriver()

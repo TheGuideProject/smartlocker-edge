@@ -184,6 +184,10 @@ class RealBuzzerDriver(BuzzerDriverInterface):
         except Exception:
             pass
 
+    def is_healthy(self) -> bool:
+        """Check if buzzer GPIO is initialized and functional."""
+        return self._initialized and HAS_GPIO
+
     def shutdown(self) -> None:
         """Stop sound and release GPIO resources."""
         self.stop()
