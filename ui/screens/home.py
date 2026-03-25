@@ -464,14 +464,14 @@ class HomeScreen(Screen):
         ]
 
         icon_map = {
-            "CHECK\nCHART": chr(0x1F4CA),   # bar chart
-            "INVENTORY": chr(0x1F4E6),       # package
-            "SENSORS": chr(0x1F527),         # wrench
-            "SETTINGS": chr(0x2699),         # gear
+            "CHECK\nCHART": "[C]",
+            "INVENTORY": "[I]",
+            "SENSORS": "[S]",
+            "SETTINGS": "[G]",
         }
 
         for label_text, _short, accent, screen_name in tiles:
-            icon = icon_map.get(label_text, "")
+            icon = icon_map.get(label_text, _short)
             tile = _nav_tile(
                 label_text=label_text,
                 icon_text=icon,
