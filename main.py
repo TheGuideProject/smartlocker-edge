@@ -208,8 +208,16 @@ def main_ui():
     SmartLockerApp().run()
 
 
+def main_qt():
+    """Start the PySide6 modern UI (new default)."""
+    from ui_qt.app import run_qt_app
+    run_qt_app()
+
+
 if __name__ == "__main__":
     if "--cli" in sys.argv:
         main_cli()
+    elif "--kivy" in sys.argv:
+        main_ui()  # Legacy Kivy UI
     else:
-        main_ui()
+        main_qt()  # New PySide6 UI (default)
