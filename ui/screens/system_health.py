@@ -1,18 +1,21 @@
 """
-System Health Screen - Real-time system metrics with line graphs.
+System Health Screen - Real-time system metrics with line graphs (2026 Redesign)
 
-Displays CPU temperature, RAM usage, disk usage with rolling line charts
-drawn using Kivy Canvas API (zero external dependencies).
-Also shows system status indicators for clock, power, SD card, throttle.
+Displays CPU temperature, RAM usage, disk usage, CPU percentage with rolling
+line charts drawn using Kivy Canvas API (zero external dependencies).
+Also shows throttle state indicator and color-coded status badges.
 
-Accessible from Settings → HEALTH button.
+Refresh: 1 second interval.
+Data: app.system_monitor.get_metrics() -> dict with:
+    cpu_temp, ram_pct, disk_pct, cpu_pct, throttle_state
 """
 
 import time
+import collections
 
 from kivy.uix.screenmanager import Screen
 from kivy.uix.boxlayout import BoxLayout
-from kivy.uix.scrollview import ScrollView
+from kivy.uix.gridlayout import GridLayout
 from kivy.uix.widget import Widget
 from kivy.uix.label import Label
 from kivy.graphics import Color, Line, Rectangle, RoundedRectangle, Ellipse
@@ -20,7 +23,238 @@ from kivy.lang import Builder
 from kivy.app import App
 from kivy.clock import Clock
 from kivy.metrics import dp
+from kivy.properties import NumericProperty
 
+from ui.app import DS
+
+
+# ==============================================================
+# MINI LINE GRAPH WIDGET (canvas-based, no external deps)
+# ==============================================================
+
+class MiniLineGraph(Widget):
+    """
+    A compact rolling line graph drawn on Kivy Canvas.
+
+    Parameters:
+        max_points: number of data points to retain (rolling window)
+        y_min / y_max: value range for the Y axis
+        line_color: RGBA tuple for the data line
+        threshold_lines: list of (value, rgba_tuple) for horizontal threshold lines
+        label_text: optional label displayed in top-left
+        unit_text: unit suffix for the current value label
+    """
+
+    current_value = NumericProperty(0)
+
+    def __init__(self, max_points=60, y_min=0, y_max=100,
+                 line_color=DS.PRIMARY, threshold_lines=None,
+                 label_text='', unit_text='', **kwargs):
+        super().__init__(**kwargs)
+        self._max_points = max_points
+        self._y_min = y_min
+        self._y_max = y_max
+        self._line_color = line_color
+        self._threshold_lines = threshold_lines or []
+        self._label_text = label_text
+        self._unit_text = unit_text
+        self._data = collections.deque(maxlen=max_points)
+
+        # Pre-fill with zeros
+        for _ in range(max_points):
+            self._data.append(0)
+
+        self.bind(pos=self._redraw, size=self._redraw)
+
+    def add_point(self, value):
+        """Append a new data point and redraw."""
+        self._data.append(value)
+        self.current_value = value
+        self._redraw()
+
+    def _redraw(self, *_args):
+        """Full canvas redraw."""
+        self.canvas.clear()
+        if self.width < dp(20) or self.height < dp(20):
+            return
+
+        x0, y0 = self.pos
+        w, h = self.size
+        pad_left = dp(4)
+        pad_bottom = dp(4)
+        pad_top = dp(28)  # space for label
+        pad_right = dp(4)
+
+        graph_x = x0 + pad_left
+        graph_y = y0 + pad_bottom
+        graph_w = w - pad_left - pad_right
+        graph_h = h - pad_bottom - pad_top
+
+        y_range = max(self._y_max - self._y_min, 1)
+
+        with self.canvas:
+            # Card background
+            Color(*DS.BG_CARD)
+            RoundedRectangle(pos=self.pos, size=self.size, radius=[dp(DS.RADIUS)])
+
+            # Graph area subtle background
+            Color(0.08, 0.09, 0.13, 1)
+            RoundedRectangle(
+                pos=(graph_x, graph_y),
+                size=(graph_w, graph_h),
+                radius=[dp(6)],
+            )
+
+            # Threshold lines
+            for thresh_val, thresh_color in self._threshold_lines:
+                if self._y_min <= thresh_val <= self._y_max:
+                    ty = graph_y + (thresh_val - self._y_min) / y_range * graph_h
+                    Color(*thresh_color)
+                    Line(points=[graph_x, ty, graph_x + graph_w, ty], width=1, dash_length=4, dash_offset=4)
+
+            # Grid lines (horizontal, every 25%)
+            Color(*DS.DIVIDER[:3], 0.3)
+            for frac in (0.25, 0.5, 0.75):
+                gy = graph_y + frac * graph_h
+                Line(points=[graph_x, gy, graph_x + graph_w, gy], width=1)
+
+            # Data line
+            if len(self._data) >= 2:
+                points = []
+                n = len(self._data)
+                step_x = graph_w / max(n - 1, 1)
+                for i, val in enumerate(self._data):
+                    px = graph_x + i * step_x
+                    clamped = max(self._y_min, min(self._y_max, val))
+                    py = graph_y + (clamped - self._y_min) / y_range * graph_h
+                    points.extend([px, py])
+                Color(*self._line_color)
+                Line(points=points, width=dp(1.5))
+
+                # Fill area under the line (semi-transparent)
+                fill_points = [graph_x, graph_y]
+                fill_points.extend(points)
+                fill_points.extend([graph_x + (n - 1) * step_x, graph_y])
+
+            # Current value text
+            val = self._data[-1] if self._data else 0
+            # Determine color based on thresholds
+            val_color = DS.SUCCESS
+            for thresh_val, thresh_color in sorted(self._threshold_lines, key=lambda t: t[0]):
+                if val >= thresh_val:
+                    val_color = thresh_color
+
+            Color(*val_color)
+            # Value indicator dot at the rightmost point
+            if self._data:
+                last_val = self._data[-1]
+                clamped = max(self._y_min, min(self._y_max, last_val))
+                dot_y = graph_y + (clamped - self._y_min) / y_range * graph_h
+                dot_x = graph_x + graph_w
+                Ellipse(pos=(dot_x - dp(3), dot_y - dp(3)), size=(dp(6), dp(6)))
+
+        # Remove old label children and add fresh ones
+        self.clear_widgets()
+
+        # Title label (top-left of widget)
+        title = Label(
+            text=self._label_text,
+            font_size=DS.FONT_SMALL,
+            bold=True,
+            color=DS.TEXT_SECONDARY,
+            pos=(x0 + dp(8), y0 + h - pad_top + dp(2)),
+            size=(graph_w * 0.5, dp(22)),
+            halign='left',
+            text_size=(graph_w * 0.5, dp(22)),
+            valign='middle',
+        )
+        self.add_widget(title)
+
+        # Current value label (top-right of widget)
+        val_text = f'{val:.1f}{self._unit_text}'
+        val_label = Label(
+            text=val_text,
+            font_size=DS.FONT_H3,
+            bold=True,
+            color=val_color if self._threshold_lines else self._line_color,
+            pos=(x0 + graph_w * 0.5 + dp(8), y0 + h - pad_top + dp(2)),
+            size=(graph_w * 0.5, dp(22)),
+            halign='right',
+            text_size=(graph_w * 0.5, dp(22)),
+            valign='middle',
+        )
+        self.add_widget(val_label)
+
+
+# ==============================================================
+# STATUS BADGE WIDGET
+# ==============================================================
+
+class _StatusBadge(BoxLayout):
+    """Compact status indicator: colored dot + label + value."""
+
+    def __init__(self, label_text='', **kwargs):
+        super().__init__(
+            orientation='horizontal',
+            size_hint_y=None,
+            height=dp(32),
+            spacing=dp(6),
+            padding=[dp(8), dp(2)],
+            **kwargs,
+        )
+        with self.canvas.before:
+            Color(*DS.BG_CARD)
+            self._bg = RoundedRectangle(pos=self.pos, size=self.size, radius=[dp(8)])
+        self.bind(pos=lambda w, v: setattr(w._bg, 'pos', v),
+                  size=lambda w, v: setattr(w._bg, 'size', v))
+
+        self._dot = Widget(size_hint=(None, None), size=(dp(10), dp(10)))
+        with self._dot.canvas:
+            Color(*DS.SUCCESS)
+            self._dot_ellipse = Ellipse(pos=self._dot.pos, size=self._dot.size)
+        self._dot.bind(
+            pos=lambda w, v: setattr(self._dot_ellipse, 'pos', (v[0], v[1] + dp(10))),
+            size=lambda w, v: setattr(self._dot_ellipse, 'size', v),
+        )
+
+        self._label = Label(
+            text=label_text,
+            font_size=DS.FONT_SMALL,
+            color=DS.TEXT_SECONDARY,
+            size_hint_x=0.5,
+            halign='left',
+            text_size=(None, None),
+        )
+        self._value = Label(
+            text='--',
+            font_size=DS.FONT_SMALL,
+            bold=True,
+            color=DS.TEXT_PRIMARY,
+            size_hint_x=0.4,
+            halign='right',
+            text_size=(None, None),
+        )
+
+        self.add_widget(self._dot)
+        self.add_widget(self._label)
+        self.add_widget(self._value)
+
+    def update(self, value_text, color=DS.SUCCESS):
+        """Update displayed value and dot color."""
+        self._value.text = str(value_text)
+        self._value.color = color
+        self._dot.canvas.clear()
+        with self._dot.canvas:
+            Color(*color)
+            self._dot_ellipse = Ellipse(
+                pos=(self._dot.x, self._dot.y + dp(10)),
+                size=self._dot.size,
+            )
+
+
+# ==============================================================
+# KV LAYOUT
+# ==============================================================
 
 Builder.load_string('''
 <SystemHealthScreen>:
@@ -48,522 +282,197 @@ Builder.load_string('''
                 text_size: self.size
                 valign: 'middle'
 
-            Label:
-                id: live_indicator
-                text: ''
-                font_size: '11sp'
-                color: 0.20, 0.82, 0.48, 1
-                size_hint_x: 0.3
-                halign: 'right'
-                text_size: self.size
-                valign: 'middle'
-                markup: True
+            Widget:
+                size_hint_x: 0.2
 
-        # ---- SCROLLABLE CONTENT ----
-        ScrollView:
-            do_scroll_x: False
-            bar_color: 0.00, 0.82, 0.73, 0.5
-            bar_width: 4
+        # ---- GRAPH AREA ----
+        BoxLayout:
+            orientation: 'vertical'
+            padding: [dp(10), dp(6)]
+            spacing: dp(6)
 
+            # Top row: CPU Temp + RAM
             BoxLayout:
-                id: health_content
-                orientation: 'vertical'
-                padding: [12, 8, 12, 12]
-                spacing: 10
-                size_hint_y: None
-                height: self.minimum_height
+                orientation: 'horizontal'
+                spacing: dp(6)
+                size_hint_y: 0.45
 
-                # Content is built dynamically in Python
-                # (graphs require Canvas drawing)
+                MiniLineGraph:
+                    id: cpu_temp_graph
+                    max_points: 60
+                    y_min: 20
+                    y_max: 90
+                    line_color: 0.93, 0.27, 0.32, 1
+                    label_text: 'CPU TEMP'
+                    unit_text: ' C'
 
-                Widget:
-                    size_hint_y: None
-                    height: '12dp'
+                MiniLineGraph:
+                    id: ram_graph
+                    max_points: 60
+                    y_min: 0
+                    y_max: 100
+                    line_color: 0.33, 0.58, 0.85, 1
+                    label_text: 'RAM'
+                    unit_text: '%'
+
+            # Bottom row: Disk + CPU %
+            BoxLayout:
+                orientation: 'horizontal'
+                spacing: dp(6)
+                size_hint_y: 0.45
+
+                MiniLineGraph:
+                    id: disk_graph
+                    max_points: 60
+                    y_min: 0
+                    y_max: 100
+                    line_color: 0.98, 0.65, 0.25, 1
+                    label_text: 'DISK'
+                    unit_text: '%'
+
+                MiniLineGraph:
+                    id: cpu_pct_graph
+                    max_points: 60
+                    y_min: 0
+                    y_max: 100
+                    line_color: 0.00, 0.82, 0.73, 1
+                    label_text: 'CPU LOAD'
+                    unit_text: '%'
+
+            # Status badges row
+            BoxLayout:
+                id: badges_row
+                orientation: 'horizontal'
+                size_hint_y: 0.1
+                spacing: dp(6)
 ''')
 
 
-class MiniLineGraph(Widget):
-    """A compact line graph widget drawn with Kivy Canvas.
-
-    Displays a series of data points as a line chart with optional
-    warning and critical threshold lines.
-    """
-
-    def __init__(self, warn_threshold=None, crit_threshold=None,
-                 y_min=0, y_max=100, line_color=None, **kwargs):
-        super().__init__(**kwargs)
-        self.warn_threshold = warn_threshold
-        self.crit_threshold = crit_threshold
-        self.y_min = y_min
-        self.y_max = y_max
-        self.line_color = line_color or [0.00, 0.82, 0.73, 1]  # Teal
-        self._data = []
-        self.bind(pos=self._redraw, size=self._redraw)
-
-    def set_data(self, values):
-        """Update data points (list of floats, None entries are skipped)."""
-        self._data = [v for v in values if v is not None]
-        self._redraw()
-
-    def _redraw(self, *args):
-        """Redraw the graph on the canvas."""
-        self.canvas.clear()
-
-        x0 = self.x + dp(4)
-        y0 = self.y + dp(4)
-        w = self.width - dp(8)
-        h = self.height - dp(8)
-
-        if w <= 0 or h <= 0:
-            return
-
-        y_range = self.y_max - self.y_min
-        if y_range <= 0:
-            y_range = 1
-
-        with self.canvas:
-            # Background
-            Color(0.07, 0.09, 0.13, 1)
-            RoundedRectangle(pos=(self.x, self.y), size=self.size, radius=[6])
-
-            # Grid lines (horizontal, subtle)
-            Color(0.12, 0.14, 0.18, 1)
-            for i in range(1, 4):
-                gy = y0 + (h * i / 4)
-                Line(points=[x0, gy, x0 + w, gy], width=1)
-
-            # Warning threshold line (dashed, amber)
-            if self.warn_threshold is not None:
-                wy = y0 + ((self.warn_threshold - self.y_min) / y_range) * h
-                if y0 <= wy <= y0 + h:
-                    Color(0.98, 0.76, 0.22, 0.4)
-                    Line(
-                        points=[x0, wy, x0 + w, wy],
-                        width=1,
-                        dash_length=6,
-                        dash_offset=4,
-                    )
-
-            # Critical threshold line (dashed, red)
-            if self.crit_threshold is not None:
-                cy = y0 + ((self.crit_threshold - self.y_min) / y_range) * h
-                if y0 <= cy <= y0 + h:
-                    Color(0.93, 0.27, 0.32, 0.5)
-                    Line(
-                        points=[x0, cy, x0 + w, cy],
-                        width=1,
-                        dash_length=6,
-                        dash_offset=4,
-                    )
-
-            # Data line
-            if len(self._data) >= 2:
-                n = len(self._data)
-                points = []
-                for i, v in enumerate(self._data):
-                    px = x0 + (i / (n - 1)) * w
-                    # Clamp value to range
-                    clamped = max(self.y_min, min(self.y_max, v))
-                    py = y0 + ((clamped - self.y_min) / y_range) * h
-                    points.extend([px, py])
-
-                # Area fill (subtle gradient effect)
-                Color(self.line_color[0], self.line_color[1],
-                      self.line_color[2], 0.08)
-                fill_points = list(points)
-                # Close the polygon at the bottom
-                fill_points.extend([x0 + w, y0, x0, y0])
-                # Draw a thin filled area using lines
-                for i in range(0, len(points) - 2, 2):
-                    x_pt = points[i]
-                    y_pt = points[i + 1]
-                    Line(points=[x_pt, y0, x_pt, y_pt], width=1)
-
-                # Main line
-                Color(*self.line_color)
-                Line(points=points, width=1.5)
-
-                # Current value dot (last point)
-                if points:
-                    last_x = points[-2]
-                    last_y = points[-1]
-                    Color(*self.line_color)
-                    Ellipse(
-                        pos=(last_x - dp(3), last_y - dp(3)),
-                        size=(dp(6), dp(6)),
-                    )
-
-            elif len(self._data) == 1:
-                # Single point — draw a dot in the center
-                v = max(self.y_min, min(self.y_max, self._data[0]))
-                py = y0 + ((v - self.y_min) / y_range) * h
-                Color(*self.line_color)
-                Ellipse(
-                    pos=(x0 + w / 2 - dp(3), py - dp(3)),
-                    size=(dp(6), dp(6)),
-                )
-
-
-class MetricCard(BoxLayout):
-    """A card showing a metric name, current value, status badge, and graph."""
-
-    def __init__(self, title, unit="", warn=None, crit=None,
-                 y_min=0, y_max=100, line_color=None, **kwargs):
-        super().__init__(**kwargs)
-        self.orientation = 'vertical'
-        self.size_hint_y = None
-        self.height = dp(180)
-        self.padding = [dp(10), dp(8)]
-        self.spacing = dp(4)
-
-        # Card background (drawn via canvas)
-        with self.canvas.before:
-            Color(0.10, 0.12, 0.16, 1)
-            self._bg_rect = RoundedRectangle(
-                pos=self.pos, size=self.size, radius=[10]
-            )
-        self.bind(pos=self._update_bg, size=self._update_bg)
-
-        # ── Header row: title + value + badge ──
-        header = BoxLayout(size_hint_y=None, height=dp(28), spacing=dp(6))
-
-        self._title_label = Label(
-            text=title,
-            font_size='13sp',
-            bold=True,
-            color=[0.33, 0.58, 0.85, 1],
-            halign='left',
-            text_size=(None, None),
-            size_hint_x=0.45,
-        )
-        self._title_label.bind(
-            size=lambda w, s: setattr(w, 'text_size', s)
-        )
-
-        self._value_label = Label(
-            text='--',
-            font_size='20sp',
-            bold=True,
-            color=[0.96, 0.97, 0.98, 1],
-            halign='right',
-            text_size=(None, None),
-            size_hint_x=0.35,
-        )
-        self._value_label.bind(
-            size=lambda w, s: setattr(w, 'text_size', s)
-        )
-
-        self._badge_label = Label(
-            text='[color=33d17a]OK[/color]',
-            font_size='12sp',
-            bold=True,
-            markup=True,
-            halign='center',
-            text_size=(None, None),
-            size_hint_x=0.20,
-        )
-        self._badge_label.bind(
-            size=lambda w, s: setattr(w, 'text_size', s)
-        )
-
-        header.add_widget(self._title_label)
-        header.add_widget(self._value_label)
-        header.add_widget(self._badge_label)
-        self.add_widget(header)
-
-        # ── Line graph ──
-        self._graph = MiniLineGraph(
-            warn_threshold=warn,
-            crit_threshold=crit,
-            y_min=y_min,
-            y_max=y_max,
-            line_color=line_color or [0.00, 0.82, 0.73, 1],
-            size_hint_y=None,
-            height=dp(100),
-        )
-        self.add_widget(self._graph)
-
-        # ── Legend row ──
-        legend = BoxLayout(size_hint_y=None, height=dp(16), spacing=dp(8))
-        if warn is not None:
-            legend.add_widget(Label(
-                text=f'Warning: {warn}{unit}',
-                font_size='10sp',
-                color=[0.98, 0.76, 0.22, 0.6],
-                halign='left',
-                text_size=(None, None),
-            ))
-        if crit is not None:
-            legend.add_widget(Label(
-                text=f'Critical: {crit}{unit}',
-                font_size='10sp',
-                color=[0.93, 0.27, 0.32, 0.6],
-                halign='left',
-                text_size=(None, None),
-            ))
-        if not legend.children:
-            legend.add_widget(Widget())  # Spacer
-        self.add_widget(legend)
-
-        self._unit = unit
-        self._warn = warn
-        self._crit = crit
-
-    def _update_bg(self, *args):
-        self._bg_rect.pos = self.pos
-        self._bg_rect.size = self.size
-
-    def update(self, current_value, history_values):
-        """Update the card with current value and history data."""
-        if current_value is not None:
-            self._value_label.text = f'{current_value:.1f}{self._unit}'
-
-            # Update badge
-            if self._crit is not None and current_value >= self._crit:
-                self._badge_label.text = '[color=ed4550]CRIT[/color]'
-            elif self._warn is not None and current_value >= self._warn:
-                self._badge_label.text = '[color=fac238]WARN[/color]'
-            else:
-                self._badge_label.text = '[color=33d17a]OK[/color]'
-        else:
-            self._value_label.text = 'N/A'
-            self._badge_label.text = '[color=626878]--[/color]'
-
-        self._graph.set_data(history_values)
-
-
-class StatusCard(BoxLayout):
-    """Card showing boolean system status indicators."""
-
-    def __init__(self, **kwargs):
-        super().__init__(**kwargs)
-        self.orientation = 'vertical'
-        self.size_hint_y = None
-        self.height = dp(140)
-        self.padding = [dp(10), dp(8)]
-        self.spacing = dp(6)
-
-        with self.canvas.before:
-            Color(0.10, 0.12, 0.16, 1)
-            self._bg_rect = RoundedRectangle(
-                pos=self.pos, size=self.size, radius=[10]
-            )
-        self.bind(pos=self._update_bg, size=self._update_bg)
-
-        # Title
-        self.add_widget(Label(
-            text='System Status',
-            font_size='13sp',
-            bold=True,
-            color=[0.33, 0.58, 0.85, 1],
-            halign='left',
-            text_size=(200, None),
-            size_hint_y=None,
-            height=dp(22),
-        ))
-
-        # Status rows
-        self._rows = {}
-        for key, label_text in [
-            ('clock', 'NTP Clock'),
-            ('power', 'Power Supply'),
-            ('sd', 'SD Card'),
-            ('throttle', 'CPU Throttle'),
-        ]:
-            row = BoxLayout(size_hint_y=None, height=dp(22), spacing=dp(6))
-
-            dot = Label(
-                text='',
-                font_size='10sp',
-                size_hint_x=0.08,
-                markup=True,
-            )
-
-            name = Label(
-                text=label_text,
-                font_size='13sp',
-                color=[0.65, 0.68, 0.76, 1],
-                halign='left',
-                text_size=(None, None),
-                size_hint_x=0.42,
-            )
-            name.bind(size=lambda w, s: setattr(w, 'text_size', s))
-
-            status = Label(
-                text='--',
-                font_size='13sp',
-                bold=True,
-                color=[0.38, 0.42, 0.50, 1],
-                halign='right',
-                text_size=(None, None),
-                size_hint_x=0.50,
-                markup=True,
-            )
-            status.bind(size=lambda w, s: setattr(w, 'text_size', s))
-
-            row.add_widget(dot)
-            row.add_widget(name)
-            row.add_widget(status)
-            self.add_widget(row)
-            self._rows[key] = (dot, status)
-
-    def _update_bg(self, *args):
-        self._bg_rect.pos = self.pos
-        self._bg_rect.size = self.size
-
-    def update(self, check_data):
-        """Update all status indicators from check_all() result."""
-        # Clock sync
-        clock_ok = check_data.get('clock_sync', True)
-        self._set_row('clock',
-                       ok=clock_ok,
-                       ok_text='Synced',
-                       fail_text='NOT SYNCED')
-
-        # Power
-        under_v = check_data.get('under_voltage', False)
-        self._set_row('power',
-                       ok=not under_v,
-                       ok_text='Stable',
-                       fail_text='UNDER-VOLTAGE')
-
-        # SD Card
-        sd = check_data.get('sd_health', 'ok')
-        self._set_row('sd',
-                       ok=(sd == 'ok'),
-                       ok_text='Healthy',
-                       fail_text='ERROR')
-
-        # Throttle
-        throttled = check_data.get('cpu_throttled', False)
-        self._set_row('throttle',
-                       ok=not throttled,
-                       ok_text='None',
-                       fail_text='THROTTLED')
-
-    def _set_row(self, key, ok, ok_text, fail_text):
-        dot, status = self._rows[key]
-        if ok:
-            dot.text = '[color=33d17a]\u25cf[/color]'
-            status.text = f'[color=33d17a]{ok_text}[/color]'
-        else:
-            dot.text = '[color=ed4550]\u25cf[/color]'
-            status.text = f'[color=ed4550]{fail_text}[/color]'
-
+# ==============================================================
+# SYSTEM HEALTH SCREEN
+# ==============================================================
 
 class SystemHealthScreen(Screen):
-    """System health dashboard with real-time graphs."""
+    """Real-time system metrics display with rolling graphs."""
 
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
         self._update_event = None
-        self._cards_built = False
+        self._badges_built = False
+        self._throttle_badge = None
+        self._uptime_badge = None
+        self._start_time = time.time()
 
-        # Card references (built on first enter)
-        self._cpu_card = None
-        self._ram_card = None
-        self._disk_card = None
-        self._status_card = None
+    # ----------------------------------------------------------
+    # Lifecycle
+    # ----------------------------------------------------------
 
     def on_enter(self):
-        """Start auto-refresh when entering the screen."""
-        if not self._cards_built:
-            self._build_cards()
-            self._cards_built = True
+        """Start 1-second refresh loop."""
+        # Set threshold lines on CPU temp graph
+        cpu_graph = self.ids.get('cpu_temp_graph')
+        if cpu_graph and not cpu_graph._threshold_lines:
+            cpu_graph._threshold_lines = [
+                (70, DS.WARNING),
+                (80, DS.DANGER),
+            ]
+        # Set threshold lines on RAM graph
+        ram_graph = self.ids.get('ram_graph')
+        if ram_graph and not ram_graph._threshold_lines:
+            ram_graph._threshold_lines = [
+                (75, DS.WARNING),
+                (90, DS.DANGER),
+            ]
+        # Disk thresholds
+        disk_graph = self.ids.get('disk_graph')
+        if disk_graph and not disk_graph._threshold_lines:
+            disk_graph._threshold_lines = [
+                (80, DS.WARNING),
+                (95, DS.DANGER),
+            ]
 
-        # Immediate update
-        self._refresh_data()
+        if not self._badges_built:
+            self._build_badges()
 
-        # Auto-refresh every 5 seconds
-        self._update_event = Clock.schedule_interval(
-            self._refresh_data, 5
-        )
-
-        # Show live indicator
-        self.ids.live_indicator.text = '[color=33d17a]\u25cf LIVE[/color]'
+        self._update_event = Clock.schedule_interval(self._update_metrics, 1.0)
+        # Immediate first read
+        self._update_metrics(0)
 
     def on_leave(self):
-        """Stop auto-refresh when leaving."""
+        """Stop refresh loop."""
         if self._update_event:
             self._update_event.cancel()
             self._update_event = None
 
-    def _build_cards(self):
-        """Create the metric cards and add them to the layout."""
-        content = self.ids.health_content
-
-        # CPU Temperature card
-        self._cpu_card = MetricCard(
-            title='CPU Temperature',
-            unit='\u00b0C',
-            warn=70,
-            crit=80,
-            y_min=30,
-            y_max=90,
-            line_color=[0.98, 0.65, 0.25, 1],  # Amber
-        )
-        content.add_widget(self._cpu_card, index=1)
-
-        # RAM Usage card
-        self._ram_card = MetricCard(
-            title='RAM Usage',
-            unit='%',
-            warn=80,
-            crit=90,
-            y_min=0,
-            y_max=100,
-            line_color=[0.33, 0.58, 0.85, 1],  # Blue
-        )
-        content.add_widget(self._ram_card, index=1)
-
-        # Disk Usage card
-        self._disk_card = MetricCard(
-            title='Disk Usage',
-            unit='%',
-            warn=85,
-            crit=95,
-            y_min=0,
-            y_max=100,
-            line_color=[0.00, 0.82, 0.73, 1],  # Teal
-        )
-        content.add_widget(self._disk_card, index=1)
-
-        # System Status card
-        self._status_card = StatusCard()
-        content.add_widget(self._status_card, index=1)
-
-    def _refresh_data(self, *args):
-        """Pull latest data from SystemMonitor and update cards."""
+    def go_back(self):
         app = App.get_running_app()
-        if not hasattr(app, 'system_monitor'):
+        if app:
+            app.root.current = 'settings'
+
+    # ----------------------------------------------------------
+    # Badges
+    # ----------------------------------------------------------
+
+    def _build_badges(self):
+        """Create status badge widgets in the bottom row."""
+        self._badges_built = True
+        row = self.ids.get('badges_row')
+        if not row:
             return
 
-        monitor = app.system_monitor
-        last = monitor.get_last_check()
-        history = monitor.get_history()
+        self._throttle_badge = _StatusBadge(label_text='THROTTLE')
+        self._uptime_badge = _StatusBadge(label_text='UPTIME')
 
-        # Extract history arrays
-        cpu_history = [h.get('cpu_temp') for h in history
-                       if h.get('cpu_temp') is not None]
-        ram_history = [h.get('ram_pct') for h in history
-                       if h.get('ram_pct') is not None]
-        disk_history = [h.get('disk_pct') for h in history
-                        if h.get('disk_pct') is not None]
+        row.add_widget(self._throttle_badge)
+        row.add_widget(self._uptime_badge)
 
-        # Update cards
-        if self._cpu_card:
-            self._cpu_card.update(last.get('cpu_temp'), cpu_history)
+    # ----------------------------------------------------------
+    # Metrics update
+    # ----------------------------------------------------------
 
-        if self._ram_card:
-            self._ram_card.update(last.get('ram_pct'), ram_history)
-
-        if self._disk_card:
-            self._disk_card.update(last.get('disk_pct'), disk_history)
-
-        if self._status_card:
-            self._status_card.update(last)
-
-    def go_back(self):
-        """Navigate back to settings."""
+    def _update_metrics(self, dt):
+        """Poll system_monitor and feed data to graphs."""
         app = App.get_running_app()
-        app.go_screen('settings')
+        metrics = {}
+
+        if app and hasattr(app, 'system_monitor') and app.system_monitor:
+            try:
+                metrics = app.system_monitor.get_metrics()
+            except Exception:
+                pass
+
+        cpu_temp = metrics.get('cpu_temp', 0)
+        ram_pct = metrics.get('ram_pct', 0)
+        disk_pct = metrics.get('disk_pct', 0)
+        cpu_pct = metrics.get('cpu_pct', 0)
+        throttle = metrics.get('throttle_state', 'OK')
+
+        # Feed graphs
+        cpu_graph = self.ids.get('cpu_temp_graph')
+        if cpu_graph:
+            cpu_graph.add_point(cpu_temp)
+
+        ram_graph = self.ids.get('ram_graph')
+        if ram_graph:
+            ram_graph.add_point(ram_pct)
+
+        disk_graph = self.ids.get('disk_graph')
+        if disk_graph:
+            disk_graph.add_point(disk_pct)
+
+        cpu_pct_graph = self.ids.get('cpu_pct_graph')
+        if cpu_pct_graph:
+            cpu_pct_graph.add_point(cpu_pct)
+
+        # Update badges
+        if self._throttle_badge:
+            if throttle and throttle != 'OK':
+                self._throttle_badge.update(str(throttle), DS.DANGER)
+            else:
+                self._throttle_badge.update('OK', DS.SUCCESS)
+
+        if self._uptime_badge:
+            elapsed = time.time() - self._start_time
+            hours = int(elapsed // 3600)
+            mins = int((elapsed % 3600) // 60)
+            self._uptime_badge.update(f'{hours}h {mins}m', DS.TEXT_PRIMARY)

@@ -1,35 +1,64 @@
 """
-Shelf Map Screen - Scrollable grid of all slot positions.
+Shelf Map Screen - Visual grid of all shelf slots (2026 Redesign)
 
-Shows WHAT product is loaded WHERE, with mini progress bars.
-Scales to 40-60 positions for production devices via ScrollView.
-4 columns layout for 800px width.
+Displays a 4-column grid of slot cards showing:
+- Slot number, product name, weight, fill percentage, status color
+
+Status colors:
+    occupied  = teal
+    empty     = gray
+    removed   = amber
+    in_use    = yellow
+    anomaly   = red
+
+Refreshes every 1.5 seconds.
+Data from app.inventory_engine.shelves dict with nested slots.
+
+Slot object attrs:
+    slot_id, status, current_tag_id, current_product_name,
+    weight_current_g, weight_placed_g (mapped to weight_when_placed_g)
 """
+
+import logging
 
 from kivy.uix.screenmanager import Screen
 from kivy.uix.boxlayout import BoxLayout
-from kivy.uix.scrollview import ScrollView
 from kivy.uix.gridlayout import GridLayout
+from kivy.uix.scrollview import ScrollView
 from kivy.uix.widget import Widget
 from kivy.uix.label import Label
 from kivy.lang import Builder
 from kivy.app import App
 from kivy.clock import Clock
-from kivy.graphics import Color, RoundedRectangle, Rectangle
 from kivy.metrics import dp
+from kivy.graphics import Color, RoundedRectangle, Rectangle
 
+from ui.app import DS
+from core.models import SlotStatus
 
-# ── Status colors ──
-SLOT_COLORS = {
-    'occupied': (0.00, 0.82, 0.73, 1),   # Teal
-    'removed':  (0.98, 0.65, 0.25, 1),   # Amber
-    'in_use':   (0.98, 0.76, 0.22, 1),   # Yellow
-    'anomaly':  (0.93, 0.27, 0.32, 1),   # Red
-    'empty':    (0.20, 0.22, 0.28, 1),   # Dark gray
+logger = logging.getLogger("smartlocker.shelf_map")
+
+# Map SlotStatus to DS color tokens
+_STATUS_COLORS = {
+    SlotStatus.OCCUPIED:         DS.SLOT_OCCUPIED,
+    SlotStatus.EMPTY:            DS.SLOT_EMPTY,
+    SlotStatus.REMOVED:          DS.SLOT_REMOVED,
+    SlotStatus.IN_USE_ELSEWHERE: DS.SLOT_IN_USE,
+    SlotStatus.ANOMALY:          DS.SLOT_ANOMALY,
 }
 
-COLS = 4  # 4 columns for 800px touchscreen
+_STATUS_LABELS = {
+    SlotStatus.OCCUPIED:         'OCCUPIED',
+    SlotStatus.EMPTY:            'EMPTY',
+    SlotStatus.REMOVED:          'REMOVED',
+    SlotStatus.IN_USE_ELSEWHERE: 'IN USE',
+    SlotStatus.ANOMALY:          'ANOMALY',
+}
 
+
+# ==============================================================
+# KV LAYOUT
+# ==============================================================
 
 Builder.load_string('''
 <ShelfMapScreen>:
@@ -37,7 +66,7 @@ Builder.load_string('''
         orientation: 'vertical'
         canvas.before:
             Color:
-                rgba: 0.08, 0.09, 0.12, 1
+                rgba: 0.06, 0.07, 0.10, 1
             Rectangle:
                 pos: self.pos
                 size: self.size
@@ -45,199 +74,387 @@ Builder.load_string('''
         # ---- STATUS BAR ----
         StatusBar:
             BackButton:
-                on_release: app.sm.current = 'inventory'
+                on_release: root.go_back()
 
             Label:
                 text: 'SHELF MAP'
                 font_size: '18sp'
                 bold: True
                 color: 0.96, 0.97, 0.98, 1
-                size_hint_x: 0.5
+                size_hint_x: 0.4
                 halign: 'center'
                 text_size: self.size
                 valign: 'middle'
 
             Label:
-                id: slot_count_label
-                text: '-- slots'
+                id: summary_label
+                text: ''
                 font_size: '13sp'
-                color: 0.38, 0.42, 0.50, 1
+                color: 0.60, 0.64, 0.72, 1
                 size_hint_x: 0.3
                 halign: 'right'
                 text_size: self.size
                 valign: 'middle'
 
         # ---- GRID AREA ----
-        BoxLayout:
-            id: grid_area
-            orientation: 'vertical'
+        ScrollView:
+            do_scroll_x: False
+            bar_width: '4dp'
+            bar_color: 0.00, 0.82, 0.73, 0.5
+            bar_inactive_color: 0.18, 0.20, 0.26, 0.3
+
+            GridLayout:
+                id: slot_grid
+                cols: 4
+                size_hint_y: None
+                height: self.minimum_height
+                padding: [dp(8), dp(8)]
+                spacing: dp(6)
 ''')
 
 
+# ==============================================================
+# SLOT CARD WIDGET
+# ==============================================================
+
+class _SlotCard(BoxLayout):
+    """Visual card for a single shelf slot."""
+
+    def __init__(self, slot_id='', **kwargs):
+        super().__init__(
+            orientation='vertical',
+            size_hint_y=None,
+            height=dp(110),
+            size_hint_x=1,
+            spacing=dp(2),
+            padding=dp(8),
+            **kwargs,
+        )
+        self._slot_id = slot_id
+
+        # Card background (drawn in canvas.before)
+        with self.canvas.before:
+            Color(*DS.BG_CARD)
+            self._bg = RoundedRectangle(pos=self.pos, size=self.size, radius=[dp(DS.RADIUS)])
+        self.bind(pos=self._update_bg, size=self._update_bg)
+
+        # Status color accent bar at top
+        self._accent_bar = Widget(size_hint_y=None, height=dp(4))
+        with self._accent_bar.canvas:
+            Color(*DS.SLOT_EMPTY)
+            self._accent_rect = RoundedRectangle(
+                pos=self._accent_bar.pos, size=self._accent_bar.size,
+                radius=[dp(2)],
+            )
+        self._accent_bar.bind(
+            pos=lambda w, v: setattr(self._accent_rect, 'pos', v),
+            size=lambda w, v: setattr(self._accent_rect, 'size', v),
+        )
+        self.add_widget(self._accent_bar)
+
+        # Slot number label
+        self._slot_lbl = Label(
+            text='--',
+            font_size=DS.FONT_H3,
+            bold=True,
+            color=DS.TEXT_PRIMARY,
+            size_hint_y=None,
+            height=dp(22),
+            halign='center',
+            text_size=(None, None),
+        )
+        self.add_widget(self._slot_lbl)
+
+        # Product name
+        self._product_lbl = Label(
+            text='',
+            font_size=DS.FONT_TINY,
+            color=DS.TEXT_SECONDARY,
+            size_hint_y=None,
+            height=dp(16),
+            halign='center',
+            text_size=(None, None),
+            shorten=True,
+            shorten_from='right',
+        )
+        self.add_widget(self._product_lbl)
+
+        # Weight / fill row
+        weight_row = BoxLayout(size_hint_y=None, height=dp(16))
+        self._weight_lbl = Label(
+            text='0 g',
+            font_size=DS.FONT_TINY,
+            color=DS.TEXT_MUTED,
+            size_hint_x=0.5,
+            halign='left',
+            text_size=(None, None),
+        )
+        self._fill_lbl = Label(
+            text='',
+            font_size=DS.FONT_TINY,
+            bold=True,
+            color=DS.TEXT_MUTED,
+            size_hint_x=0.5,
+            halign='right',
+            text_size=(None, None),
+        )
+        weight_row.add_widget(self._weight_lbl)
+        weight_row.add_widget(self._fill_lbl)
+        self.add_widget(weight_row)
+
+        # Fill bar background + fill
+        bar_container = Widget(size_hint_y=None, height=dp(6))
+        with bar_container.canvas:
+            Color(*DS.BG_INPUT)
+            self._bar_bg = RoundedRectangle(
+                pos=bar_container.pos, size=bar_container.size, radius=[dp(3)])
+            Color(*DS.SLOT_EMPTY)
+            self._bar_fill = RoundedRectangle(
+                pos=bar_container.pos, size=(0, dp(6)), radius=[dp(3)])
+        bar_container.bind(
+            pos=self._update_bar,
+            size=self._update_bar,
+        )
+        self._bar_container = bar_container
+        self._fill_pct = 0
+        self.add_widget(bar_container)
+
+        # Status badge
+        self._status_lbl = Label(
+            text='EMPTY',
+            font_size=DS.FONT_TINY,
+            bold=True,
+            color=DS.SLOT_EMPTY,
+            size_hint_y=None,
+            height=dp(14),
+            halign='center',
+            text_size=(None, None),
+        )
+        self.add_widget(self._status_lbl)
+
+    def _update_bg(self, *_args):
+        self._bg.pos = self.pos
+        self._bg.size = self.size
+
+    def _update_bar(self, *_args):
+        c = self._bar_container
+        self._bar_bg.pos = c.pos
+        self._bar_bg.size = c.size
+        fill_w = max(0, c.width * self._fill_pct / 100.0)
+        self._bar_fill.pos = c.pos
+        self._bar_fill.size = (fill_w, c.height)
+
+    def update(self, slot):
+        """Refresh card with current slot data."""
+        # Slot number
+        position = getattr(slot, 'position', 0)
+        self._slot_lbl.text = f'#{position}'
+        self._slot_id = getattr(slot, 'slot_id', '')
+
+        # Status
+        status = getattr(slot, 'status', SlotStatus.EMPTY)
+        if isinstance(status, str):
+            # Handle string status values
+            status_map = {s.value: s for s in SlotStatus}
+            status = status_map.get(status, SlotStatus.EMPTY)
+
+        color = _STATUS_COLORS.get(status, DS.SLOT_EMPTY)
+        label = _STATUS_LABELS.get(status, 'UNKNOWN')
+
+        self._status_lbl.text = label
+        self._status_lbl.color = color
+
+        # Accent bar color
+        self._accent_bar.canvas.clear()
+        with self._accent_bar.canvas:
+            Color(*color)
+            self._accent_rect = RoundedRectangle(
+                pos=self._accent_bar.pos, size=self._accent_bar.size,
+                radius=[dp(2)],
+            )
+
+        # Product name
+        product_name = getattr(slot, 'current_product_name',
+                               getattr(slot, 'current_product_id', ''))
+        if product_name:
+            self._product_lbl.text = str(product_name)[:20]
+            self._product_lbl.color = DS.TEXT_SECONDARY
+        else:
+            self._product_lbl.text = 'No product' if status == SlotStatus.EMPTY else '--'
+            self._product_lbl.color = DS.TEXT_MUTED
+
+        # Weight
+        weight_current = getattr(slot, 'weight_current_g', 0)
+        weight_placed = getattr(slot, 'weight_when_placed_g',
+                                getattr(slot, 'weight_placed_g', 0))
+
+        self._weight_lbl.text = f'{weight_current:.0f}g'
+
+        # Fill percentage
+        if weight_placed and weight_placed > 0:
+            pct = max(0, min(100, (weight_current / weight_placed) * 100))
+        else:
+            pct = 100.0 if status == SlotStatus.OCCUPIED else 0.0
+
+        self._fill_pct = pct
+        self._fill_lbl.text = f'{pct:.0f}%'
+
+        # Fill bar color
+        if pct > 50:
+            bar_color = DS.SUCCESS
+        elif pct > 25:
+            bar_color = DS.WARNING
+        elif pct > 0:
+            bar_color = DS.DANGER
+        else:
+            bar_color = DS.SLOT_EMPTY
+
+        self._fill_lbl.color = bar_color
+
+        # Redraw the fill bar with updated color
+        c = self._bar_container
+        fill_w = max(0, c.width * self._fill_pct / 100.0)
+        c.canvas.clear()
+        with c.canvas:
+            Color(*DS.BG_INPUT)
+            self._bar_bg = RoundedRectangle(pos=c.pos, size=c.size, radius=[dp(3)])
+            Color(*bar_color)
+            self._bar_fill = RoundedRectangle(pos=c.pos, size=(fill_w, c.height), radius=[dp(3)])
+
+
+# ==============================================================
+# SHELF MAP SCREEN
+# ==============================================================
+
 class ShelfMapScreen(Screen):
-    """Scrollable grid showing all slot positions with product info."""
+    """Visual grid display of all shelf slots."""
 
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
+        self._slot_cards = {}  # slot_id -> _SlotCard
         self._refresh_event = None
+        self._built = False
+
+    # ----------------------------------------------------------
+    # Lifecycle
+    # ----------------------------------------------------------
 
     def on_enter(self):
-        self._refresh_event = Clock.schedule_interval(self._refresh, 1.5)
-        self._refresh(0)
+        """Build grid and start refresh."""
+        if not self._built:
+            self._build_grid()
+        self._refresh_slots(0)
+        self._refresh_event = Clock.schedule_interval(self._refresh_slots, 1.5)
 
     def on_leave(self):
+        """Stop refresh."""
         if self._refresh_event:
             self._refresh_event.cancel()
             self._refresh_event = None
 
-    def _build_slot_cell(self, slot, product_info):
-        """Build a single slot cell widget (~180x100dp)."""
-        status_val = slot.status.value
-        accent = SLOT_COLORS.get(status_val, SLOT_COLORS['empty'])
-
-        cell = BoxLayout(
-            orientation='vertical',
-            size_hint_y=None,
-            height=dp(100),
-            padding=[dp(8), dp(6), dp(8), dp(6)],
-            spacing=dp(2),
-        )
-
-        # Background
-        with cell.canvas.before:
-            Color(0.11, 0.13, 0.17, 1)
-            rr = RoundedRectangle(pos=cell.pos, size=cell.size, radius=[8])
-        cell.bind(
-            pos=lambda w, p, r=rr: setattr(r, 'pos', p),
-            size=lambda w, s, r=rr: setattr(r, 'size', s),
-        )
-
-        # Top accent line (colored by status)
-        with cell.canvas.after:
-            Color(*accent)
-            accent_rect = Rectangle(
-                pos=(cell.x, cell.y + cell.height - dp(3)),
-                size=(cell.width, dp(3)),
-            )
-
-        def _upd_accent(w, *_, ar=accent_rect):
-            ar.pos = (w.x, w.y + w.height - dp(3))
-            ar.size = (w.width, dp(3))
-        cell.bind(pos=_upd_accent, size=_upd_accent)
-
-        # Slot number label
-        slot_lbl = Label(
-            text=f'S{slot.position}',
-            font_size='12sp',
-            bold=True,
-            color=accent,
-            size_hint_y=None, height=dp(16),
-            halign='left', valign='middle',
-        )
-        slot_lbl.bind(size=lambda w, s: setattr(w, 'text_size', s))
-        cell.add_widget(slot_lbl)
-
-        if product_info and status_val == 'occupied':
-            # Product name (truncated)
-            name = product_info.get('name', 'Unknown')
-            display_name = (name[:13] + '..') if len(name) > 15 else name
-            name_lbl = Label(
-                text=display_name,
-                font_size='11sp',
-                color=(0.93, 0.95, 0.97, 1),
-                size_hint_y=None, height=dp(16),
-                halign='left', valign='middle',
-            )
-            name_lbl.bind(size=lambda w, s: setattr(w, 'text_size', s))
-            cell.add_widget(name_lbl)
-
-            # Remaining liters
-            density = product_info.get('density_g_per_ml', 1.0) or 1.0
-            liters = (slot.weight_current_g / density) / 1000.0 if density > 0 else 0
-            liters_lbl = Label(
-                text=f'{liters:.1f} L',
-                font_size='14sp',
-                bold=True,
-                color=(0.96, 0.97, 0.98, 1),
-                size_hint_y=None, height=dp(20),
-                halign='left', valign='middle',
-            )
-            liters_lbl.bind(size=lambda w, s: setattr(w, 'text_size', s))
-            cell.add_widget(liters_lbl)
-
-            # Mini progress bar
-            fill_pct = 0.0
-            if slot.weight_when_placed_g > 0:
-                fill_pct = (slot.weight_current_g / slot.weight_when_placed_g) * 100.0
-            fill_pct = max(0.0, min(100.0, fill_pct))
-
-            bar_w = Widget(size_hint_y=None, height=dp(6))
-            with bar_w.canvas.before:
-                Color(0.20, 0.22, 0.28, 1)
-                bg_rect = RoundedRectangle(pos=bar_w.pos, size=bar_w.size, radius=[3])
-            if fill_pct > 50:
-                bar_col = (0.00, 0.82, 0.73, 1)
-            elif fill_pct > 25:
-                bar_col = (0.98, 0.76, 0.22, 1)
-            else:
-                bar_col = (0.93, 0.27, 0.32, 1)
-            with bar_w.canvas.after:
-                Color(*bar_col)
-                fill_rect = RoundedRectangle(
-                    pos=bar_w.pos,
-                    size=(bar_w.width * fill_pct / 100.0, bar_w.height),
-                    radius=[3],
-                )
-
-            def _upd_bar(w, *_, bg=bg_rect, fl=fill_rect, pct=fill_pct):
-                bg.pos = w.pos
-                bg.size = w.size
-                fl.pos = w.pos
-                fl.size = (w.width * pct / 100.0, w.height)
-            bar_w.bind(pos=_upd_bar, size=_upd_bar)
-            cell.add_widget(bar_w)
-        else:
-            # Empty slot placeholder
-            empty_lbl = Label(
-                text='empty' if status_val == 'empty' else status_val,
-                font_size='12sp',
-                color=(0.38, 0.42, 0.50, 1),
-                size_hint_y=None, height=dp(50),
-                halign='center', valign='middle',
-            )
-            empty_lbl.bind(size=lambda w, s: setattr(w, 'text_size', s))
-            cell.add_widget(empty_lbl)
-
-        return cell
-
-    def _refresh(self, dt):
-        """Rebuild the shelf grid."""
+    def go_back(self):
         app = App.get_running_app()
-        grid_area = self.ids.grid_area
-        grid_area.clear_widgets()
+        if app:
+            app.root.current = 'home'
 
-        slots = app.inventory.get_all_slots()
-        total = len(slots)
-        self.ids.slot_count_label.text = f'{total} slot{"s" if total != 1 else ""}'
+    # ----------------------------------------------------------
+    # Build grid
+    # ----------------------------------------------------------
 
-        scroll = ScrollView(do_scroll_x=False)
-        grid = GridLayout(
-            cols=COLS,
-            size_hint_y=None,
-            spacing=dp(8),
-            padding=[dp(10), dp(8), dp(10), dp(8)],
-        )
-        grid.bind(minimum_height=grid.setter('height'))
+    def _build_grid(self):
+        """Create slot cards for all slots in inventory_engine."""
+        self._built = True
+        grid = self.ids.get('slot_grid')
+        if not grid:
+            return
 
-        for slot in sorted(slots, key=lambda s: s.position):
-            product_info = None
-            if slot.current_tag_id and slot.status.value == 'occupied':
-                try:
-                    product_info = app.db.get_product_for_tag(slot.current_tag_id)
-                except Exception:
-                    pass
-            cell = self._build_slot_cell(slot, product_info)
-            grid.add_widget(cell)
+        grid.clear_widgets()
+        self._slot_cards.clear()
 
-        scroll.add_widget(grid)
-        grid_area.add_widget(scroll)
+        app = App.get_running_app()
+        all_slots = self._get_all_slots(app)
+
+        if not all_slots:
+            # No slots configured - show placeholder cards for 4 default slots
+            for i in range(4):
+                card = _SlotCard(slot_id=f'slot_{i+1}')
+                card._slot_lbl.text = f'#{i+1}'
+                self._slot_cards[f'slot_{i+1}'] = card
+                grid.add_widget(card)
+            return
+
+        for slot in all_slots:
+            slot_id = getattr(slot, 'slot_id', f'slot_{id(slot)}')
+            card = _SlotCard(slot_id=slot_id)
+            card.update(slot)
+            self._slot_cards[slot_id] = card
+            grid.add_widget(card)
+
+    # ----------------------------------------------------------
+    # Get slots from inventory engine
+    # ----------------------------------------------------------
+
+    @staticmethod
+    def _get_all_slots(app):
+        """Extract all Slot objects from inventory engine shelves."""
+        slots = []
+        if not app or not hasattr(app, 'inventory_engine') or not app.inventory_engine:
+            return slots
+
+        engine = app.inventory_engine
+
+        # inventory_engine.shelves could be a dict or list
+        shelves = getattr(engine, 'shelves', {})
+        if isinstance(shelves, dict):
+            shelf_list = shelves.values()
+        elif isinstance(shelves, list):
+            shelf_list = shelves
+        else:
+            return slots
+
+        for shelf in shelf_list:
+            shelf_slots = getattr(shelf, 'slots', [])
+            for slot in shelf_slots:
+                slots.append(slot)
+
+        # Sort by position
+        slots.sort(key=lambda s: (
+            getattr(s, 'shelf_id', ''),
+            getattr(s, 'position', 0),
+        ))
+        return slots
+
+    # ----------------------------------------------------------
+    # Refresh
+    # ----------------------------------------------------------
+
+    def _refresh_slots(self, dt):
+        """Update all slot cards with current inventory state."""
+        app = App.get_running_app()
+        all_slots = self._get_all_slots(app)
+
+        # If slot count changed, rebuild
+        if len(all_slots) != len(self._slot_cards) and all_slots:
+            self._built = False
+            self._build_grid()
+            return
+
+        occupied = 0
+        total = len(all_slots) or len(self._slot_cards)
+
+        for slot in all_slots:
+            slot_id = getattr(slot, 'slot_id', '')
+            card = self._slot_cards.get(slot_id)
+            if card:
+                card.update(slot)
+            status = getattr(slot, 'status', SlotStatus.EMPTY)
+            if isinstance(status, str):
+                if status in ('occupied',):
+                    occupied += 1
+            elif status == SlotStatus.OCCUPIED:
+                occupied += 1
+
+        # Update summary
+        summary_lbl = self.ids.get('summary_label')
+        if summary_lbl:
+            summary_lbl.text = f'{occupied}/{total} occupied'

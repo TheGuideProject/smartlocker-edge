@@ -13,233 +13,239 @@ Design:
 - Device info in a subtle footer
 """
 
+import logging
+
 from kivy.uix.screenmanager import Screen
 from kivy.uix.boxlayout import BoxLayout
 from kivy.uix.widget import Widget
 from kivy.uix.label import Label
-from kivy.lang import Builder
+from kivy.uix.button import Button
+from kivy.uix.textinput import TextInput
 from kivy.app import App
 from kivy.clock import Clock
-from kivy.properties import StringProperty
 from kivy.graphics import Color, RoundedRectangle, Rectangle
+from kivy.metrics import dp
+from kivy.properties import StringProperty, ListProperty
 
+from ui.app import DS
 from config import settings
 
+logger = logging.getLogger("smartlocker")
 
-Builder.load_string('''
-<PairingScreen>:
-    BoxLayout:
-        orientation: 'vertical'
-        canvas.before:
-            Color:
-                rgba: 0.06, 0.07, 0.10, 1
-            Rectangle:
-                pos: self.pos
-                size: self.size
 
-        # ---- STATUS BAR ----
-        StatusBar:
-            Label:
-                text: 'SMARTLOCKER'
-                font_size: '18sp'
-                bold: True
-                color: 0.96, 0.97, 0.98, 1
-                size_hint_x: 0.5
-                halign: 'left'
-                text_size: self.size
-                valign: 'middle'
-
-            Label:
-                text: 'FIRST BOOT'
-                font_size: '13sp'
-                bold: True
-                color: 0.98, 0.65, 0.25, 1
-                size_hint_x: 0.5
-                halign: 'right'
-                text_size: self.size
-                valign: 'middle'
-
-        # ---- MAIN CONTENT ----
-        BoxLayout:
-            orientation: 'vertical'
-            padding: [50, 15, 50, 12]
-            spacing: 8
-
-            # Title area
-            Label:
-                text: 'Cloud Pairing'
-                font_size: '26sp'
-                bold: True
-                color: 0.96, 0.97, 0.98, 1
-                size_hint_y: None
-                height: '38dp'
-                halign: 'center'
-                text_size: self.size
-
-            Label:
-                text: 'Enter the 6-digit code from the admin panel'
-                font_size: '14sp'
-                color: 0.38, 0.42, 0.50, 1
-                size_hint_y: None
-                height: '22dp'
-                halign: 'center'
-                text_size: self.size
-
-            Widget:
-                size_hint_y: None
-                height: '10dp'
-
-            # Pairing code label
-            Label:
-                text: 'PAIRING CODE'
-                font_size: '11sp'
-                bold: True
-                color: 0.38, 0.42, 0.50, 1
-                size_hint_y: None
-                height: '16dp'
-                halign: 'center'
-                text_size: self.size
-
-            # Big pairing code input - centered, large for fat fingers
-            BoxLayout:
-                size_hint_y: None
-                height: '68dp'
-                padding: [60, 0]
-                TextInput:
-                    id: pairing_code_input
-                    hint_text: '_ _ _ _ _ _'
-                    font_size: '36sp'
-                    multiline: False
-                    size_hint_y: None
-                    height: '68dp'
-                    background_color: 0.07, 0.09, 0.13, 1
-                    foreground_color: 0.00, 0.82, 0.73, 1
-                    cursor_color: 0.00, 0.82, 0.73, 1
-                    hint_text_color: 0.20, 0.22, 0.28, 1
-                    padding: [12, 12]
-                    halign: 'center'
-
-            Widget:
-                size_hint_y: None
-                height: '6dp'
-
-            # Status message
-            Label:
-                id: status_label
-                text: root.status_text
-                font_size: '14sp'
-                color: root._status_color
-                size_hint_y: None
-                height: '24dp'
-                halign: 'center'
-                text_size: self.size
-                markup: True
-
-            # Buttons row
-            BoxLayout:
-                spacing: 12
-                size_hint_y: None
-                height: '64dp'
-
-                Button:
-                    id: pair_button
-                    text: 'CONNECT'
-                    font_size: '20sp'
-                    bold: True
-                    background_normal: ''
-                    background_color: 0, 0, 0, 0
-                    color: 0.02, 0.05, 0.08, 1
-                    on_release: root.do_pairing()
-                    canvas.before:
-                        Color:
-                            rgba: 0.00, 0.82, 0.73, 1
-                        RoundedRectangle:
-                            pos: self.pos
-                            size: self.size
-                            radius: [12]
-
-                Button:
-                    text: 'OFFLINE MODE'
-                    font_size: '15sp'
-                    bold: True
-                    background_normal: ''
-                    background_color: 0, 0, 0, 0
-                    color: 0.60, 0.64, 0.72, 1
-                    size_hint_x: 0.4
-                    on_release: root.skip_pairing()
-                    canvas.before:
-                        Color:
-                            rgba: 0.13, 0.15, 0.20, 1
-                        RoundedRectangle:
-                            pos: self.pos
-                            size: self.size
-                            radius: [12]
-
-            # Virtual keyboard container (v1.0.6)
-            BoxLayout:
-                id: keyboard_container
-                size_hint_y: None
-                height: '0dp'
-
-            Widget:
-                size_hint_y: 1
-
-            # Info footer
-            Label:
-                text: root.device_info_text
-                font_size: '10sp'
-                color: 0.25, 0.28, 0.34, 1
-                size_hint_y: None
-                height: '16dp'
-                halign: 'center'
-                text_size: self.size
-''')
+def _card_bg(widget, color, radius=12):
+    """Attach a rounded-rectangle background that tracks pos/size."""
+    with widget.canvas.before:
+        Color(*color)
+        rr = RoundedRectangle(pos=widget.pos, size=widget.size, radius=[radius])
+    widget.bind(
+        pos=lambda w, p: setattr(rr, 'pos', p),
+        size=lambda w, s: setattr(rr, 'size', s),
+    )
 
 
 class PairingScreen(Screen):
     status_text = StringProperty('')
+    status_color = ListProperty(list(DS.TEXT_MUTED))
     device_info_text = StringProperty('')
-    _status_color = [0.38, 0.42, 0.50, 1]
 
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
         self._keyboard = None
+        self._code_input = None
+        self._connect_btn = None
+
+    # ================================================================
+    # SCREEN LIFECYCLE
+    # ================================================================
 
     def on_enter(self):
-        """Called when screen is displayed."""
+        """Build the full UI from scratch each time we enter."""
         app = App.get_running_app()
-        self.device_info_text = f"Device: {app.device_id}  |  Cloud: {settings.CLOUD_URL}"
+        self.device_info_text = (
+            f"Device: {app.device_id}  |  v{self._get_version()}  |  "
+            f"Cloud: {settings.CLOUD_URL}"
+        )
         self.status_text = ''
-        self._status_color = [0.38, 0.42, 0.50, 1]
-        # Reset button state
-        self.ids.pair_button.text = 'CONNECT'
-        self.ids.pair_button.disabled = False
-        self.ids.pairing_code_input.text = ''
+        self.status_color = list(DS.TEXT_MUTED)
+        self._build_ui()
 
-        # Setup virtual keyboard (v1.0.6)
+    def on_leave(self):
+        """Cleanup when leaving the screen."""
+        self._hide_keyboard()
+
+    # ================================================================
+    # UI CONSTRUCTION
+    # ================================================================
+
+    def _build_ui(self):
+        self.clear_widgets()
+
+        # Root container with dark background
+        root = BoxLayout(orientation='vertical')
+        with root.canvas.before:
+            Color(*DS.BG_DARK)
+            self._root_bg = Rectangle(pos=root.pos, size=root.size)
+        root.bind(
+            pos=lambda w, p: setattr(self._root_bg, 'pos', p),
+            size=lambda w, s: setattr(self._root_bg, 'size', s),
+        )
+
+        # ---- STATUS BAR ----
+        status_bar = BoxLayout(
+            size_hint_y=None, height=dp(DS.STATUS_BAR_H),
+            padding=[dp(12), dp(4)], spacing=dp(8),
+        )
+        with status_bar.canvas.before:
+            Color(*DS.BG_STATUS_BAR)
+            sb_bg = Rectangle(pos=status_bar.pos, size=status_bar.size)
+            Color(*DS.PRIMARY + (0.25,) if len(DS.PRIMARY) == 3 else DS.PRIMARY[:3] + (0.25,))
+            sb_line = Rectangle(pos=status_bar.pos, size=(status_bar.width, 1))
+        status_bar.bind(
+            pos=lambda w, p: (setattr(sb_bg, 'pos', p), setattr(sb_line, 'pos', p)),
+            size=lambda w, s: (setattr(sb_bg, 'size', s), setattr(sb_line, 'size', (s[0], 1))),
+        )
+
+        status_bar.add_widget(Label(
+            text='SMARTLOCKER', font_size=DS.FONT_H2, bold=True,
+            color=DS.TEXT_PRIMARY, size_hint_x=0.5,
+            halign='left', valign='middle', text_size=(dp(300), None),
+        ))
+        status_bar.add_widget(Label(
+            text='FIRST BOOT', font_size=DS.FONT_SMALL, bold=True,
+            color=DS.ACCENT, size_hint_x=0.5,
+            halign='right', valign='middle', text_size=(dp(300), None),
+        ))
+        root.add_widget(status_bar)
+
+        # ---- MAIN CONTENT ----
+        content = BoxLayout(
+            orientation='vertical',
+            padding=[dp(50), dp(15), dp(50), dp(12)],
+            spacing=dp(8),
+        )
+
+        # Title
+        content.add_widget(Label(
+            text='Cloud Pairing', font_size=DS.FONT_H1, bold=True,
+            color=DS.TEXT_PRIMARY, size_hint_y=None, height=dp(38),
+            halign='center', text_size=(dp(700), None),
+        ))
+
+        # Subtitle
+        content.add_widget(Label(
+            text='Enter the 6-digit code from the admin panel',
+            font_size='14sp', color=DS.TEXT_MUTED,
+            size_hint_y=None, height=dp(22),
+            halign='center', text_size=(dp(700), None),
+        ))
+
+        content.add_widget(Widget(size_hint_y=None, height=dp(10)))
+
+        # PAIRING CODE label
+        content.add_widget(Label(
+            text='PAIRING CODE', font_size=DS.FONT_TINY, bold=True,
+            color=DS.TEXT_MUTED, size_hint_y=None, height=dp(16),
+            halign='center', text_size=(dp(700), None),
+        ))
+
+        # Big pairing code input
+        input_row = BoxLayout(size_hint_y=None, height=dp(68), padding=[dp(60), 0])
+        self._code_input = TextInput(
+            hint_text='_ _ _ _ _ _',
+            font_size='36sp',
+            multiline=False,
+            size_hint_y=None, height=dp(68),
+            background_color=DS.BG_INPUT,
+            foreground_color=DS.PRIMARY,
+            cursor_color=DS.PRIMARY,
+            hint_text_color=(0.20, 0.22, 0.28, 1),
+            padding=[dp(12), dp(12)],
+            halign='center',
+        )
+        input_row.add_widget(self._code_input)
+        content.add_widget(input_row)
+
+        content.add_widget(Widget(size_hint_y=None, height=dp(6)))
+
+        # Status message
+        self._status_label = Label(
+            text=self.status_text, font_size='14sp',
+            color=self.status_color,
+            size_hint_y=None, height=dp(24),
+            halign='center', text_size=(dp(600), None), markup=True,
+        )
+        content.add_widget(self._status_label)
+
+        # Buttons row
+        btn_row = BoxLayout(spacing=dp(12), size_hint_y=None, height=dp(DS.BTN_HEIGHT_LG))
+
+        # CONNECT button
+        self._connect_btn = Button(
+            text='CONNECT', font_size=DS.FONT_H2, bold=True,
+            background_normal='', background_color=(0, 0, 0, 0),
+            color=(0.02, 0.05, 0.08, 1),
+            on_release=lambda x: self.do_pairing(),
+        )
+        _card_bg(self._connect_btn, DS.PRIMARY, radius=DS.RADIUS)
+        btn_row.add_widget(self._connect_btn)
+
+        # OFFLINE MODE button
+        offline_btn = Button(
+            text='OFFLINE MODE', font_size=DS.FONT_BODY, bold=True,
+            background_normal='', background_color=(0, 0, 0, 0),
+            color=DS.TEXT_SECONDARY, size_hint_x=0.4,
+            on_release=lambda x: self.skip_pairing(),
+        )
+        _card_bg(offline_btn, DS.BG_CARD_HOVER, radius=DS.RADIUS)
+        btn_row.add_widget(offline_btn)
+
+        content.add_widget(btn_row)
+
+        # Virtual keyboard container
+        self._kb_container = BoxLayout(size_hint_y=None, height=0)
+        content.add_widget(self._kb_container)
+
+        # Spacer
+        content.add_widget(Widget(size_hint_y=1))
+
+        # Device info footer
+        content.add_widget(Label(
+            text=self.device_info_text, font_size='10sp',
+            color=(0.25, 0.28, 0.34, 1),
+            size_hint_y=None, height=dp(16),
+            halign='center', text_size=(dp(700), None),
+        ))
+
+        root.add_widget(content)
+        self.add_widget(root)
+
+        # Setup virtual keyboard
         self._setup_virtual_keyboard()
+
+    # ================================================================
+    # PAIRING LOGIC
+    # ================================================================
 
     def do_pairing(self):
         """Execute the pairing process."""
-        pairing_code = self.ids.pairing_code_input.text.strip().upper()
+        pairing_code = self._code_input.text.strip().upper()
 
-        # Validate
         if not pairing_code or len(pairing_code) != 6:
             self._set_status('Enter the 6-digit code', error=True)
             return
 
-        # Cloud URL from settings (fixed)
         cloud_url = settings.CLOUD_URL
         if not cloud_url:
             self._set_status('Cloud URL not configured!', error=True)
             return
 
         # Disable button and show connecting
-        self.ids.pair_button.text = 'CONNECTING...'
-        self.ids.pair_button.disabled = True
+        self._connect_btn.text = 'CONNECTING...'
+        self._connect_btn.disabled = True
         self._set_status('Connecting to cloud...', info=True)
 
-        # Do pairing in next frame to let UI update
+        # Execute in next frame to let UI update
         Clock.schedule_once(
             lambda dt: self._execute_pairing(cloud_url, pairing_code), 0.1
         )
@@ -252,7 +258,6 @@ class PairingScreen(Screen):
             success, data = app.cloud.pair_with_code(cloud_url, pairing_code)
 
             if success:
-                # Save products and recipes to local DB
                 config = data.get('config', {})
                 self._save_config(app, config)
 
@@ -271,13 +276,12 @@ class PairingScreen(Screen):
             else:
                 error = data.get('detail', 'Unknown error')
                 self._set_status(f'{error}', error=True)
-                self.ids.pair_button.text = 'CONNECT'
-                self.ids.pair_button.disabled = False
+                self._reset_connect_button()
 
         except Exception as e:
+            logger.exception("Pairing failed")
             self._set_status(f'Error: {str(e)}', error=True)
-            self.ids.pair_button.text = 'CONNECT'
-            self.ids.pair_button.disabled = False
+            self._reset_connect_button()
 
     def _save_config(self, app, config):
         """Save downloaded products and recipes to local database."""
@@ -329,42 +333,65 @@ class PairingScreen(Screen):
         app = App.get_running_app()
         app.go_screen('home')
 
+    # ================================================================
+    # STATUS HELPERS
+    # ================================================================
+
     def _set_status(self, text, error=False, success=False, info=False):
         """Update the status label with colored text."""
         self.status_text = text
         if error:
-            self._status_color = [0.93, 0.27, 0.32, 1]   # Red
+            self.status_color = list(DS.DANGER)
         elif success:
-            self._status_color = [0.20, 0.82, 0.48, 1]    # Green
+            self.status_color = list(DS.SUCCESS)
         elif info:
-            self._status_color = [0.33, 0.58, 0.85, 1]    # Blue
+            self.status_color = list(DS.INFO)
         else:
-            self._status_color = [0.38, 0.42, 0.50, 1]    # Gray
-        # Force UI refresh
-        self.ids.status_label.color = self._status_color
+            self.status_color = list(DS.TEXT_MUTED)
 
-    # ---- Virtual Keyboard Integration (v1.0.6) ----
+        if hasattr(self, '_status_label') and self._status_label:
+            self._status_label.text = text
+            self._status_label.color = self.status_color
+
+    def _reset_connect_button(self):
+        """Re-enable the connect button after failure."""
+        if self._connect_btn:
+            self._connect_btn.text = 'CONNECT'
+            self._connect_btn.disabled = False
+
+    def _get_version(self):
+        """Read version string from config/VERSION file."""
+        try:
+            import os
+            version_path = os.path.join(
+                os.path.dirname(os.path.dirname(os.path.dirname(__file__))),
+                'config', 'VERSION'
+            )
+            with open(version_path, 'r') as f:
+                return f.read().strip()
+        except Exception:
+            return '?.?.?'
+
+    # ================================================================
+    # VIRTUAL KEYBOARD
+    # ================================================================
 
     def _setup_virtual_keyboard(self):
-        """Create and bind the numeric virtual keyboard for pairing code entry."""
-        from ui.widgets.virtual_keyboard import VirtualKeyboard
+        """Create and bind the numeric virtual keyboard."""
+        try:
+            from ui.widgets.virtual_keyboard import VirtualKeyboard
+        except ImportError:
+            logger.debug("VirtualKeyboard not available, skipping")
+            return
 
-        container = self.ids.keyboard_container
-
-        # Only create once
         if self._keyboard is None:
             self._keyboard = VirtualKeyboard(mode='numeric')
-            self._keyboard.bind_to(self.ids.pairing_code_input)
+            self._keyboard.bind_to(self._code_input)
 
-        # Bind focus events to show/hide keyboard
-        code_input = self.ids.pairing_code_input
-        code_input.bind(focus=self._on_input_focus)
-
-        # Global dock keyboard mode is set in run_ui.py — no override needed here
+        self._code_input.bind(focus=self._on_input_focus)
 
     def _on_input_focus(self, instance, focused):
         """Show keyboard when input gets focus, hide when unfocused."""
-        container = self.ids.keyboard_container
         if focused:
             self._show_keyboard()
         else:
@@ -372,18 +399,18 @@ class PairingScreen(Screen):
 
     def _show_keyboard(self):
         """Show the virtual keyboard below the input."""
-        container = self.ids.keyboard_container
+        if not hasattr(self, '_kb_container') or not self._kb_container:
+            return
         if self._keyboard and self._keyboard.parent is None:
-            container.add_widget(self._keyboard)
-        container.height = self._keyboard.NUMERIC_HEIGHT if self._keyboard else 220
+            self._kb_container.add_widget(self._keyboard)
+        self._kb_container.height = (
+            self._keyboard.NUMERIC_HEIGHT if self._keyboard else dp(220)
+        )
 
     def _hide_keyboard(self):
         """Hide the virtual keyboard."""
-        container = self.ids.keyboard_container
-        if self._keyboard and self._keyboard.parent == container:
-            container.remove_widget(self._keyboard)
-        container.height = 0
-
-    def on_leave(self):
-        """Clean up when leaving the screen."""
-        self._hide_keyboard()
+        if not hasattr(self, '_kb_container') or not self._kb_container:
+            return
+        if self._keyboard and self._keyboard.parent == self._kb_container:
+            self._kb_container.remove_widget(self._keyboard)
+        self._kb_container.height = 0

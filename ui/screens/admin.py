@@ -5,19 +5,18 @@ Provides:
 - Driver mode toggles (RFID, Weight, LED, Buzzer: fake/real)
 - Hardware configuration (I2C, serial, GPIO settings)
 - Polling & threshold tuning
-- Mixing parameter adjustments
-- Security (change admin password)
-- Factory reset
+- Security (change admin password, factory reset)
 
 Design:
 - Card-based scrollable layout with section headers
 - Large touch targets for gloved hands
 - Color-coded toggle buttons (green=REAL, gray=FAKE)
-- Password dialog on entry
+- Password dialog on entry via module-level function
 """
 
 import hashlib
 import time
+import logging
 
 from kivy.uix.screenmanager import Screen
 from kivy.uix.boxlayout import BoxLayout
@@ -31,15 +30,172 @@ from kivy.uix.popup import Popup
 from kivy.lang import Builder
 from kivy.app import App
 from kivy.clock import Clock
+from kivy.metrics import dp
+from kivy.graphics import Color, RoundedRectangle, Rectangle
 from kivy.properties import StringProperty, BooleanProperty, DictProperty
 
+from ui.app import DS
 from config import settings
 
+logger = logging.getLogger("smartlocker.admin")
 
-# Default admin password
+# Default admin password (SHA-256 hashed)
 DEFAULT_ADMIN_PASSWORD = "Smartlocker2026"
+_DEFAULT_HASH = hashlib.sha256(DEFAULT_ADMIN_PASSWORD.encode()).hexdigest()
 
 
+# ==============================================================
+# MODULE-LEVEL PASSWORD DIALOG (importable by other screens)
+# ==============================================================
+
+def _hash_password(raw: str) -> str:
+    """SHA-256 hash of a password string."""
+    return hashlib.sha256(raw.encode()).hexdigest()
+
+
+def _get_stored_hash() -> str:
+    """Retrieve the current admin password hash from DB or fallback to default."""
+    try:
+        app = App.get_running_app()
+        if app and hasattr(app, 'db') and app.db:
+            stored = app.db.get_config("admin_password_hash")
+            if stored:
+                return stored
+    except Exception:
+        pass
+    return _DEFAULT_HASH
+
+
+def show_admin_password_dialog(on_success_callback):
+    """
+    Show a modal password dialog. Calls on_success_callback() if the
+    entered password matches the stored admin hash.
+
+    This is a MODULE-LEVEL function so any screen can import and use it:
+        from ui.screens.admin import show_admin_password_dialog
+        show_admin_password_dialog(lambda: do_protected_thing())
+    """
+    content = BoxLayout(orientation='vertical', spacing=dp(12), padding=dp(16))
+
+    # Dark card background for the popup content
+    with content.canvas.before:
+        Color(*DS.BG_CARD)
+        content._bg_rect = RoundedRectangle(pos=content.pos, size=content.size, radius=[dp(DS.RADIUS)])
+    content.bind(pos=lambda w, v: setattr(w._bg_rect, 'pos', v),
+                 size=lambda w, v: setattr(w._bg_rect, 'size', v))
+
+    title_lbl = Label(
+        text='ADMIN ACCESS',
+        font_size=DS.FONT_H2,
+        bold=True,
+        color=DS.TEXT_PRIMARY,
+        size_hint_y=None,
+        height=dp(36),
+    )
+
+    hint_lbl = Label(
+        text='Enter admin password to continue',
+        font_size=DS.FONT_SMALL,
+        color=DS.TEXT_SECONDARY,
+        size_hint_y=None,
+        height=dp(24),
+    )
+
+    pwd_input = TextInput(
+        hint_text='Password',
+        password=True,
+        multiline=False,
+        font_size=DS.FONT_BODY,
+        size_hint_y=None,
+        height=dp(DS.BTN_HEIGHT_MD),
+        background_color=DS.BG_INPUT,
+        foreground_color=DS.TEXT_PRIMARY,
+        hint_text_color=DS.TEXT_MUTED,
+        cursor_color=DS.PRIMARY,
+        padding=[dp(12), dp(12)],
+    )
+
+    error_lbl = Label(
+        text='',
+        font_size=DS.FONT_SMALL,
+        color=DS.DANGER,
+        size_hint_y=None,
+        height=dp(22),
+    )
+
+    btn_row = BoxLayout(orientation='horizontal', spacing=dp(8), size_hint_y=None, height=dp(DS.BTN_HEIGHT_LG))
+
+    cancel_btn = Button(
+        text='CANCEL',
+        font_size=DS.FONT_BODY,
+        bold=True,
+        size_hint_x=0.5,
+        background_color=DS.BG_CARD_HOVER,
+        color=DS.TEXT_SECONDARY,
+        background_normal='',
+    )
+
+    confirm_btn = Button(
+        text='UNLOCK',
+        font_size=DS.FONT_BODY,
+        bold=True,
+        size_hint_x=0.5,
+        background_color=DS.PRIMARY,
+        color=DS.BG_DARK,
+        background_normal='',
+    )
+
+    btn_row.add_widget(cancel_btn)
+    btn_row.add_widget(confirm_btn)
+
+    content.add_widget(title_lbl)
+    content.add_widget(hint_lbl)
+    content.add_widget(pwd_input)
+    content.add_widget(error_lbl)
+    content.add_widget(btn_row)
+
+    popup = Popup(
+        title='',
+        separator_height=0,
+        content=content,
+        size_hint=(0.85, None),
+        height=dp(300),
+        auto_dismiss=False,
+        background_color=(0, 0, 0, 0.85),
+        background='',
+    )
+
+    def _on_cancel(_inst):
+        popup.dismiss()
+
+    def _on_confirm(_inst):
+        entered = pwd_input.text.strip()
+        if not entered:
+            error_lbl.text = 'Password cannot be empty'
+            return
+        entered_hash = _hash_password(entered)
+        stored_hash = _get_stored_hash()
+        if entered_hash == stored_hash:
+            popup.dismiss()
+            if callable(on_success_callback):
+                on_success_callback()
+        else:
+            error_lbl.text = 'Incorrect password'
+            pwd_input.text = ''
+            pwd_input.focus = True
+
+    cancel_btn.bind(on_release=_on_cancel)
+    confirm_btn.bind(on_release=_on_confirm)
+    pwd_input.bind(on_text_validate=_on_confirm)
+
+    popup.open()
+    # Focus the input after a short delay (Kivy needs a frame)
+    Clock.schedule_once(lambda dt: setattr(pwd_input, 'focus', True), 0.2)
+
+
+# ==============================================================
+# KV LAYOUT
+# ==============================================================
 Builder.load_string('''
 <AdminScreen>:
     BoxLayout:
@@ -57,7 +213,7 @@ Builder.load_string('''
                 on_release: root.go_back()
 
             Label:
-                text: 'ADMIN'
+                text: 'ADMIN PANEL'
                 font_size: '18sp'
                 bold: True
                 color: 0.96, 0.97, 0.98, 1
@@ -67,1569 +223,577 @@ Builder.load_string('''
                 valign: 'middle'
 
             Widget:
-                size_hint_x: 0.3
+                size_hint_x: 0.2
 
         # ---- SCROLLABLE CONTENT ----
         ScrollView:
-            id: admin_scroll
             do_scroll_x: False
+            bar_width: '4dp'
             bar_color: 0.00, 0.82, 0.73, 0.5
-            bar_width: 4
+            bar_inactive_color: 0.18, 0.20, 0.26, 0.3
+
             BoxLayout:
-                id: admin_content
+                id: content_box
                 orientation: 'vertical'
-                padding: [12, 8, 12, 12]
-                spacing: 8
                 size_hint_y: None
                 height: self.minimum_height
-
-                # ==== SECTION 1: DRIVER MODES ====
-                Label:
-                    text: 'Driver Modes'
-                    font_size: '14sp'
-                    bold: True
-                    color: 0.00, 0.82, 0.73, 1
-                    size_hint_y: None
-                    height: '22dp'
-                    halign: 'left'
-                    text_size: self.size
-                    padding: [4, 0]
-
-                BoxLayout:
-                    orientation: 'vertical'
-                    size_hint_y: None
-                    height: self.minimum_height
-                    padding: [10, 8]
-                    spacing: 6
-                    canvas.before:
-                        Color:
-                            rgba: 0.10, 0.12, 0.16, 1
-                        RoundedRectangle:
-                            pos: self.pos
-                            size: self.size
-                            radius: [10]
-
-                    # RFID toggle
-                    BoxLayout:
-                        size_hint_y: None
-                        height: '48dp'
-                        spacing: 8
-                        Label:
-                            text: 'RFID Reader'
-                            font_size: '14sp'
-                            color: 0.65, 0.68, 0.76, 1
-                            halign: 'left'
-                            text_size: self.size
-                            valign: 'middle'
-                            size_hint_x: 0.5
-                        Button:
-                            id: toggle_rfid
-                            text: 'FAKE'
-                            font_size: '15sp'
-                            bold: True
-                            background_normal: ''
-                            background_color: 0.30, 0.33, 0.38, 1
-                            color: 0.96, 0.97, 0.98, 1
-                            size_hint_x: 0.5
-                            on_release: root.toggle_driver('rfid')
-
-                    # Weight toggle
-                    BoxLayout:
-                        size_hint_y: None
-                        height: '48dp'
-                        spacing: 8
-                        Label:
-                            text: 'Weight Sensor'
-                            font_size: '14sp'
-                            color: 0.65, 0.68, 0.76, 1
-                            halign: 'left'
-                            text_size: self.size
-                            valign: 'middle'
-                            size_hint_x: 0.5
-                        Button:
-                            id: toggle_weight
-                            text: 'FAKE'
-                            font_size: '15sp'
-                            bold: True
-                            background_normal: ''
-                            background_color: 0.30, 0.33, 0.38, 1
-                            color: 0.96, 0.97, 0.98, 1
-                            size_hint_x: 0.5
-                            on_release: root.toggle_driver('weight')
-
-                    # LED toggle
-                    BoxLayout:
-                        size_hint_y: None
-                        height: '48dp'
-                        spacing: 8
-                        Label:
-                            text: 'LED Strip'
-                            font_size: '14sp'
-                            color: 0.65, 0.68, 0.76, 1
-                            halign: 'left'
-                            text_size: self.size
-                            valign: 'middle'
-                            size_hint_x: 0.5
-                        Button:
-                            id: toggle_led
-                            text: 'FAKE'
-                            font_size: '15sp'
-                            bold: True
-                            background_normal: ''
-                            background_color: 0.30, 0.33, 0.38, 1
-                            color: 0.96, 0.97, 0.98, 1
-                            size_hint_x: 0.5
-                            on_release: root.toggle_driver('led')
-
-                    # Buzzer toggle
-                    BoxLayout:
-                        size_hint_y: None
-                        height: '48dp'
-                        spacing: 8
-                        Label:
-                            text: 'Buzzer'
-                            font_size: '14sp'
-                            color: 0.65, 0.68, 0.76, 1
-                            halign: 'left'
-                            text_size: self.size
-                            valign: 'middle'
-                            size_hint_x: 0.5
-                        Button:
-                            id: toggle_buzzer
-                            text: 'FAKE'
-                            font_size: '15sp'
-                            bold: True
-                            background_normal: ''
-                            background_color: 0.30, 0.33, 0.38, 1
-                            color: 0.96, 0.97, 0.98, 1
-                            size_hint_x: 0.5
-                            on_release: root.toggle_driver('buzzer')
-
-                # ==== SECTION 2: HARDWARE CONFIG ====
-                Label:
-                    text: 'Hardware Configuration'
-                    font_size: '14sp'
-                    bold: True
-                    color: 0.00, 0.82, 0.73, 1
-                    size_hint_y: None
-                    height: '22dp'
-                    halign: 'left'
-                    text_size: self.size
-                    padding: [4, 0]
-
-                BoxLayout:
-                    id: hw_config_card
-                    orientation: 'vertical'
-                    size_hint_y: None
-                    height: self.minimum_height
-                    padding: [10, 8]
-                    spacing: 4
-                    canvas.before:
-                        Color:
-                            rgba: 0.10, 0.12, 0.16, 1
-                        RoundedRectangle:
-                            pos: self.pos
-                            size: self.size
-                            radius: [10]
-
-                    # RFID hardware settings
-                    Label:
-                        id: rfid_hw_header
-                        text: 'RFID (I2C)'
-                        font_size: '12sp'
-                        bold: True
-                        color: 0.98, 0.65, 0.25, 1
-                        size_hint_y: None
-                        height: '20dp'
-                        halign: 'left'
-                        text_size: self.size
-
-                    BoxLayout:
-                        id: rfid_hw_row
-                        size_hint_y: None
-                        height: '40dp'
-                        spacing: 8
-                        Label:
-                            text: 'I2C Bus:'
-                            font_size: '12sp'
-                            color: 0.38, 0.42, 0.50, 1
-                            size_hint_x: 0.25
-                            halign: 'right'
-                            text_size: self.size
-                            valign: 'middle'
-                        TextInput:
-                            id: input_rfid_i2c_bus
-                            text: '1'
-                            font_size: '14sp'
-                            multiline: False
-                            size_hint_x: 0.2
-                            size_hint_y: None
-                            height: '36dp'
-                            background_color: 0.07, 0.09, 0.13, 1
-                            foreground_color: 0.96, 0.97, 0.98, 1
-                            cursor_color: 0.00, 0.82, 0.73, 1
-                            padding: [8, 6]
-                            input_filter: 'int'
-                            input_type: 'number'
-                        Label:
-                            text: 'Addr (hex):'
-                            font_size: '12sp'
-                            color: 0.38, 0.42, 0.50, 1
-                            size_hint_x: 0.25
-                            halign: 'right'
-                            text_size: self.size
-                            valign: 'middle'
-                        TextInput:
-                            id: input_rfid_i2c_addr
-                            text: '0x24'
-                            font_size: '14sp'
-                            multiline: False
-                            size_hint_x: 0.3
-                            size_hint_y: None
-                            height: '36dp'
-                            background_color: 0.07, 0.09, 0.13, 1
-                            foreground_color: 0.96, 0.97, 0.98, 1
-                            cursor_color: 0.00, 0.82, 0.73, 1
-                            padding: [8, 6]
-
-                    # Weight hardware settings
-                    Label:
-                        id: weight_hw_header
-                        text: 'Weight Sensor (Serial)'
-                        font_size: '12sp'
-                        bold: True
-                        color: 0.98, 0.65, 0.25, 1
-                        size_hint_y: None
-                        height: '20dp'
-                        halign: 'left'
-                        text_size: self.size
-
-                    BoxLayout:
-                        id: weight_hw_row
-                        size_hint_y: None
-                        height: '40dp'
-                        spacing: 8
-                        Label:
-                            text: 'Port:'
-                            font_size: '12sp'
-                            color: 0.38, 0.42, 0.50, 1
-                            size_hint_x: 0.2
-                            halign: 'right'
-                            text_size: self.size
-                            valign: 'middle'
-                        TextInput:
-                            id: input_weight_port
-                            text: '/dev/ttyUSB0'
-                            font_size: '13sp'
-                            multiline: False
-                            size_hint_x: 0.4
-                            size_hint_y: None
-                            height: '36dp'
-                            background_color: 0.07, 0.09, 0.13, 1
-                            foreground_color: 0.96, 0.97, 0.98, 1
-                            cursor_color: 0.00, 0.82, 0.73, 1
-                            padding: [8, 6]
-                        Label:
-                            text: 'Baud:'
-                            font_size: '12sp'
-                            color: 0.38, 0.42, 0.50, 1
-                            size_hint_x: 0.15
-                            halign: 'right'
-                            text_size: self.size
-                            valign: 'middle'
-                        TextInput:
-                            id: input_weight_baud
-                            text: '115200'
-                            font_size: '13sp'
-                            multiline: False
-                            size_hint_x: 0.25
-                            size_hint_y: None
-                            height: '36dp'
-                            background_color: 0.07, 0.09, 0.13, 1
-                            foreground_color: 0.96, 0.97, 0.98, 1
-                            cursor_color: 0.00, 0.82, 0.73, 1
-                            padding: [8, 6]
-                            input_filter: 'int'
-                            input_type: 'number'
-
-                    # LED hardware settings
-                    Label:
-                        id: led_hw_header
-                        text: 'LED Strip (WS2812B)'
-                        font_size: '12sp'
-                        bold: True
-                        color: 0.98, 0.65, 0.25, 1
-                        size_hint_y: None
-                        height: '20dp'
-                        halign: 'left'
-                        text_size: self.size
-
-                    BoxLayout:
-                        id: led_hw_row
-                        size_hint_y: None
-                        height: '40dp'
-                        spacing: 6
-                        Label:
-                            text: 'GPIO:'
-                            font_size: '12sp'
-                            color: 0.38, 0.42, 0.50, 1
-                            size_hint_x: 0.18
-                            halign: 'right'
-                            text_size: self.size
-                            valign: 'middle'
-                        TextInput:
-                            id: input_led_gpio
-                            text: '18'
-                            font_size: '14sp'
-                            multiline: False
-                            size_hint_x: 0.15
-                            size_hint_y: None
-                            height: '36dp'
-                            background_color: 0.07, 0.09, 0.13, 1
-                            foreground_color: 0.96, 0.97, 0.98, 1
-                            cursor_color: 0.00, 0.82, 0.73, 1
-                            padding: [8, 6]
-                            input_filter: 'int'
-                            input_type: 'number'
-                        Label:
-                            text: 'Count:'
-                            font_size: '12sp'
-                            color: 0.38, 0.42, 0.50, 1
-                            size_hint_x: 0.18
-                            halign: 'right'
-                            text_size: self.size
-                            valign: 'middle'
-                        TextInput:
-                            id: input_led_count
-                            text: '12'
-                            font_size: '14sp'
-                            multiline: False
-                            size_hint_x: 0.15
-                            size_hint_y: None
-                            height: '36dp'
-                            background_color: 0.07, 0.09, 0.13, 1
-                            foreground_color: 0.96, 0.97, 0.98, 1
-                            cursor_color: 0.00, 0.82, 0.73, 1
-                            padding: [8, 6]
-                            input_filter: 'int'
-                            input_type: 'number'
-                        Label:
-                            text: 'Bright:'
-                            font_size: '12sp'
-                            color: 0.38, 0.42, 0.50, 1
-                            size_hint_x: 0.18
-                            halign: 'right'
-                            text_size: self.size
-                            valign: 'middle'
-                        TextInput:
-                            id: input_led_brightness
-                            text: '128'
-                            font_size: '14sp'
-                            multiline: False
-                            size_hint_x: 0.16
-                            size_hint_y: None
-                            height: '36dp'
-                            background_color: 0.07, 0.09, 0.13, 1
-                            foreground_color: 0.96, 0.97, 0.98, 1
-                            cursor_color: 0.00, 0.82, 0.73, 1
-                            padding: [8, 6]
-                            input_filter: 'int'
-                            input_type: 'number'
-
-                    # Buzzer hardware settings
-                    Label:
-                        id: buzzer_hw_header
-                        text: 'Buzzer (GPIO)'
-                        font_size: '12sp'
-                        bold: True
-                        color: 0.98, 0.65, 0.25, 1
-                        size_hint_y: None
-                        height: '20dp'
-                        halign: 'left'
-                        text_size: self.size
-
-                    BoxLayout:
-                        id: buzzer_hw_row
-                        size_hint_y: None
-                        height: '40dp'
-                        spacing: 8
-                        Label:
-                            text: 'GPIO Pin:'
-                            font_size: '12sp'
-                            color: 0.38, 0.42, 0.50, 1
-                            size_hint_x: 0.35
-                            halign: 'right'
-                            text_size: self.size
-                            valign: 'middle'
-                        TextInput:
-                            id: input_buzzer_gpio
-                            text: '18'
-                            font_size: '14sp'
-                            multiline: False
-                            size_hint_x: 0.25
-                            size_hint_y: None
-                            height: '36dp'
-                            background_color: 0.07, 0.09, 0.13, 1
-                            foreground_color: 0.96, 0.97, 0.98, 1
-                            cursor_color: 0.00, 0.82, 0.73, 1
-                            padding: [8, 6]
-                            input_filter: 'int'
-                            input_type: 'number'
-                        Widget:
-                            size_hint_x: 0.4
-
-                # ==== SECTION 3: POLLING & THRESHOLDS ====
-                Label:
-                    text: 'Polling & Thresholds'
-                    font_size: '14sp'
-                    bold: True
-                    color: 0.00, 0.82, 0.73, 1
-                    size_hint_y: None
-                    height: '22dp'
-                    halign: 'left'
-                    text_size: self.size
-                    padding: [4, 0]
-
-                BoxLayout:
-                    orientation: 'vertical'
-                    size_hint_y: None
-                    height: self.minimum_height
-                    padding: [10, 8]
-                    spacing: 4
-                    canvas.before:
-                        Color:
-                            rgba: 0.10, 0.12, 0.16, 1
-                        RoundedRectangle:
-                            pos: self.pos
-                            size: self.size
-                            radius: [10]
-
-                    BoxLayout:
-                        size_hint_y: None
-                        height: '40dp'
-                        spacing: 8
-                        Label:
-                            text: 'RFID Poll (ms):'
-                            font_size: '12sp'
-                            color: 0.65, 0.68, 0.76, 1
-                            size_hint_x: 0.45
-                            halign: 'left'
-                            text_size: self.size
-                            valign: 'middle'
-                        TextInput:
-                            id: input_rfid_poll
-                            text: '500'
-                            font_size: '14sp'
-                            multiline: False
-                            size_hint_x: 0.55
-                            size_hint_y: None
-                            height: '36dp'
-                            background_color: 0.07, 0.09, 0.13, 1
-                            foreground_color: 0.96, 0.97, 0.98, 1
-                            cursor_color: 0.00, 0.82, 0.73, 1
-                            padding: [8, 6]
-                            input_filter: 'int'
-                            input_type: 'number'
-
-                    BoxLayout:
-                        size_hint_y: None
-                        height: '40dp'
-                        spacing: 8
-                        Label:
-                            text: 'Weight Poll (ms):'
-                            font_size: '12sp'
-                            color: 0.65, 0.68, 0.76, 1
-                            size_hint_x: 0.45
-                            halign: 'left'
-                            text_size: self.size
-                            valign: 'middle'
-                        TextInput:
-                            id: input_weight_poll
-                            text: '200'
-                            font_size: '14sp'
-                            multiline: False
-                            size_hint_x: 0.55
-                            size_hint_y: None
-                            height: '36dp'
-                            background_color: 0.07, 0.09, 0.13, 1
-                            foreground_color: 0.96, 0.97, 0.98, 1
-                            cursor_color: 0.00, 0.82, 0.73, 1
-                            padding: [8, 6]
-                            input_filter: 'int'
-                            input_type: 'number'
-
-                    BoxLayout:
-                        size_hint_y: None
-                        height: '40dp'
-                        spacing: 8
-                        Label:
-                            text: 'Weight Stable (s):'
-                            font_size: '12sp'
-                            color: 0.65, 0.68, 0.76, 1
-                            size_hint_x: 0.45
-                            halign: 'left'
-                            text_size: self.size
-                            valign: 'middle'
-                        TextInput:
-                            id: input_weight_stable
-                            text: '3.0'
-                            font_size: '14sp'
-                            multiline: False
-                            size_hint_x: 0.55
-                            size_hint_y: None
-                            height: '36dp'
-                            background_color: 0.07, 0.09, 0.13, 1
-                            foreground_color: 0.96, 0.97, 0.98, 1
-                            cursor_color: 0.00, 0.82, 0.73, 1
-                            padding: [8, 6]
-
-                    BoxLayout:
-                        size_hint_y: None
-                        height: '40dp'
-                        spacing: 8
-                        Label:
-                            text: 'Weight Tolerance (g):'
-                            font_size: '12sp'
-                            color: 0.65, 0.68, 0.76, 1
-                            size_hint_x: 0.45
-                            halign: 'left'
-                            text_size: self.size
-                            valign: 'middle'
-                        TextInput:
-                            id: input_weight_tolerance
-                            text: '10'
-                            font_size: '14sp'
-                            multiline: False
-                            size_hint_x: 0.55
-                            size_hint_y: None
-                            height: '36dp'
-                            background_color: 0.07, 0.09, 0.13, 1
-                            foreground_color: 0.96, 0.97, 0.98, 1
-                            cursor_color: 0.00, 0.82, 0.73, 1
-                            padding: [8, 6]
-                            input_filter: 'int'
-                            input_type: 'number'
-
-                # ==== SECTION 4: MIXING PARAMETERS ====
-                Label:
-                    text: 'Mixing Parameters'
-                    font_size: '14sp'
-                    bold: True
-                    color: 0.00, 0.82, 0.73, 1
-                    size_hint_y: None
-                    height: '22dp'
-                    halign: 'left'
-                    text_size: self.size
-                    padding: [4, 0]
-
-                BoxLayout:
-                    orientation: 'vertical'
-                    size_hint_y: None
-                    height: self.minimum_height
-                    padding: [10, 8]
-                    spacing: 4
-                    canvas.before:
-                        Color:
-                            rgba: 0.10, 0.12, 0.16, 1
-                        RoundedRectangle:
-                            pos: self.pos
-                            size: self.size
-                            radius: [10]
-
-                    BoxLayout:
-                        size_hint_y: None
-                        height: '40dp'
-                        spacing: 8
-                        Label:
-                            text: 'Ratio Tolerance (%):'
-                            font_size: '12sp'
-                            color: 0.65, 0.68, 0.76, 1
-                            size_hint_x: 0.45
-                            halign: 'left'
-                            text_size: self.size
-                            valign: 'middle'
-                        TextInput:
-                            id: input_mix_tolerance
-                            text: '5.0'
-                            font_size: '14sp'
-                            multiline: False
-                            size_hint_x: 0.55
-                            size_hint_y: None
-                            height: '36dp'
-                            background_color: 0.07, 0.09, 0.13, 1
-                            foreground_color: 0.96, 0.97, 0.98, 1
-                            cursor_color: 0.00, 0.82, 0.73, 1
-                            padding: [8, 6]
-
-                    BoxLayout:
-                        size_hint_y: None
-                        height: '40dp'
-                        spacing: 8
-                        Label:
-                            text: 'Weight Stable (s):'
-                            font_size: '12sp'
-                            color: 0.65, 0.68, 0.76, 1
-                            size_hint_x: 0.45
-                            halign: 'left'
-                            text_size: self.size
-                            valign: 'middle'
-                        TextInput:
-                            id: input_mix_stable
-                            text: '2.0'
-                            font_size: '14sp'
-                            multiline: False
-                            size_hint_x: 0.55
-                            size_hint_y: None
-                            height: '36dp'
-                            background_color: 0.07, 0.09, 0.13, 1
-                            foreground_color: 0.96, 0.97, 0.98, 1
-                            cursor_color: 0.00, 0.82, 0.73, 1
-                            padding: [8, 6]
-
-                    BoxLayout:
-                        size_hint_y: None
-                        height: '40dp'
-                        spacing: 8
-                        Label:
-                            text: 'Thinner Max (%):'
-                            font_size: '12sp'
-                            color: 0.65, 0.68, 0.76, 1
-                            size_hint_x: 0.45
-                            halign: 'left'
-                            text_size: self.size
-                            valign: 'middle'
-                        TextInput:
-                            id: input_thinner_max
-                            text: '20.0'
-                            font_size: '14sp'
-                            multiline: False
-                            size_hint_x: 0.55
-                            size_hint_y: None
-                            height: '36dp'
-                            background_color: 0.07, 0.09, 0.13, 1
-                            foreground_color: 0.96, 0.97, 0.98, 1
-                            cursor_color: 0.00, 0.82, 0.73, 1
-                            padding: [8, 6]
-
-                # ==== SECTION 5: SECURITY ====
-                Label:
-                    text: 'Security'
-                    font_size: '14sp'
-                    bold: True
-                    color: 0.00, 0.82, 0.73, 1
-                    size_hint_y: None
-                    height: '22dp'
-                    halign: 'left'
-                    text_size: self.size
-                    padding: [4, 0]
-
-                BoxLayout:
-                    orientation: 'vertical'
-                    size_hint_y: None
-                    height: self.minimum_height
-                    padding: [10, 8]
-                    spacing: 4
-                    canvas.before:
-                        Color:
-                            rgba: 0.10, 0.12, 0.16, 1
-                        RoundedRectangle:
-                            pos: self.pos
-                            size: self.size
-                            radius: [10]
-
-                    Label:
-                        text: 'Change Admin Password'
-                        font_size: '13sp'
-                        bold: True
-                        color: 0.98, 0.65, 0.25, 1
-                        size_hint_y: None
-                        height: '20dp'
-                        halign: 'left'
-                        text_size: self.size
-
-                    BoxLayout:
-                        size_hint_y: None
-                        height: '40dp'
-                        spacing: 8
-                        Label:
-                            text: 'Old:'
-                            font_size: '12sp'
-                            color: 0.38, 0.42, 0.50, 1
-                            size_hint_x: 0.2
-                            halign: 'right'
-                            text_size: self.size
-                            valign: 'middle'
-                        TextInput:
-                            id: input_old_password
-                            hint_text: 'Current password'
-                            font_size: '14sp'
-                            multiline: False
-                            password: True
-                            size_hint_x: 0.8
-                            size_hint_y: None
-                            height: '36dp'
-                            background_color: 0.07, 0.09, 0.13, 1
-                            foreground_color: 0.96, 0.97, 0.98, 1
-                            cursor_color: 0.00, 0.82, 0.73, 1
-                            hint_text_color: 0.20, 0.22, 0.28, 1
-                            padding: [8, 6]
-
-                    BoxLayout:
-                        size_hint_y: None
-                        height: '40dp'
-                        spacing: 8
-                        Label:
-                            text: 'New:'
-                            font_size: '12sp'
-                            color: 0.38, 0.42, 0.50, 1
-                            size_hint_x: 0.2
-                            halign: 'right'
-                            text_size: self.size
-                            valign: 'middle'
-                        TextInput:
-                            id: input_new_password
-                            hint_text: 'New password'
-                            font_size: '14sp'
-                            multiline: False
-                            password: True
-                            size_hint_x: 0.8
-                            size_hint_y: None
-                            height: '36dp'
-                            background_color: 0.07, 0.09, 0.13, 1
-                            foreground_color: 0.96, 0.97, 0.98, 1
-                            cursor_color: 0.00, 0.82, 0.73, 1
-                            hint_text_color: 0.20, 0.22, 0.28, 1
-                            padding: [8, 6]
-
-                    BoxLayout:
-                        size_hint_y: None
-                        height: '40dp'
-                        spacing: 8
-                        Label:
-                            text: 'Confirm:'
-                            font_size: '12sp'
-                            color: 0.38, 0.42, 0.50, 1
-                            size_hint_x: 0.2
-                            halign: 'right'
-                            text_size: self.size
-                            valign: 'middle'
-                        TextInput:
-                            id: input_confirm_password
-                            hint_text: 'Confirm new password'
-                            font_size: '14sp'
-                            multiline: False
-                            password: True
-                            size_hint_x: 0.8
-                            size_hint_y: None
-                            height: '36dp'
-                            background_color: 0.07, 0.09, 0.13, 1
-                            foreground_color: 0.96, 0.97, 0.98, 1
-                            cursor_color: 0.00, 0.82, 0.73, 1
-                            hint_text_color: 0.20, 0.22, 0.28, 1
-                            padding: [8, 6]
-
-                    BoxLayout:
-                        size_hint_y: None
-                        height: '44dp'
-                        spacing: 8
-                        Button:
-                            text: 'CHANGE PASSWORD'
-                            font_size: '14sp'
-                            bold: True
-                            background_normal: ''
-                            background_color: 0, 0, 0, 0
-                            color: 0.02, 0.05, 0.08, 1
-                            on_release: root.change_password()
-                            canvas.before:
-                                Color:
-                                    rgba: 0.33, 0.58, 0.85, 1
-                                RoundedRectangle:
-                                    pos: self.pos
-                                    size: self.size
-                                    radius: [8]
-
-                        Widget:
-                            size_hint_x: 0.05
-
-                    Label:
-                        id: pw_change_status
-                        text: ''
-                        font_size: '12sp'
-                        color: 0.38, 0.42, 0.50, 1
-                        size_hint_y: None
-                        height: '18dp'
-                        halign: 'left'
-                        text_size: self.size
-                        markup: True
-
-                    Label:
-                        id: pw_last_changed
-                        text: 'Last changed: ---'
-                        font_size: '11sp'
-                        color: 0.38, 0.42, 0.50, 1
-                        size_hint_y: None
-                        height: '16dp'
-                        halign: 'left'
-                        text_size: self.size
-
-                # ==== SECTION 6: ALARM SIMULATION ====
-                Label:
-                    text: 'Alarm Simulation'
-                    font_size: '14sp'
-                    bold: True
-                    color: 0.00, 0.82, 0.73, 1
-                    size_hint_y: None
-                    height: '22dp'
-                    halign: 'left'
-                    text_size: self.size
-                    padding: [4, 0]
-
-                BoxLayout:
-                    orientation: 'vertical'
-                    size_hint_y: None
-                    height: self.minimum_height
-                    padding: [10, 8]
-                    spacing: 6
-                    canvas.before:
-                        Color:
-                            rgba: 0.10, 0.12, 0.16, 1
-                        RoundedRectangle:
-                            pos: self.pos
-                            size: self.size
-                            radius: [10]
-
-                    Label:
-                        text: 'Trigger test alarms to verify notification system'
-                        font_size: '11sp'
-                        color: 0.38, 0.42, 0.50, 1
-                        size_hint_y: None
-                        height: '18dp'
-                        halign: 'left'
-                        text_size: self.size
-
-                    # Single alarm simulation row
-                    BoxLayout:
-                        size_hint_y: None
-                        height: '44dp'
-                        spacing: 6
-
-                        TextInput:
-                            id: input_alarm_code
-                            hint_text: 'E001'
-                            font_size: '14sp'
-                            multiline: False
-                            size_hint_x: 0.3
-                            size_hint_y: None
-                            height: '40dp'
-                            background_color: 0.07, 0.09, 0.13, 1
-                            foreground_color: 0.96, 0.97, 0.98, 1
-                            cursor_color: 0.00, 0.82, 0.73, 1
-                            hint_text_color: 0.20, 0.22, 0.28, 1
-                            padding: [8, 6]
-
-                        Button:
-                            text: 'TRIGGER ALARM'
-                            font_size: '13sp'
-                            bold: True
-                            background_normal: ''
-                            background_color: 0, 0, 0, 0
-                            color: 0.02, 0.05, 0.08, 1
-                            size_hint_x: 0.7
-                            on_release: root.sim_trigger_alarm()
-                            canvas.before:
-                                Color:
-                                    rgba: 0.98, 0.65, 0.25, 1
-                                RoundedRectangle:
-                                    pos: self.pos
-                                    size: self.size
-                                    radius: [8]
-
-                    # Demo sequence + All categories
-                    BoxLayout:
-                        size_hint_y: None
-                        height: '44dp'
-                        spacing: 6
-
-                        Button:
-                            text: 'DEMO SEQUENCE'
-                            font_size: '12sp'
-                            bold: True
-                            background_normal: ''
-                            background_color: 0, 0, 0, 0
-                            color: 0.02, 0.05, 0.08, 1
-                            size_hint_x: 0.5
-                            on_release: root.sim_demo_sequence()
-                            canvas.before:
-                                Color:
-                                    rgba: 0.98, 0.76, 0.22, 1
-                                RoundedRectangle:
-                                    pos: self.pos
-                                    size: self.size
-                                    radius: [8]
-
-                        Button:
-                            text: 'ALL CATEGORIES'
-                            font_size: '12sp'
-                            bold: True
-                            background_normal: ''
-                            background_color: 0, 0, 0, 0
-                            color: 0.02, 0.05, 0.08, 1
-                            size_hint_x: 0.5
-                            on_release: root.sim_all_categories()
-                            canvas.before:
-                                Color:
-                                    rgba: 0.98, 0.76, 0.22, 1
-                                RoundedRectangle:
-                                    pos: self.pos
-                                    size: self.size
-                                    radius: [8]
-
-                    # Clear all alarms
-                    Button:
-                        text: 'CLEAR ALL ALARMS'
-                        font_size: '13sp'
-                        bold: True
-                        background_normal: ''
-                        background_color: 0, 0, 0, 0
-                        color: 1, 1, 1, 1
-                        size_hint_y: None
-                        height: '40dp'
-                        on_release: root.sim_clear_all()
-                        canvas.before:
-                            Color:
-                                rgba: 0.33, 0.58, 0.85, 1
-                            RoundedRectangle:
-                                pos: self.pos
-                                size: self.size
-                                radius: [8]
-
-                    Label:
-                        id: sim_status
-                        text: ''
-                        font_size: '12sp'
-                        color: 0.38, 0.42, 0.50, 1
-                        size_hint_y: None
-                        height: '18dp'
-                        halign: 'left'
-                        text_size: self.size
-                        markup: True
-
-                # ==== BOTTOM STATUS ====
-                Label:
-                    id: admin_status_label
-                    text: ''
-                    font_size: '13sp'
-                    color: 0.38, 0.42, 0.50, 1
-                    size_hint_y: None
-                    height: '22dp'
-                    halign: 'center'
-                    text_size: self.size
-                    markup: True
-
-                # ==== BOTTOM ACTION BUTTONS ====
-                BoxLayout:
-                    spacing: 8
-                    size_hint_y: None
-                    height: '64dp'
-
-                    Button:
-                        text: 'SAVE & RESTART'
-                        font_size: '17sp'
-                        bold: True
-                        background_normal: ''
-                        background_color: 0, 0, 0, 0
-                        color: 0.02, 0.05, 0.08, 1
-                        on_release: root.save_and_restart()
-                        canvas.before:
-                            Color:
-                                rgba: 0.00, 0.82, 0.73, 1
-                            RoundedRectangle:
-                                pos: self.pos
-                                size: self.size
-                                radius: [12]
-
-                    Button:
-                        text: 'CANCEL'
-                        font_size: '15sp'
-                        bold: True
-                        background_normal: ''
-                        background_color: 0, 0, 0, 0
-                        color: 0.60, 0.64, 0.72, 1
-                        size_hint_x: 0.35
-                        on_release: root.go_back()
-                        canvas.before:
-                            Color:
-                                rgba: 0.13, 0.15, 0.20, 1
-                            RoundedRectangle:
-                                pos: self.pos
-                                size: self.size
-                                radius: [12]
-
-                BoxLayout:
-                    size_hint_y: None
-                    height: '54dp'
-                    Button:
-                        text: 'FACTORY RESET'
-                        font_size: '15sp'
-                        bold: True
-                        background_normal: ''
-                        background_color: 0, 0, 0, 0
-                        color: 1, 1, 1, 1
-                        on_release: root.confirm_factory_reset()
-                        canvas.before:
-                            Color:
-                                rgba: 0.93, 0.27, 0.32, 1
-                            RoundedRectangle:
-                                pos: self.pos
-                                size: self.size
-                                radius: [12]
-
-                # Bottom spacer
-                Widget:
-                    size_hint_y: None
-                    height: '12dp'
+                padding: [dp(12), dp(8)]
+                spacing: dp(8)
 ''')
 
+
+# ==============================================================
+# HELPER WIDGETS
+# ==============================================================
+
+class _SectionHeader(BoxLayout):
+    """Section title bar with optional icon."""
+
+    def __init__(self, title, icon='', **kwargs):
+        super().__init__(
+            orientation='horizontal',
+            size_hint_y=None,
+            height=dp(36),
+            padding=[dp(8), dp(4)],
+            **kwargs,
+        )
+        txt = f'{icon}  {title}' if icon else title
+        self.add_widget(Label(
+            text=txt,
+            font_size=DS.FONT_H3,
+            bold=True,
+            color=DS.PRIMARY,
+            halign='left',
+            valign='middle',
+            text_size=(None, None),
+        ))
+
+
+class _DriverToggleRow(BoxLayout):
+    """A row with sensor name, current mode, and toggle button."""
+
+    def __init__(self, sensor_label, sensor_key, screen_ref, **kwargs):
+        super().__init__(
+            orientation='horizontal',
+            size_hint_y=None,
+            height=dp(DS.BTN_HEIGHT_MD),
+            spacing=dp(8),
+            padding=[dp(8), dp(4)],
+            **kwargs,
+        )
+        self._sensor_key = sensor_key
+        self._screen_ref = screen_ref
+
+        # Card background
+        with self.canvas.before:
+            Color(*DS.BG_CARD)
+            self._bg = RoundedRectangle(pos=self.pos, size=self.size, radius=[dp(DS.RADIUS)])
+        self.bind(pos=lambda w, v: setattr(w._bg, 'pos', v),
+                  size=lambda w, v: setattr(w._bg, 'size', v))
+
+        self._name_lbl = Label(
+            text=sensor_label,
+            font_size=DS.FONT_BODY,
+            bold=True,
+            color=DS.TEXT_PRIMARY,
+            size_hint_x=0.4,
+            halign='left',
+            text_size=(None, None),
+        )
+
+        self._status_lbl = Label(
+            text='FAKE',
+            font_size=DS.FONT_SMALL,
+            color=DS.TEXT_MUTED,
+            size_hint_x=0.25,
+        )
+
+        self._toggle_btn = Button(
+            text='SWITCH',
+            font_size=DS.FONT_SMALL,
+            bold=True,
+            size_hint_x=0.35,
+            background_normal='',
+            background_color=DS.PRIMARY,
+            color=DS.BG_DARK,
+        )
+        self._toggle_btn.bind(on_release=self._on_toggle)
+
+        self.add_widget(self._name_lbl)
+        self.add_widget(self._status_lbl)
+        self.add_widget(self._toggle_btn)
+
+    def refresh(self):
+        """Update visual state from current config."""
+        mode = self._screen_ref.driver_modes.get(self._sensor_key, 'fake')
+        is_real = mode == 'real'
+        self._status_lbl.text = 'REAL' if is_real else 'FAKE'
+        self._status_lbl.color = DS.SUCCESS if is_real else DS.TEXT_MUTED
+        self._toggle_btn.text = 'SET FAKE' if is_real else 'SET REAL'
+        self._toggle_btn.background_color = DS.ACCENT if is_real else DS.PRIMARY
+
+    def _on_toggle(self, _inst):
+        self._screen_ref.toggle_driver(self._sensor_key)
+
+
+class _ConfigValueRow(BoxLayout):
+    """A config parameter row with label, current value, and edit field."""
+
+    def __init__(self, label_text, config_key, current_val, screen_ref, suffix='', **kwargs):
+        super().__init__(
+            orientation='horizontal',
+            size_hint_y=None,
+            height=dp(DS.BTN_HEIGHT_SM),
+            spacing=dp(6),
+            padding=[dp(8), dp(2)],
+            **kwargs,
+        )
+        self._config_key = config_key
+        self._screen_ref = screen_ref
+        self._suffix = suffix
+
+        with self.canvas.before:
+            Color(*DS.BG_CARD)
+            self._bg = RoundedRectangle(pos=self.pos, size=self.size, radius=[dp(8)])
+        self.bind(pos=lambda w, v: setattr(w._bg, 'pos', v),
+                  size=lambda w, v: setattr(w._bg, 'size', v))
+
+        self.add_widget(Label(
+            text=label_text,
+            font_size=DS.FONT_SMALL,
+            color=DS.TEXT_SECONDARY,
+            size_hint_x=0.45,
+            halign='left',
+            text_size=(None, None),
+        ))
+
+        self._input = TextInput(
+            text=str(current_val),
+            multiline=False,
+            font_size=DS.FONT_SMALL,
+            size_hint_x=0.3,
+            background_color=DS.BG_INPUT,
+            foreground_color=DS.TEXT_PRIMARY,
+            hint_text_color=DS.TEXT_MUTED,
+            cursor_color=DS.PRIMARY,
+            padding=[dp(6), dp(6)],
+        )
+
+        save_btn = Button(
+            text='SAVE',
+            font_size=DS.FONT_TINY,
+            bold=True,
+            size_hint_x=0.25,
+            background_normal='',
+            background_color=DS.PRIMARY_DIM,
+            color=DS.TEXT_PRIMARY,
+        )
+        save_btn.bind(on_release=self._on_save)
+
+        self.add_widget(self._input)
+        self.add_widget(save_btn)
+
+    def _on_save(self, _inst):
+        val = self._input.text.strip()
+        if val:
+            self._screen_ref.save_config(self._config_key, val)
+
+
+# ==============================================================
+# ADMIN SCREEN
+# ==============================================================
 
 class AdminScreen(Screen):
     """Password-protected admin configuration screen."""
 
-    # Current working copy of driver modes
-    _driver_modes = DictProperty({
+    authenticated = BooleanProperty(False)
+    driver_modes = DictProperty({
         'rfid': 'fake',
         'weight': 'fake',
         'led': 'fake',
         'buzzer': 'fake',
     })
 
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+        self._driver_rows = {}
+        self._built = False
+
+    # ----------------------------------------------------------
+    # Lifecycle
+    # ----------------------------------------------------------
+
     def on_enter(self):
-        """Load current settings into the form when entering."""
-        self._load_current_settings()
-        self._update_password_info()
+        """Show password dialog, then build content on success."""
+        self._load_driver_modes()
+        if not self.authenticated:
+            show_admin_password_dialog(self._on_auth_success)
+        else:
+            self._refresh_all()
 
-    def _load_current_settings(self):
-        """Populate all fields from current settings (DB overrides first, then defaults)."""
+    def on_leave(self):
+        """Reset auth so re-entry requires password."""
+        self.authenticated = False
+
+    def go_back(self):
         app = App.get_running_app()
+        if app:
+            app.root.current = 'settings'
 
-        # Load admin config from DB (may override defaults)
-        admin_cfg = app.db.get_admin_config()
+    # ----------------------------------------------------------
+    # Auth
+    # ----------------------------------------------------------
 
-        # --- Driver modes ---
-        self._driver_modes = {
-            'rfid': admin_cfg.get('driver_rfid', settings.DRIVER_RFID),
-            'weight': admin_cfg.get('driver_weight', settings.DRIVER_WEIGHT),
-            'led': admin_cfg.get('driver_led', settings.DRIVER_LED),
-            'buzzer': admin_cfg.get('driver_buzzer', settings.DRIVER_BUZZER),
+    def _on_auth_success(self):
+        self.authenticated = True
+        if not self._built:
+            self._build_content()
+        self._refresh_all()
+
+    # ----------------------------------------------------------
+    # Driver mode management
+    # ----------------------------------------------------------
+
+    def _load_driver_modes(self):
+        """Read current driver modes from settings module."""
+        self.driver_modes = {
+            'rfid': getattr(settings, 'DRIVER_RFID', 'fake'),
+            'weight': getattr(settings, 'DRIVER_WEIGHT', 'fake'),
+            'led': getattr(settings, 'DRIVER_LED', 'fake'),
+            'buzzer': getattr(settings, 'DRIVER_BUZZER', 'fake'),
         }
-        self._refresh_toggle_buttons()
 
-        # --- Hardware config ---
-        self.ids.input_rfid_i2c_bus.text = str(
-            admin_cfg.get('rfid_i2c_bus', settings.RFID_I2C_BUS))
-        self.ids.input_rfid_i2c_addr.text = admin_cfg.get(
-            'rfid_i2c_addr', hex(settings.RFID_I2C_ADDRESS))
-        self.ids.input_weight_port.text = admin_cfg.get(
-            'weight_serial_port', settings.WEIGHT_SERIAL_PORT)
-        self.ids.input_weight_baud.text = str(
-            admin_cfg.get('weight_serial_baud', settings.WEIGHT_SERIAL_BAUD))
-        self.ids.input_led_gpio.text = str(
-            admin_cfg.get('led_gpio_pin', settings.LED_GPIO_PIN))
-        self.ids.input_led_count.text = str(
-            admin_cfg.get('led_count', settings.LED_COUNT))
-        self.ids.input_led_brightness.text = str(
-            admin_cfg.get('led_brightness', settings.LED_BRIGHTNESS))
-        self.ids.input_buzzer_gpio.text = str(
-            admin_cfg.get('buzzer_gpio_pin', settings.BUZZER_GPIO_PIN))
-
-        # --- Polling & thresholds ---
-        self.ids.input_rfid_poll.text = str(
-            admin_cfg.get('rfid_poll_interval_ms', settings.RFID_POLL_INTERVAL_MS))
-        self.ids.input_weight_poll.text = str(
-            admin_cfg.get('weight_poll_interval_ms', settings.WEIGHT_POLL_INTERVAL_MS))
-        self.ids.input_weight_stable.text = str(
-            admin_cfg.get('weight_stable_window_s', settings.WEIGHT_STABLE_WINDOW_S))
-        self.ids.input_weight_tolerance.text = str(
-            admin_cfg.get('weight_stable_tolerance_g', settings.WEIGHT_STABLE_TOLERANCE_G))
-
-        # --- Mixing parameters ---
-        self.ids.input_mix_tolerance.text = str(
-            admin_cfg.get('mix_ratio_tolerance_pct', settings.MIX_RATIO_TOLERANCE_PCT))
-        self.ids.input_mix_stable.text = str(
-            admin_cfg.get('mix_weight_stable_s', settings.MIX_WEIGHT_STABLE_S))
-        self.ids.input_thinner_max.text = str(
-            admin_cfg.get('thinner_max_pct', settings.THINNER_MAX_PCT))
-
-        # --- Clear password fields ---
-        self.ids.input_old_password.text = ''
-        self.ids.input_new_password.text = ''
-        self.ids.input_confirm_password.text = ''
-        self.ids.pw_change_status.text = ''
-
-        # --- Clear status ---
-        self.ids.admin_status_label.text = ''
-
-        # --- Show/hide hardware config based on driver modes ---
-        self._update_hw_visibility()
-
-    def _refresh_toggle_buttons(self):
-        """Update toggle button text and colors based on current driver modes."""
-        for name in ['rfid', 'weight', 'led', 'buzzer']:
-            btn = self.ids.get(f'toggle_{name}')
-            if btn:
-                mode = self._driver_modes.get(name, 'fake')
-                if mode == 'real':
-                    btn.text = 'REAL'
-                    btn.background_color = [0.20, 0.82, 0.48, 1]  # Green
-                else:
-                    btn.text = 'FAKE'
-                    btn.background_color = [0.30, 0.33, 0.38, 1]  # Gray
-
-    def toggle_driver(self, driver_name):
-        """Toggle a driver between fake and real mode."""
-        current = self._driver_modes.get(driver_name, 'fake')
+    def toggle_driver(self, sensor_key):
+        """Switch a single driver between fake and real, persist to DB config."""
+        current = self.driver_modes.get(sensor_key, 'fake')
         new_mode = 'real' if current == 'fake' else 'fake'
-        self._driver_modes[driver_name] = new_mode
-        self._refresh_toggle_buttons()
-        self._update_hw_visibility()
+        self.driver_modes[sensor_key] = new_mode
 
-    def _update_hw_visibility(self):
-        """Show/hide hardware config rows based on which drivers are set to real."""
-        any_real = any(v == 'real' for v in self._driver_modes.values())
+        # Persist to settings module (runtime)
+        attr_name = f'DRIVER_{sensor_key.upper()}'
+        setattr(settings, attr_name, new_mode)
 
-        # RFID hw config visibility
-        rfid_real = self._driver_modes.get('rfid', 'fake') == 'real'
-        self.ids.rfid_hw_header.opacity = 1 if rfid_real else 0.3
-        self.ids.rfid_hw_row.opacity = 1 if rfid_real else 0.3
-        self.ids.rfid_hw_row.disabled = not rfid_real
-
-        # Weight hw config visibility
-        weight_real = self._driver_modes.get('weight', 'fake') == 'real'
-        self.ids.weight_hw_header.opacity = 1 if weight_real else 0.3
-        self.ids.weight_hw_row.opacity = 1 if weight_real else 0.3
-        self.ids.weight_hw_row.disabled = not weight_real
-
-        # LED hw config visibility
-        led_real = self._driver_modes.get('led', 'fake') == 'real'
-        self.ids.led_hw_header.opacity = 1 if led_real else 0.3
-        self.ids.led_hw_row.opacity = 1 if led_real else 0.3
-        self.ids.led_hw_row.disabled = not led_real
-
-        # Buzzer hw config visibility
-        buzzer_real = self._driver_modes.get('buzzer', 'fake') == 'real'
-        self.ids.buzzer_hw_header.opacity = 1 if buzzer_real else 0.3
-        self.ids.buzzer_hw_row.opacity = 1 if buzzer_real else 0.3
-        self.ids.buzzer_hw_row.disabled = not buzzer_real
-
-    def _update_password_info(self):
-        """Show the last password change date."""
+        # Persist to DB config (survives restart)
         app = App.get_running_app()
-        change_date = app.db.get_admin_password_change_date()
-        if change_date:
-            self.ids.pw_last_changed.text = f'Last changed: {change_date}'
-        else:
-            self.ids.pw_last_changed.text = 'Last changed: Never (using default)'
+        if app and hasattr(app, 'db') and app.db:
+            try:
+                app.db.set_config(attr_name, new_mode)
+            except Exception as e:
+                logger.warning(f"Could not persist driver mode: {e}")
 
-    def _collect_config(self):
-        """Collect all form values into a config dictionary."""
-        config = {}
+        # Update driver_status dict on app if available
+        if app and hasattr(app, 'driver_status'):
+            app.driver_status[sensor_key] = new_mode
 
-        # Driver modes
-        config['driver_rfid'] = self._driver_modes.get('rfid', 'fake')
-        config['driver_weight'] = self._driver_modes.get('weight', 'fake')
-        config['driver_led'] = self._driver_modes.get('led', 'fake')
-        config['driver_buzzer'] = self._driver_modes.get('buzzer', 'fake')
+        # Refresh UI
+        if sensor_key in self._driver_rows:
+            self._driver_rows[sensor_key].refresh()
 
-        # Hardware config
-        try:
-            config['rfid_i2c_bus'] = int(self.ids.input_rfid_i2c_bus.text)
-        except ValueError:
-            config['rfid_i2c_bus'] = settings.RFID_I2C_BUS
-        config['rfid_i2c_addr'] = self.ids.input_rfid_i2c_addr.text.strip()
-        config['weight_serial_port'] = self.ids.input_weight_port.text.strip()
-        try:
-            config['weight_serial_baud'] = int(self.ids.input_weight_baud.text)
-        except ValueError:
-            config['weight_serial_baud'] = settings.WEIGHT_SERIAL_BAUD
-        try:
-            config['led_gpio_pin'] = int(self.ids.input_led_gpio.text)
-        except ValueError:
-            config['led_gpio_pin'] = settings.LED_GPIO_PIN
-        try:
-            config['led_count'] = int(self.ids.input_led_count.text)
-        except ValueError:
-            config['led_count'] = settings.LED_COUNT
-        try:
-            config['led_brightness'] = int(self.ids.input_led_brightness.text)
-        except ValueError:
-            config['led_brightness'] = settings.LED_BRIGHTNESS
-        try:
-            config['buzzer_gpio_pin'] = int(self.ids.input_buzzer_gpio.text)
-        except ValueError:
-            config['buzzer_gpio_pin'] = settings.BUZZER_GPIO_PIN
+        logger.info(f"Driver {sensor_key} toggled to {new_mode}")
 
-        # Polling & thresholds
-        try:
-            config['rfid_poll_interval_ms'] = int(self.ids.input_rfid_poll.text)
-        except ValueError:
-            config['rfid_poll_interval_ms'] = settings.RFID_POLL_INTERVAL_MS
-        try:
-            config['weight_poll_interval_ms'] = int(self.ids.input_weight_poll.text)
-        except ValueError:
-            config['weight_poll_interval_ms'] = settings.WEIGHT_POLL_INTERVAL_MS
-        try:
-            config['weight_stable_window_s'] = float(self.ids.input_weight_stable.text)
-        except ValueError:
-            config['weight_stable_window_s'] = settings.WEIGHT_STABLE_WINDOW_S
-        try:
-            config['weight_stable_tolerance_g'] = int(self.ids.input_weight_tolerance.text)
-        except ValueError:
-            config['weight_stable_tolerance_g'] = settings.WEIGHT_STABLE_TOLERANCE_G
+    # ----------------------------------------------------------
+    # Config save
+    # ----------------------------------------------------------
 
-        # Mixing parameters
-        try:
-            config['mix_ratio_tolerance_pct'] = float(self.ids.input_mix_tolerance.text)
-        except ValueError:
-            config['mix_ratio_tolerance_pct'] = settings.MIX_RATIO_TOLERANCE_PCT
-        try:
-            config['mix_weight_stable_s'] = float(self.ids.input_mix_stable.text)
-        except ValueError:
-            config['mix_weight_stable_s'] = settings.MIX_WEIGHT_STABLE_S
-        try:
-            config['thinner_max_pct'] = float(self.ids.input_thinner_max.text)
-        except ValueError:
-            config['thinner_max_pct'] = settings.THINNER_MAX_PCT
-
-        return config
-
-    def save_and_restart(self):
-        """Save current admin configuration to DB and show restart message."""
+    def save_config(self, key, value):
+        """Save a config value to the database and settings module."""
         app = App.get_running_app()
-        config = self._collect_config()
-        app.db.save_admin_config(config)
 
-        self.ids.admin_status_label.text = (
-            '[color=33d17a]Settings saved! Restart app to apply changes.[/color]'
-        )
-        self.ids.admin_status_label.markup = True
+        # Try to cast numeric values
+        try:
+            if '.' in value:
+                cast_val = float(value)
+            else:
+                cast_val = int(value)
+        except ValueError:
+            cast_val = value
 
-    def change_password(self):
-        """Change the admin password after validating old password."""
-        app = App.get_running_app()
-        old_pw = self.ids.input_old_password.text
-        new_pw = self.ids.input_new_password.text
-        confirm_pw = self.ids.input_confirm_password.text
+        # Update runtime settings
+        if hasattr(settings, key):
+            setattr(settings, key, cast_val)
 
-        # Validate old password
-        stored_hash = app.db.get_admin_password_hash()
-        if stored_hash is None:
-            # First time: default password
-            expected_hash = hashlib.sha256(
-                DEFAULT_ADMIN_PASSWORD.encode()
-            ).hexdigest()
-        else:
-            expected_hash = stored_hash
+        # Persist to DB
+        if app and hasattr(app, 'db') and app.db:
+            try:
+                app.db.set_config(key, str(value))
+            except Exception as e:
+                logger.warning(f"Could not persist config {key}: {e}")
 
-        old_hash = hashlib.sha256(old_pw.encode()).hexdigest()
-        if old_hash != expected_hash:
-            self.ids.pw_change_status.text = (
-                '[color=ed4550]Old password is incorrect[/color]'
-            )
-            self.ids.pw_change_status.markup = True
-            return
+        logger.info(f"Config saved: {key} = {value}")
 
-        # Validate new password
-        if not new_pw or len(new_pw) < 4:
-            self.ids.pw_change_status.text = (
-                '[color=ed4550]New password must be at least 4 characters[/color]'
-            )
-            self.ids.pw_change_status.markup = True
-            return
+    # ----------------------------------------------------------
+    # Change admin password
+    # ----------------------------------------------------------
 
-        if new_pw != confirm_pw:
-            self.ids.pw_change_status.text = (
-                '[color=ed4550]New passwords do not match[/color]'
-            )
-            self.ids.pw_change_status.markup = True
-            return
+    def _change_password(self):
+        """Show a popup to change the admin password."""
+        content = BoxLayout(orientation='vertical', spacing=dp(10), padding=dp(14))
 
-        # Save new hash
-        new_hash = hashlib.sha256(new_pw.encode()).hexdigest()
-        app.db.set_admin_password_hash(new_hash)
-
-        # Clear fields and show success
-        self.ids.input_old_password.text = ''
-        self.ids.input_new_password.text = ''
-        self.ids.input_confirm_password.text = ''
-        self.ids.pw_change_status.text = (
-            '[color=33d17a]Password changed successfully[/color]'
-        )
-        self.ids.pw_change_status.markup = True
-        self._update_password_info()
-
-    def confirm_factory_reset(self):
-        """Show a confirmation dialog before factory reset."""
-        content = BoxLayout(orientation='vertical', padding=10, spacing=10)
+        with content.canvas.before:
+            Color(*DS.BG_CARD)
+            content._bg = RoundedRectangle(pos=content.pos, size=content.size, radius=[dp(DS.RADIUS)])
+        content.bind(pos=lambda w, v: setattr(w._bg, 'pos', v),
+                     size=lambda w, v: setattr(w._bg, 'size', v))
 
         content.add_widget(Label(
-            text='Reset ALL settings to factory defaults?',
-            font_size='16sp',
-            color=[0.96, 0.97, 0.98, 1],
-            size_hint_y=None,
-            height=40,
-            halign='center',
-            text_size=(350, None),
-        ))
-        content.add_widget(Label(
-            text='This cannot be undone.',
-            font_size='13sp',
-            color=[0.93, 0.27, 0.32, 1],
-            size_hint_y=None,
-            height=24,
-            halign='center',
-            text_size=(350, None),
+            text='CHANGE ADMIN PASSWORD',
+            font_size=DS.FONT_H3, bold=True, color=DS.TEXT_PRIMARY,
+            size_hint_y=None, height=dp(30),
         ))
 
-        btn_row = BoxLayout(spacing=12, size_hint_y=None, height=54)
-
-        cancel_btn = Button(
-            text='CANCEL',
-            font_size='15sp',
-            bold=True,
-            background_normal='',
-            background_color=[0.13, 0.15, 0.20, 1],
-            color=[0.60, 0.64, 0.72, 1],
+        new_pwd = TextInput(
+            hint_text='New password', password=True, multiline=False,
+            font_size=DS.FONT_BODY, size_hint_y=None, height=dp(DS.BTN_HEIGHT_MD),
+            background_color=DS.BG_INPUT, foreground_color=DS.TEXT_PRIMARY,
+            hint_text_color=DS.TEXT_MUTED, cursor_color=DS.PRIMARY,
+            padding=[dp(10), dp(10)],
         )
-        confirm_btn = Button(
-            text='RESET',
-            font_size='15sp',
-            bold=True,
-            background_normal='',
-            background_color=[0.93, 0.27, 0.32, 1],
-            color=[1, 1, 1, 1],
+        confirm_pwd = TextInput(
+            hint_text='Confirm password', password=True, multiline=False,
+            font_size=DS.FONT_BODY, size_hint_y=None, height=dp(DS.BTN_HEIGHT_MD),
+            background_color=DS.BG_INPUT, foreground_color=DS.TEXT_PRIMARY,
+            hint_text_color=DS.TEXT_MUTED, cursor_color=DS.PRIMARY,
+            padding=[dp(10), dp(10)],
         )
+        error_lbl = Label(text='', font_size=DS.FONT_SMALL, color=DS.DANGER,
+                          size_hint_y=None, height=dp(20))
 
+        btn_row = BoxLayout(spacing=dp(8), size_hint_y=None, height=dp(DS.BTN_HEIGHT_LG))
+        cancel_btn = Button(text='CANCEL', font_size=DS.FONT_BODY, bold=True,
+                            size_hint_x=0.5, background_normal='',
+                            background_color=DS.BG_CARD_HOVER, color=DS.TEXT_SECONDARY)
+        save_btn = Button(text='SAVE', font_size=DS.FONT_BODY, bold=True,
+                          size_hint_x=0.5, background_normal='',
+                          background_color=DS.PRIMARY, color=DS.BG_DARK)
         btn_row.add_widget(cancel_btn)
-        btn_row.add_widget(confirm_btn)
+        btn_row.add_widget(save_btn)
+
+        content.add_widget(new_pwd)
+        content.add_widget(confirm_pwd)
+        content.add_widget(error_lbl)
         content.add_widget(btn_row)
 
         popup = Popup(
-            title='Factory Reset',
-            title_color=[0.93, 0.27, 0.32, 1],
-            title_size='18sp',
-            content=content,
-            size_hint=(0.8, 0.45),
-            separator_color=[0.93, 0.27, 0.32, 1],
-            background_color=[0.08, 0.09, 0.12, 1],
-            auto_dismiss=False,
+            title='', separator_height=0, content=content,
+            size_hint=(0.85, None), height=dp(320),
+            auto_dismiss=False, background_color=(0, 0, 0, 0.85), background='',
         )
 
-        cancel_btn.bind(on_release=popup.dismiss)
-        confirm_btn.bind(on_release=lambda x: self._do_factory_reset(popup))
+        def _cancel(_inst):
+            popup.dismiss()
+
+        def _save(_inst):
+            p1 = new_pwd.text.strip()
+            p2 = confirm_pwd.text.strip()
+            if len(p1) < 6:
+                error_lbl.text = 'Password must be at least 6 characters'
+                return
+            if p1 != p2:
+                error_lbl.text = 'Passwords do not match'
+                return
+            new_hash = _hash_password(p1)
+            app = App.get_running_app()
+            if app and hasattr(app, 'db') and app.db:
+                try:
+                    app.db.set_config("admin_password_hash", new_hash)
+                except Exception as e:
+                    error_lbl.text = f'Save failed: {e}'
+                    return
+            popup.dismiss()
+            logger.info("Admin password changed successfully")
+
+        cancel_btn.bind(on_release=_cancel)
+        save_btn.bind(on_release=_save)
+
+        popup.open()
+        Clock.schedule_once(lambda dt: setattr(new_pwd, 'focus', True), 0.2)
+
+    # ----------------------------------------------------------
+    # Factory reset confirmation
+    # ----------------------------------------------------------
+
+    def _factory_reset(self):
+        """Show confirmation dialog for factory reset."""
+        content = BoxLayout(orientation='vertical', spacing=dp(10), padding=dp(14))
+
+        with content.canvas.before:
+            Color(*DS.BG_CARD)
+            content._bg = RoundedRectangle(pos=content.pos, size=content.size, radius=[dp(DS.RADIUS)])
+        content.bind(pos=lambda w, v: setattr(w._bg, 'pos', v),
+                     size=lambda w, v: setattr(w._bg, 'size', v))
+
+        content.add_widget(Label(
+            text='FACTORY RESET',
+            font_size=DS.FONT_H2, bold=True, color=DS.DANGER,
+            size_hint_y=None, height=dp(30),
+        ))
+        content.add_widget(Label(
+            text='This will erase all local data, unpair the device, and reset all settings to defaults.',
+            font_size=DS.FONT_SMALL, color=DS.TEXT_SECONDARY,
+            size_hint_y=None, height=dp(48), text_size=(dp(280), None),
+            halign='center',
+        ))
+
+        btn_row = BoxLayout(spacing=dp(8), size_hint_y=None, height=dp(DS.BTN_HEIGHT_LG))
+        cancel_btn = Button(text='CANCEL', font_size=DS.FONT_BODY, bold=True,
+                            size_hint_x=0.5, background_normal='',
+                            background_color=DS.BG_CARD_HOVER, color=DS.TEXT_SECONDARY)
+        reset_btn = Button(text='RESET', font_size=DS.FONT_BODY, bold=True,
+                           size_hint_x=0.5, background_normal='',
+                           background_color=DS.DANGER, color=DS.TEXT_PRIMARY)
+        btn_row.add_widget(cancel_btn)
+        btn_row.add_widget(reset_btn)
+
+        content.add_widget(Widget(size_hint_y=None, height=dp(8)))
+        content.add_widget(btn_row)
+
+        popup = Popup(
+            title='', separator_height=0, content=content,
+            size_hint=(0.75, None), height=dp(240),
+            auto_dismiss=False, background_color=(0, 0, 0, 0.85), background='',
+        )
+
+        def _cancel(_inst):
+            popup.dismiss()
+
+        def _reset(_inst):
+            popup.dismiss()
+            app = App.get_running_app()
+            if app and hasattr(app, 'db') and app.db:
+                try:
+                    app.db.factory_reset()
+                    logger.info("Factory reset executed")
+                except Exception as e:
+                    logger.error(f"Factory reset failed: {e}")
+
+        cancel_btn.bind(on_release=_cancel)
+        reset_btn.bind(on_release=_reset)
+
         popup.open()
 
-    def _do_factory_reset(self, popup):
-        """Execute factory reset: clear admin config and password from DB."""
-        app = App.get_running_app()
+    # ----------------------------------------------------------
+    # Build UI content (once)
+    # ----------------------------------------------------------
 
-        # Delete admin settings from config table
-        try:
-            app.db.conn.execute(
-                "DELETE FROM config WHERE key = 'admin_settings'"
-            )
-            app.db.conn.execute(
-                "DELETE FROM config WHERE key = 'admin_password_hash'"
-            )
-            app.db.conn.commit()
-        except Exception:
-            pass
+    def _build_content(self):
+        """Construct all admin panel cards and widgets."""
+        self._built = True
+        box = self.ids.content_box
 
-        popup.dismiss()
+        # ===================== DRIVER MODES =====================
+        box.add_widget(_SectionHeader('DRIVER MODES', icon=''))
 
-        # Reload the form with defaults
-        self._load_current_settings()
-        self._update_password_info()
-        self.ids.admin_status_label.text = (
-            '[color=fac238]Factory reset complete. Restart app to apply.[/color]'
+        drivers = [
+            ('RFID Reader', 'rfid'),
+            ('Weight Sensor', 'weight'),
+            ('LED Strip', 'led'),
+            ('Buzzer', 'buzzer'),
+        ]
+        for label, key in drivers:
+            row = _DriverToggleRow(label, key, self)
+            self._driver_rows[key] = row
+            box.add_widget(row)
+
+        box.add_widget(Widget(size_hint_y=None, height=dp(6)))
+
+        # ===================== HARDWARE CONFIG =====================
+        box.add_widget(_SectionHeader('HARDWARE CONFIG', icon=''))
+
+        hw_configs = [
+            ('RFID Module', 'RFID_MODULE', getattr(settings, 'RFID_MODULE', 'rc522')),
+            ('Device ID', 'DEVICE_ID', getattr(settings, 'DEVICE_ID', 'LOCKER-DEV-001')),
+        ]
+        for label, key, val in hw_configs:
+            box.add_widget(_ConfigValueRow(label, key, val, self))
+
+        box.add_widget(Widget(size_hint_y=None, height=dp(6)))
+
+        # ===================== POLLING & THRESHOLDS =====================
+        box.add_widget(_SectionHeader('THRESHOLDS & POLLING', icon=''))
+
+        threshold_configs = [
+            ('RFID Poll (ms)', 'RFID_POLL_INTERVAL_MS',
+             getattr(settings, 'RFID_POLL_INTERVAL_MS', 500), 'ms'),
+            ('Weight Poll (ms)', 'WEIGHT_POLL_INTERVAL_MS',
+             getattr(settings, 'WEIGHT_POLL_INTERVAL_MS', 200), 'ms'),
+            ('Stable Window (s)', 'WEIGHT_STABLE_WINDOW_S',
+             getattr(settings, 'WEIGHT_STABLE_WINDOW_S', 3.0), 's'),
+            ('Stable Tolerance (g)', 'WEIGHT_STABLE_TOLERANCE_G',
+             getattr(settings, 'WEIGHT_STABLE_TOLERANCE_G', 10), 'g'),
+            ('Removal Timeout (s)', 'CAN_REMOVAL_TIMEOUT_S',
+             getattr(settings, 'CAN_REMOVAL_TIMEOUT_S', 14400), 's'),
+        ]
+        for label, key, val, suffix in threshold_configs:
+            box.add_widget(_ConfigValueRow(label, key, val, self, suffix=suffix))
+
+        box.add_widget(Widget(size_hint_y=None, height=dp(6)))
+
+        # ===================== SECURITY =====================
+        box.add_widget(_SectionHeader('SECURITY', icon=''))
+
+        # Change password button
+        pwd_btn = Button(
+            text='CHANGE ADMIN PASSWORD',
+            font_size=DS.FONT_BODY,
+            bold=True,
+            size_hint_y=None,
+            height=dp(DS.BTN_HEIGHT_MD),
+            background_normal='',
+            background_color=DS.SECONDARY,
+            color=DS.TEXT_PRIMARY,
         )
-        self.ids.admin_status_label.markup = True
+        pwd_btn.bind(on_release=lambda _: self._change_password())
+        box.add_widget(pwd_btn)
 
-    # --- Alarm Simulation Methods ---
+        box.add_widget(Widget(size_hint_y=None, height=dp(6)))
 
-    def sim_trigger_alarm(self):
-        """Trigger a single alarm by error code from the text input."""
+        # Factory reset button
+        reset_btn = Button(
+            text='FACTORY RESET',
+            font_size=DS.FONT_BODY,
+            bold=True,
+            size_hint_y=None,
+            height=dp(DS.BTN_HEIGHT_MD),
+            background_normal='',
+            background_color=DS.DANGER_DIM,
+            color=DS.TEXT_PRIMARY,
+        )
+        reset_btn.bind(on_release=lambda _: self._factory_reset())
+        box.add_widget(reset_btn)
+
+        # ===================== DEVICE INFO =====================
+        box.add_widget(Widget(size_hint_y=None, height=dp(8)))
+        box.add_widget(_SectionHeader('DEVICE INFO', icon=''))
+
         app = App.get_running_app()
-        code = self.ids.input_alarm_code.text.strip().upper()
-        if not code:
-            self.ids.sim_status.text = '[color=ed4550]Enter an error code (e.g. E001)[/color]'
-            return
+        device_id = getattr(app, 'device_id', getattr(settings, 'DEVICE_ID', 'N/A'))
 
-        try:
-            alarm = app.alarm_manager.simulate_alarm(code, "Manual simulation from Admin")
-            if alarm:
-                self.ids.sim_status.text = (
-                    f'[color=fac238]Triggered {code}: {alarm.error_code.description}[/color]'
-                )
-            else:
-                self.ids.sim_status.text = (
-                    f'[color=ed4550]Unknown error code: {code}[/color]'
-                )
-        except Exception as e:
-            self.ids.sim_status.text = f'[color=ed4550]Error: {e}[/color]'
-
-    def sim_demo_sequence(self):
-        """Run the demo alarm sequence (E021 → E066 → E001 → E020)."""
-        app = App.get_running_app()
-        try:
-            app.alarm_manager.simulate_demo_sequence()
-            self.ids.sim_status.text = (
-                '[color=fac238]Demo sequence started (4 alarms over ~10s)...[/color]'
+        info_texts = [
+            f'Device ID:  {device_id}',
+            f'Vessel:  {getattr(settings, "VESSEL_NAME", "N/A")}',
+            f'Mode:  {getattr(settings, "MODE", "auto")}',
+        ]
+        for txt in info_texts:
+            lbl = Label(
+                text=txt,
+                font_size=DS.FONT_SMALL,
+                color=DS.TEXT_MUTED,
+                size_hint_y=None,
+                height=dp(22),
+                halign='left',
+                text_size=(None, None),
             )
-        except Exception as e:
-            self.ids.sim_status.text = f'[color=ed4550]Error: {e}[/color]'
+            box.add_widget(lbl)
 
-    def sim_all_categories(self):
-        """Simulate one alarm from each category."""
-        app = App.get_running_app()
-        try:
-            app.alarm_manager.simulate_all_categories()
-            count = app.alarm_manager.active_count()
-            self.ids.sim_status.text = (
-                f'[color=fac238]All categories triggered — {count} active alarms[/color]'
-            )
-        except Exception as e:
-            self.ids.sim_status.text = f'[color=ed4550]Error: {e}[/color]'
+        # Bottom padding
+        box.add_widget(Widget(size_hint_y=None, height=dp(20)))
 
-    def sim_clear_all(self):
-        """Clear all active alarms."""
-        app = App.get_running_app()
-        try:
-            count = app.alarm_manager.active_count()
-            app.alarm_manager.clear_all()
-            self.ids.sim_status.text = (
-                f'[color=33d17a]Cleared {count} alarms[/color]'
-            )
-        except Exception as e:
-            self.ids.sim_status.text = f'[color=ed4550]Error: {e}[/color]'
+    # ----------------------------------------------------------
+    # Refresh
+    # ----------------------------------------------------------
 
-    def go_back(self):
-        """Navigate back to settings screen."""
-        app = App.get_running_app()
-        app.go_screen('settings')
-
-
-# ============================================================
-# PASSWORD DIALOG - shown before entering admin screen
-# ============================================================
-
-def show_admin_password_dialog(on_success):
-    """
-    Show a password dialog popup. Calls on_success() if correct.
-
-    Usage from SettingsScreen:
-        show_admin_password_dialog(lambda: app.go_screen('admin'))
-    """
-    app = App.get_running_app()
-
-    # Ensure password hash exists in DB
-    stored_hash = app.db.get_admin_password_hash()
-    if stored_hash is None:
-        # First time: hash the default and store it
-        default_hash = hashlib.sha256(
-            DEFAULT_ADMIN_PASSWORD.encode()
-        ).hexdigest()
-        app.db.set_admin_password_hash(default_hash)
-        stored_hash = default_hash
-
-    content = BoxLayout(orientation='vertical', padding=12, spacing=10)
-
-    content.add_widget(Label(
-        text='Enter admin password',
-        font_size='16sp',
-        color=[0.96, 0.97, 0.98, 1],
-        size_hint_y=None,
-        height=30,
-        halign='center',
-        text_size=(350, None),
-    ))
-
-    pw_input = TextInput(
-        hint_text='Password',
-        font_size='18sp',
-        multiline=False,
-        password=True,
-        size_hint_y=None,
-        height=50,
-        background_color=[0.07, 0.09, 0.13, 1],
-        foreground_color=[0.96, 0.97, 0.98, 1],
-        cursor_color=[0.00, 0.82, 0.73, 1],
-        hint_text_color=[0.20, 0.22, 0.28, 1],
-        padding=[12, 12],
-    )
-    content.add_widget(pw_input)
-
-    error_label = Label(
-        text='',
-        font_size='13sp',
-        color=[0.93, 0.27, 0.32, 1],
-        size_hint_y=None,
-        height=22,
-        halign='center',
-        text_size=(350, None),
-    )
-    content.add_widget(error_label)
-
-    btn_row = BoxLayout(spacing=12, size_hint_y=None, height=54)
-
-    cancel_btn = Button(
-        text='CANCEL',
-        font_size='15sp',
-        bold=True,
-        background_normal='',
-        background_color=[0.13, 0.15, 0.20, 1],
-        color=[0.60, 0.64, 0.72, 1],
-    )
-
-    unlock_btn = Button(
-        text='UNLOCK',
-        font_size='15sp',
-        bold=True,
-        background_normal='',
-        background_color=[0.00, 0.82, 0.73, 1],
-        color=[0.02, 0.05, 0.08, 1],
-    )
-
-    btn_row.add_widget(cancel_btn)
-    btn_row.add_widget(unlock_btn)
-    content.add_widget(btn_row)
-
-    popup = Popup(
-        title='Admin Access',
-        title_color=[0.00, 0.82, 0.73, 1],
-        title_size='18sp',
-        content=content,
-        size_hint=(0.85, 0.48),
-        separator_color=[0.00, 0.82, 0.73, 1],
-        background_color=[0.08, 0.09, 0.12, 1],
-        auto_dismiss=False,
-    )
-
-    def _check_password(instance):
-        entered = pw_input.text
-        entered_hash = hashlib.sha256(entered.encode()).hexdigest()
-        # Re-read stored hash in case it was updated
-        current_hash = app.db.get_admin_password_hash()
-        if entered_hash == current_hash:
-            popup.dismiss()
-            on_success()
-        else:
-            error_label.text = 'Incorrect password'
-            pw_input.text = ''
-
-    cancel_btn.bind(on_release=lambda x: popup.dismiss())
-    unlock_btn.bind(on_release=_check_password)
-    # Also allow Enter key
-    pw_input.bind(on_text_validate=_check_password)
-
-    popup.open()
-    # Focus the input
-    Clock.schedule_once(lambda dt: setattr(pw_input, 'focus', True), 0.2)
+    def _refresh_all(self):
+        """Refresh driver toggle states."""
+        self._load_driver_modes()
+        for key, row in self._driver_rows.items():
+            row.refresh()
