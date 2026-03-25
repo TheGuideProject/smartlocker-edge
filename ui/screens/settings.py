@@ -43,7 +43,7 @@ def _make_label(text='', font_size=DS.FONT_BODY, color=DS.TEXT_PRIMARY,
                 bold=False, halign='left', valign='middle',
                 size_hint_y=None, height=None, markup=False):
     """Factory for a text label with sensible defaults."""
-    lbl = Label(
+    kwargs = dict(
         text=text,
         font_size=font_size,
         bold=bold,
@@ -51,9 +51,13 @@ def _make_label(text='', font_size=DS.FONT_BODY, color=DS.TEXT_PRIMARY,
         halign=halign,
         valign=valign,
         markup=markup,
-        size_hint_y=size_hint_y,
-        height=dp(height) if height else None,
     )
+    if height is not None:
+        kwargs['size_hint_y'] = None
+        kwargs['height'] = dp(height)
+    elif size_hint_y is not None:
+        kwargs['size_hint_y'] = size_hint_y
+    lbl = Label(**kwargs)
     lbl.bind(size=lambda w, s: setattr(w, 'text_size', s))
     return lbl
 
