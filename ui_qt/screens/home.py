@@ -9,12 +9,12 @@ import time
 import logging
 from datetime import datetime
 
-from PySide6.QtWidgets import (
+from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
     QFrame, QSizePolicy, QSpacerItem, QGridLayout,
 )
-from PySide6.QtCore import Qt, QTimer
-from PySide6.QtGui import QFont
+from PyQt6.QtCore import Qt, QTimer
+from PyQt6.QtGui import QFont
 
 from ui_qt.theme import C, F, S
 
@@ -131,13 +131,13 @@ class HomeScreen(QWidget):
         # Title
         title = QLabel("PAINT NOW!")
         title.setObjectName("hero")
-        title.setAlignment(Qt.AlignCenter)
+        title.setAlignment(Qt.AlignmentFlag.AlignCenter)
         layout.addWidget(title)
 
         # Subtitle
         sub = QLabel("Start a mixing operation")
         sub.setObjectName("subtitle")
-        sub.setAlignment(Qt.AlignCenter)
+        sub.setAlignment(Qt.AlignmentFlag.AlignCenter)
         layout.addWidget(sub)
 
         layout.addSpacerItem(QSpacerItem(0, 8, QSizePolicy.Minimum, QSizePolicy.Fixed))
@@ -145,7 +145,7 @@ class HomeScreen(QWidget):
         # Big action button
         btn = QPushButton("START MIXING")
         btn.setObjectName("primary")
-        btn.setCursor(Qt.PointingHandCursor)
+        btn.setCursor(Qt.CursorShape.PointingHandCursor)
         btn.setMinimumHeight(S.BTN_H_LG)
         btn.clicked.connect(self._on_paint_now)
         layout.addWidget(btn)
@@ -234,7 +234,7 @@ class HomeScreen(QWidget):
                        accent_color: str, target_screen: str) -> QPushButton:
         btn = QPushButton()
         btn.setObjectName("nav_tile")
-        btn.setCursor(Qt.PointingHandCursor)
+        btn.setCursor(Qt.CursorShape.PointingHandCursor)
         btn.setMinimumHeight(90)
 
         # Use style with accent top border
@@ -245,7 +245,7 @@ class HomeScreen(QWidget):
 
         # Build internal layout via a child widget
         inner = QWidget(btn)
-        inner.setAttribute(Qt.WA_TransparentForMouseEvents, True)
+        inner.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
         inner_layout = QVBoxLayout(inner)
         inner_layout.setContentsMargins(8, 6, 8, 6)
         inner_layout.setSpacing(4)
@@ -254,7 +254,7 @@ class HomeScreen(QWidget):
         lbl_title.setStyleSheet(
             f"font-size: {F.H3}px; font-weight: bold; color: {C.TEXT};"
         )
-        lbl_title.setAttribute(Qt.WA_TransparentForMouseEvents, True)
+        lbl_title.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
         inner_layout.addWidget(lbl_title)
 
         lbl_sub = QLabel(subtitle, inner)
@@ -262,7 +262,7 @@ class HomeScreen(QWidget):
             f"font-size: {F.SMALL}px; color: {C.TEXT_SEC};"
         )
         lbl_sub.setWordWrap(True)
-        lbl_sub.setAttribute(Qt.WA_TransparentForMouseEvents, True)
+        lbl_sub.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
         inner_layout.addWidget(lbl_sub)
 
         inner_layout.addStretch(1)
@@ -295,7 +295,7 @@ class HomeScreen(QWidget):
         btn = QPushButton("VIEW")
         btn.setObjectName("danger")
         btn.setFixedWidth(80)
-        btn.setCursor(Qt.PointingHandCursor)
+        btn.setCursor(Qt.CursorShape.PointingHandCursor)
         btn.clicked.connect(lambda: self.app.go_screen("alarm"))
         layout.addWidget(btn)
 
@@ -326,7 +326,7 @@ class HomeScreen(QWidget):
         btn = QPushButton("RESUME")
         btn.setObjectName("primary")
         btn.setFixedWidth(100)
-        btn.setCursor(Qt.PointingHandCursor)
+        btn.setCursor(Qt.CursorShape.PointingHandCursor)
         btn.clicked.connect(lambda: self.app.go_screen("mixing"))
         layout.addWidget(btn)
 

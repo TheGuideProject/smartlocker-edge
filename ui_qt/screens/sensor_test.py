@@ -9,13 +9,13 @@ import time
 import logging
 from collections import deque
 
-from PySide6.QtWidgets import (
+from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
     QFrame, QTabWidget, QGridLayout, QScrollArea, QSizePolicy,
     QSpacerItem,
 )
-from PySide6.QtCore import Qt, QTimer, QRectF, QPointF
-from PySide6.QtGui import QPainter, QPen, QColor, QFont, QPainterPath
+from PyQt6.QtCore import Qt, QTimer, QRectF, QPointF
+from PyQt6.QtGui import QPainter, QPen, QColor, QFont, QPainterPath
 
 from ui_qt.theme import C, F, S
 from hal.interfaces import LEDColor, LEDPattern, BuzzerPattern
@@ -61,7 +61,7 @@ class WeightChartWidget(QWidget):
         if len(self._data) < 2:
             painter.setPen(QColor(C.TEXT_MUTED))
             painter.setFont(QFont("Segoe UI", 10))
-            painter.drawText(self.rect(), Qt.AlignCenter, "Waiting for data...")
+            painter.drawText(self.rect(), Qt.AlignmentFlag.AlignCenter, "Waiting for data...")
             painter.end()
             return
 
@@ -80,7 +80,7 @@ class WeightChartWidget(QWidget):
         plot_h = h - margin * 2
 
         # Grid lines
-        grid_pen = QPen(QColor(C.BORDER), 1, Qt.DotLine)
+        grid_pen = QPen(QColor(C.BORDER), 1, Qt.PenStyle.DotLine)
         painter.setPen(grid_pen)
         for i in range(5):
             y = plot_y + (plot_h * i / 4)
@@ -91,9 +91,9 @@ class WeightChartWidget(QWidget):
         label_font = QFont("Segoe UI", 7)
         painter.setFont(label_font)
         painter.drawText(QRectF(0, plot_y - 2, margin + 30, 14),
-                         Qt.AlignLeft, f"{max_val:.0f}g")
+                         Qt.AlignmentFlag.AlignLeft, f"{max_val:.0f}g")
         painter.drawText(QRectF(0, plot_y + plot_h - 12, margin + 30, 14),
-                         Qt.AlignLeft, f"{min_val:.0f}g")
+                         Qt.AlignmentFlag.AlignLeft, f"{min_val:.0f}g")
 
         # Data line
         n = len(data)
@@ -125,7 +125,7 @@ class WeightChartWidget(QWidget):
         if points:
             last = points[-1]
             painter.setBrush(QColor(C.PRIMARY))
-            painter.setPen(Qt.NoPen)
+            painter.setPen(Qt.PenStyle.NoPen)
             painter.drawEllipse(last, 4, 4)
 
         painter.end()
@@ -177,7 +177,7 @@ def _action_btn(text: str, obj_name: str = "") -> QPushButton:
     btn = QPushButton(text)
     if obj_name:
         btn.setObjectName(obj_name)
-    btn.setCursor(Qt.PointingHandCursor)
+    btn.setCursor(Qt.CursorShape.PointingHandCursor)
     return btn
 
 
@@ -305,7 +305,7 @@ class SensorTestScreen(QWidget):
         # Grams display
         self._weight_grams = QLabel("---")
         self._weight_grams.setObjectName("hero")
-        self._weight_grams.setAlignment(Qt.AlignCenter)
+        self._weight_grams.setAlignment(Qt.AlignmentFlag.AlignCenter)
         reading_layout.addWidget(self._weight_grams)
 
         # Kg display
@@ -313,12 +313,12 @@ class SensorTestScreen(QWidget):
         self._weight_kg.setStyleSheet(
             f"font-size: {F.H2}px; color: {C.TEXT_SEC};"
         )
-        self._weight_kg.setAlignment(Qt.AlignCenter)
+        self._weight_kg.setAlignment(Qt.AlignmentFlag.AlignCenter)
         reading_layout.addWidget(self._weight_kg)
 
         # Stability indicator
         stab_row = QHBoxLayout()
-        stab_row.setAlignment(Qt.AlignCenter)
+        stab_row.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self._stability_dot = QLabel("\u25CF")
         self._stability_dot.setStyleSheet(f"font-size: 14px; color: {C.WARNING};")
         stab_row.addWidget(self._stability_dot)
@@ -334,7 +334,7 @@ class SensorTestScreen(QWidget):
         self._weight_raw.setStyleSheet(
             f"font-size: {F.TINY}px; color: {C.TEXT_MUTED};"
         )
-        self._weight_raw.setAlignment(Qt.AlignCenter)
+        self._weight_raw.setAlignment(Qt.AlignmentFlag.AlignCenter)
         reading_layout.addWidget(self._weight_raw)
 
         reading_card = _card(reading_layout)
@@ -471,7 +471,7 @@ class SensorTestScreen(QWidget):
             f"font-size: {F.H1}px; font-weight: bold; color: {C.PRIMARY}; "
             f"font-family: 'Consolas', 'Courier New', monospace;"
         )
-        self._rfid_uid.setAlignment(Qt.AlignCenter)
+        self._rfid_uid.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self._rfid_uid.setWordWrap(True)
         tag_layout.addWidget(self._rfid_uid)
 
@@ -479,7 +479,7 @@ class SensorTestScreen(QWidget):
         self._rfid_signal.setStyleSheet(
             f"font-size: {F.SMALL}px; color: {C.TEXT_SEC};"
         )
-        self._rfid_signal.setAlignment(Qt.AlignCenter)
+        self._rfid_signal.setAlignment(Qt.AlignmentFlag.AlignCenter)
         tag_layout.addWidget(self._rfid_signal)
 
         # Product data
@@ -510,7 +510,7 @@ class SensorTestScreen(QWidget):
         # Scrollable history list
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
-        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
 
         self._rfid_history_container = QWidget()
         self._rfid_history_layout = QVBoxLayout(self._rfid_history_container)
@@ -622,7 +622,7 @@ class SensorTestScreen(QWidget):
             btn = QPushButton(f"S{i + 1}\nOFF")
             btn.setMinimumHeight(80)
             btn.setStyleSheet(self._led_btn_style(LEDColor.OFF))
-            btn.setCursor(Qt.PointingHandCursor)
+            btn.setCursor(Qt.CursorShape.PointingHandCursor)
             btn.clicked.connect(lambda checked, sid=slot_id: self._cycle_slot_color(sid))
             row = i // 2
             col = i % 2

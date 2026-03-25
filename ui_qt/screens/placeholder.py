@@ -1,7 +1,7 @@
 """Placeholder screen for not-yet-implemented PySide6 screens."""
 
-from PySide6.QtWidgets import QWidget, QVBoxLayout, QLabel, QPushButton
-from PySide6.QtCore import Qt
+from PyQt6.QtWidgets import QWidget, QVBoxLayout, QLabel, QPushButton
+from PyQt6.QtCore import Qt
 from ui_qt.theme import C, F
 
 
@@ -12,16 +12,16 @@ class PlaceholderScreen(QWidget):
         super().__init__()
         self.app = app
         layout = QVBoxLayout(self)
-        layout.setAlignment(Qt.AlignCenter)
+        layout.setAlignment(Qt.AlignmentFlag.AlignCenter)
 
         lbl = QLabel(title)
         lbl.setObjectName("title")
-        lbl.setAlignment(Qt.AlignCenter)
+        lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
         layout.addWidget(lbl)
 
         sub = QLabel("This screen is being built.")
         sub.setObjectName("subtitle")
-        sub.setAlignment(Qt.AlignCenter)
+        sub.setAlignment(Qt.AlignmentFlag.AlignCenter)
         layout.addWidget(sub)
 
         btn = QPushButton("< BACK")

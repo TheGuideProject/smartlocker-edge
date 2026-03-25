@@ -10,12 +10,12 @@ import os
 import time
 import logging
 
-from PySide6.QtWidgets import (
+from PyQt6.QtWidgets import (
     QApplication, QMainWindow, QStackedWidget, QWidget,
     QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QFrame,
 )
-from PySide6.QtCore import Qt, QTimer
-from PySide6.QtGui import QFont
+from PyQt6.QtCore import Qt, QTimer
+from PyQt6.QtGui import QFont
 
 from ui_qt.theme import STYLESHEET, C, F, S
 

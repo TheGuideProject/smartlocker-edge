@@ -8,11 +8,11 @@ and system navigation buttons.
 import time
 import logging
 
-from PySide6.QtWidgets import (
+from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
     QFrame, QScrollArea, QGridLayout, QSizePolicy,
 )
-from PySide6.QtCore import Qt, QTimer
+from PyQt6.QtCore import Qt, QTimer
 
 from ui_qt.theme import C, F, S
 
@@ -61,13 +61,13 @@ class SettingsScreen(QWidget):
         btn_back = QPushButton("<  BACK")
         btn_back.setObjectName("ghost")
         btn_back.setFixedWidth(100)
-        btn_back.setCursor(Qt.PointingHandCursor)
+        btn_back.setCursor(Qt.CursorShape.PointingHandCursor)
         btn_back.clicked.connect(self.app.go_back)
         top_bar_lay.addWidget(btn_back)
 
         lbl_title = QLabel("SETTINGS")
         lbl_title.setObjectName("title")
-        lbl_title.setAlignment(Qt.AlignCenter)
+        lbl_title.setAlignment(Qt.AlignmentFlag.AlignCenter)
         top_bar_lay.addWidget(lbl_title, 1)
 
         # Spacer to balance the back button
@@ -80,7 +80,7 @@ class SettingsScreen(QWidget):
         # ── Scroll area ──
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
-        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
 
         scroll_content = QWidget()
         scroll_lay = QVBoxLayout(scroll_content)
@@ -212,13 +212,13 @@ class SettingsScreen(QWidget):
 
         self._btn_sync = QPushButton("SYNC NOW")
         self._btn_sync.setObjectName("secondary")
-        self._btn_sync.setCursor(Qt.PointingHandCursor)
+        self._btn_sync.setCursor(Qt.CursorShape.PointingHandCursor)
         self._btn_sync.clicked.connect(self._on_sync_now)
         btn_row.addWidget(self._btn_sync)
 
         self._btn_unpair = QPushButton("UNPAIR")
         self._btn_unpair.setObjectName("danger")
-        self._btn_unpair.setCursor(Qt.PointingHandCursor)
+        self._btn_unpair.setCursor(Qt.CursorShape.PointingHandCursor)
         self._btn_unpair.clicked.connect(self._on_unpair)
         btn_row.addWidget(self._btn_unpair)
 
@@ -245,21 +245,21 @@ class SettingsScreen(QWidget):
 
         btn_sensor = QPushButton("SENSOR TESTING")
         btn_sensor.setObjectName("accent")
-        btn_sensor.setCursor(Qt.PointingHandCursor)
+        btn_sensor.setCursor(Qt.CursorShape.PointingHandCursor)
         btn_sensor.setMinimumHeight(S.BTN_H)
         btn_sensor.clicked.connect(lambda: self.app.go_screen("sensor_test"))
         btn_row.addWidget(btn_sensor)
 
         btn_health = QPushButton("SYSTEM HEALTH")
         btn_health.setObjectName("accent")
-        btn_health.setCursor(Qt.PointingHandCursor)
+        btn_health.setCursor(Qt.CursorShape.PointingHandCursor)
         btn_health.setMinimumHeight(S.BTN_H)
         btn_health.clicked.connect(lambda: self.app.go_screen("system_health"))
         btn_row.addWidget(btn_health)
 
         btn_admin = QPushButton("ADMIN")
         btn_admin.setObjectName("accent")
-        btn_admin.setCursor(Qt.PointingHandCursor)
+        btn_admin.setCursor(Qt.CursorShape.PointingHandCursor)
         btn_admin.setMinimumHeight(S.BTN_H)
         btn_admin.clicked.connect(lambda: self.app.go_screen("admin"))
         btn_row.addWidget(btn_admin)
