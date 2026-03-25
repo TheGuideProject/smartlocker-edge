@@ -253,10 +253,8 @@ class SmartLockerWindow(QMainWindow):
         )
 
         self.usage_calculator = UsageCalculator(event_bus=self.event_bus)
-        self.alarm_manager = AlarmManager(event_bus=self.event_bus)
-        self.system_monitor = SystemMonitor(
-            event_bus=self.event_bus, alarm_manager=self.alarm_manager
-        )
+        self.alarm_manager = AlarmManager(event_bus=self.event_bus, db=self.db)
+        self.system_monitor = SystemMonitor(alarm_manager=self.alarm_manager)
         self.backup_manager = BackupManager(self.db)
 
         # Initialize sensors
