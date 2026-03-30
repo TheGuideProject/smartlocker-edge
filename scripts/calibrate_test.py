@@ -6,8 +6,8 @@ import time
 h = lgpio.gpiochip_open(0)
 
 channels = {
-    "SCAFFALE": {"dt": 5, "sck": 6, "scale": 10.78},
-    "MIXING": {"dt": 23, "sck": 24, "scale": 17.86},
+    "SCAFFALE": {"dt": 5, "sck": 6, "scale": 9.81},
+    "MIXING": {"dt": 23, "sck": 24, "scale": 20.69},
 }
 
 # Setup GPIO
