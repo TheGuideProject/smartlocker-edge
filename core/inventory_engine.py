@@ -168,24 +168,43 @@ class InventoryEngine:
         logger.info(f"Shelves rebuilt: {len(self._reader_to_slot)} slots configured")
 
     def initialize(self) -> bool:
-        """Initialize all hardware and set initial state."""
-        ok = True
-        ok = ok and self.rfid.initialize()
-        ok = ok and self.weight.initialize()
-        ok = ok and self.led.initialize()
-        ok = ok and self.buzzer.initialize()
+        """Initialize all hardware and set initial state.
+        Each driver initializes independently — one failure does not block others.
+        """
+        rfid_ok = self.rfid.initialize()
+        weight_ok = self.weight.initialize()
+        led_ok = self.led.initialize()
+        buzzer_ok = self.buzzer.initialize()
+
+        if not rfid_ok:
+            logger.warning("InventoryEngine: RFID init failed (continuing without)")
+        if not weight_ok:
+            logger.warning("InventoryEngine: Weight init failed (continuing without)")
+        if not led_ok:
+            logger.warning("InventoryEngine: LED init failed (continuing without)")
+        if not buzzer_ok:
+            logger.warning("InventoryEngine: Buzzer init failed (continuing without)")
+
+        ok = rfid_ok and weight_ok and led_ok and buzzer_ok
+
+        if led_ok:
+            self.led.clear_all()
+
+        # Always publish boot event
+        self.event_bus.publish(Event(
+            event_type=EventType.DEVICE_BOOT,
+            device_id=settings.DEVICE_ID,
+            data={
+                "mode": settings.MODE,
+                "rfid": rfid_ok, "weight": weight_ok,
+                "led": led_ok, "buzzer": buzzer_ok,
+            },
+        ))
 
         if ok:
-            self.led.clear_all()
-            # Publish boot event
-            self.event_bus.publish(Event(
-                event_type=EventType.DEVICE_BOOT,
-                device_id=settings.DEVICE_ID,
-                data={"mode": settings.MODE},
-            ))
-            logger.info("InventoryEngine initialized successfully")
+            logger.info("InventoryEngine initialized successfully (all drivers OK)")
         else:
-            logger.error("InventoryEngine initialization FAILED")
+            logger.warning("InventoryEngine initialized with PARTIAL drivers")
 
         return ok
 
