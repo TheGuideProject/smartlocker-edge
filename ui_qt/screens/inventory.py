@@ -59,7 +59,7 @@ class InventoryScreen(QWidget):
 
         title = QLabel("INVENTORY")
         title.setStyleSheet(
-            f"font-size: {F.H2}px; font-weight: bold; color: {C.TEXT};"
+            f"font-size: {F.H3}px; font-weight: bold; color: {C.TEXT};"
         )
         header_layout.addWidget(title)
 
@@ -178,7 +178,7 @@ class InventoryScreen(QWidget):
         name = item.get("product_name", "Unknown")
         lbl_name = QLabel(name)
         lbl_name.setStyleSheet(
-            f"font-size: {F.H3}px; font-weight: bold; color: {C.TEXT};"
+            f"font-size: {F.BODY}px; font-weight: bold; color: {C.TEXT};"
         )
         lbl_name.setWordWrap(True)
         top.addWidget(lbl_name, stretch=1)

@@ -8,7 +8,7 @@ with color-coded progress bars. Refreshes every 2 seconds.
 import logging
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
-    QFrame, QProgressBar, QSizePolicy,
+    QFrame, QProgressBar, QSizePolicy, QGridLayout,
 )
 from PyQt6.QtCore import Qt, QTimer
 
@@ -55,7 +55,7 @@ class SystemHealthScreen(QWidget):
 
         title = QLabel("SYSTEM HEALTH")
         title.setStyleSheet(
-            f"font-size: {F.H2}px; font-weight: bold; color: {C.TEXT};"
+            f"font-size: {F.H3}px; font-weight: bold; color: {C.TEXT};"
         )
         h_layout.addWidget(title)
 
@@ -83,17 +83,20 @@ class SystemHealthScreen(QWidget):
         self._no_data_label.setVisible(False)
         body.addWidget(self._no_data_label)
 
-        # Metric cards
+        # Metric cards — 2x2 grid to fit 480px height
         metrics_config = [
-            ("cpu_temp", "CPU TEMPERATURE", "C", 85, 70),
-            ("cpu_pct", "CPU USAGE", "%", 90, 70),
-            ("ram_pct", "RAM USAGE", "%", 85, 65),
-            ("disk_pct", "DISK USAGE", "%", 90, 75),
+            ("cpu_temp", "CPU TEMP", "C", 85, 70),
+            ("cpu_pct", "CPU", "%", 90, 70),
+            ("ram_pct", "RAM", "%", 85, 65),
+            ("disk_pct", "DISK", "%", 90, 75),
         ]
 
-        for key, label, unit, thresh_red, thresh_yellow in metrics_config:
+        metrics_grid = QGridLayout()
+        metrics_grid.setSpacing(S.GAP)
+        for i, (key, label, unit, thresh_red, thresh_yellow) in enumerate(metrics_config):
             card = self._build_metric_card(key, label, unit, thresh_red, thresh_yellow)
-            body.addWidget(card)
+            metrics_grid.addWidget(card, i // 2, i % 2)
+        body.addLayout(metrics_grid)
 
         body.addStretch(1)
         root.addLayout(body, stretch=1)
@@ -105,8 +108,8 @@ class SystemHealthScreen(QWidget):
         card.setObjectName("card")
 
         layout = QVBoxLayout(card)
-        layout.setContentsMargins(S.PAD_CARD, S.PAD_CARD, S.PAD_CARD, S.PAD_CARD)
-        layout.setSpacing(6)
+        layout.setContentsMargins(8, 6, 8, 6)
+        layout.setSpacing(4)
 
         # Top row: label + value
         top = QHBoxLayout()
@@ -122,7 +125,7 @@ class SystemHealthScreen(QWidget):
 
         lbl_value = QLabel(f"--{unit}")
         lbl_value.setStyleSheet(
-            f"font-size: {F.H2}px; font-weight: bold; color: {C.TEXT};"
+            f"font-size: {F.H3}px; font-weight: bold; color: {C.TEXT};"
         )
         top.addWidget(lbl_value)
 
@@ -228,7 +231,7 @@ class SystemHealthScreen(QWidget):
                 f"border-radius: 6px; }}"
             )
             refs["value_label"].setStyleSheet(
-                f"font-size: {F.H2}px; font-weight: bold; color: {val_color};"
+                f"font-size: {F.H3}px; font-weight: bold; color: {val_color};"
             )
 
     def _show_no_data(self, message: str):

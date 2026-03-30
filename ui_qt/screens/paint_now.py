@@ -81,7 +81,7 @@ class PaintNowScreen(QWidget):
 
         self._title_label = QLabel("PAINT NOW")
         self._title_label.setStyleSheet(
-            f"font-size: {F.H2}px; font-weight: bold; color: {C.TEXT};"
+            f"font-size: {F.H3}px; font-weight: bold; color: {C.TEXT};"
         )
         h_layout.addWidget(self._title_label)
 
@@ -216,9 +216,9 @@ class PaintNowScreen(QWidget):
             btn = QPushButton(area.get("name", f"Area {i+1}"))
             btn.setObjectName("nav_tile")
             btn.setCursor(Qt.CursorShape.PointingHandCursor)
-            btn.setMinimumHeight(S.BTN_H)
+            btn.setMinimumHeight(40)
             btn.setStyleSheet(
-                f"QPushButton {{ font-size: {F.H3}px; font-weight: bold;"
+                f"QPushButton {{ font-size: {F.BODY}px; font-weight: bold;"
                 f"text-align: left; padding-left: 16px;"
                 f"border-left: 4px solid {C.SECONDARY}; }}"
             )
@@ -339,7 +339,7 @@ class PaintNowScreen(QWidget):
         self._m2_input.setPlaceholderText("Enter m2...")
         self._m2_input.setValidator(QDoubleValidator(0.1, 9999.0, 1))
         self._m2_input.setStyleSheet(
-            f"font-size: {F.H2}px; padding: 12px; min-height: 48px;"
+            f"font-size: {F.H3}px; padding: 8px; min-height: 36px;"
         )
         self._m2_input.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self._body_layout.addWidget(self._m2_input)
@@ -357,9 +357,9 @@ class PaintNowScreen(QWidget):
         for val in [10, 25, 50, 100]:
             btn = QPushButton(str(val))
             btn.setCursor(Qt.CursorShape.PointingHandCursor)
-            btn.setMinimumHeight(S.BTN_H)
+            btn.setMinimumHeight(36)
             btn.setStyleSheet(
-                f"font-size: {F.H3}px; font-weight: bold;"
+                f"font-size: {F.BODY}px; font-weight: bold;"
             )
             btn.clicked.connect(
                 lambda checked=False, v=val: self._set_m2_preset(v)
@@ -376,7 +376,7 @@ class PaintNowScreen(QWidget):
         btn_calc = QPushButton("CALCULATE")
         btn_calc.setObjectName("primary")
         btn_calc.setCursor(Qt.CursorShape.PointingHandCursor)
-        btn_calc.setMinimumHeight(S.BTN_H_LG)
+        btn_calc.setMinimumHeight(44)
         btn_calc.clicked.connect(self._on_calculate)
         self._body_layout.addWidget(btn_calc)
 
@@ -497,7 +497,7 @@ class PaintNowScreen(QWidget):
                 # Amount
                 lbl_amt = QLabel(f"{q.get('liters', 0):.2f} L")
                 lbl_amt.setStyleSheet(
-                    f"font-size: {F.H2}px; font-weight: bold; color: {C.PRIMARY};"
+                    f"font-size: {F.H3}px; font-weight: bold; color: {C.PRIMARY};"
                 )
                 c_layout.addWidget(lbl_amt)
 
@@ -509,7 +509,7 @@ class PaintNowScreen(QWidget):
         btn_mix = QPushButton("START MIXING")
         btn_mix.setObjectName("primary")
         btn_mix.setCursor(Qt.CursorShape.PointingHandCursor)
-        btn_mix.setMinimumHeight(S.BTN_H_LG)
+        btn_mix.setMinimumHeight(44)
         btn_mix.clicked.connect(lambda: self.app.go_screen("mixing"))
         self._body_layout.addWidget(btn_mix)
 

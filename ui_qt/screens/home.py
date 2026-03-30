@@ -125,12 +125,12 @@ class HomeScreen(QWidget):
         )
 
         layout = QVBoxLayout(card)
-        layout.setContentsMargins(S.PAD_CARD, S.PAD_CARD, S.PAD_CARD, S.PAD_CARD)
-        layout.setSpacing(8)
+        layout.setContentsMargins(8, 6, 8, 6)
+        layout.setSpacing(4)
 
         # Title
         title = QLabel("PAINT NOW!")
-        title.setObjectName("hero")
+        title.setStyleSheet(f"font-size: {F.H1}px; font-weight: bold; color: {C.PRIMARY};")
         title.setAlignment(Qt.AlignmentFlag.AlignCenter)
         layout.addWidget(title)
 
@@ -140,13 +140,13 @@ class HomeScreen(QWidget):
         sub.setAlignment(Qt.AlignmentFlag.AlignCenter)
         layout.addWidget(sub)
 
-        layout.addSpacerItem(QSpacerItem(0, 8, QSizePolicy.Policy.Minimum, QSizePolicy.Policy.Fixed))
+        layout.addSpacerItem(QSpacerItem(0, 2, QSizePolicy.Policy.Minimum, QSizePolicy.Policy.Fixed))
 
         # Big action button
         btn = QPushButton("START MIXING")
         btn.setObjectName("primary")
         btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        btn.setMinimumHeight(S.BTN_H_LG)
+        btn.setMinimumHeight(S.BTN_H)
         btn.clicked.connect(self._on_paint_now)
         layout.addWidget(btn)
 
@@ -159,8 +159,8 @@ class HomeScreen(QWidget):
         card.setObjectName("card")
 
         layout = QVBoxLayout(card)
-        layout.setContentsMargins(S.PAD_CARD, S.PAD_CARD, S.PAD_CARD, S.PAD_CARD)
-        layout.setSpacing(6)
+        layout.setContentsMargins(8, 6, 8, 6)
+        layout.setSpacing(3)
 
         # Section header
         header = QLabel("STATUS")
@@ -235,7 +235,7 @@ class HomeScreen(QWidget):
         btn = QPushButton()
         btn.setObjectName("nav_tile")
         btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        btn.setMinimumHeight(90)
+        btn.setMinimumHeight(60)
 
         # Use style with accent top border
         btn.setStyleSheet(
