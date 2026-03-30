@@ -184,10 +184,18 @@ class RealWeightDriverHX711(WeightDriverInterface):
                 "mixing_scale": HX711Channel("mixing_scale", dt_pin=mix_dt, sck_pin=mix_sck),
             }
 
+            # Apply calibration values (calibrated 2026-03-30 with 2kg reference)
+            shelf_scale = getattr(settings, 'HX711_SHELF_SCALE', 10.78)
+            mix_scale = getattr(settings, 'HX711_MIX_SCALE', 17.86)
+            self._channels["shelf1"].scale = shelf_scale
+            self._channels["shelf1"].inverted = True
+            self._channels["mixing_scale"].scale = mix_scale
+            self._channels["mixing_scale"].inverted = True
+
             for ch in self._channels.values():
                 ch.setup_gpio()
 
-            # Auto-tare on startup
+            # Auto-tare on startup (reads current load as zero reference)
             time.sleep(0.5)
             for ch in self._channels.values():
                 ch.tare(samples=10)
