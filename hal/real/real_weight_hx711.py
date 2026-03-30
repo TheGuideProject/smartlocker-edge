@@ -5,6 +5,10 @@ Reads HX711 ADC directly from Raspberry Pi GPIO pins (no Arduino needed).
 Supports multiple channels via separate HX711 modules.
 Uses lgpio directly for RPi5 + Python 3.13 compatibility.
 
+IMPORTANT: GPIO bit-banging runs in a dedicated background thread
+to avoid timing issues with the Qt event loop. The main thread
+only reads cached values.
+
 Hardware:
   - HX711 VCC -> 3.3V, GND -> GND
   - Shelf:  DT=GPIO5,  SCK=GPIO6
@@ -154,6 +158,9 @@ class RealWeightDriverHX711(WeightDriverInterface):
     """
     Direct HX711 weight driver -- reads load cells via RPi GPIO.
     Uses lgpio for RPi5 compatibility. No Arduino needed.
+
+    Weight reading runs in a dedicated background thread to avoid
+    timing conflicts with the Qt event loop.
     """
 
     def __init__(self):
@@ -161,6 +168,13 @@ class RealWeightDriverHX711(WeightDriverInterface):
         self._initialized = False
         self._lock = threading.Lock()
         self._gpio_handle = -1
+
+        # Background reader thread
+        self._reader_thread: Optional[threading.Thread] = None
+        self._reader_running = False
+        self._cached_readings: Dict[str, WeightReading] = {}
+        self._tare_request: Optional[str] = None  # Channel name to tare
+        self._tare_done = threading.Event()
 
     def initialize(self) -> bool:
         if not HAS_GPIO:
@@ -201,7 +215,22 @@ class RealWeightDriverHX711(WeightDriverInterface):
             for ch in self._channels.values():
                 ch.tare(samples=10)
 
+            # Initialize cached readings
+            for name in self._channels:
+                self._cached_readings[name] = WeightReading(
+                    grams=0.0, channel=name, stable=False,
+                    raw_value=0, timestamp=time.time(),
+                )
+
             self._initialized = True
+
+            # Start background reader thread
+            self._reader_running = True
+            self._reader_thread = threading.Thread(
+                target=self._reader_loop, daemon=True, name="HX711-reader"
+            )
+            self._reader_thread.start()
+
             logger.info(f"[HX711] Initialized {len(self._channels)} channels: {list(self._channels.keys())}")
             return True
 
@@ -210,24 +239,50 @@ class RealWeightDriverHX711(WeightDriverInterface):
             self._initialized = False
             return False
 
+    def _reader_loop(self):
+        """Background thread: continuously reads all channels and caches results."""
+        logger.info("[HX711] Background reader thread started")
+        while self._reader_running:
+            # Check for tare request
+            tare_ch = self._tare_request
+            if tare_ch:
+                self._tare_request = None
+                ch = self._channels.get(tare_ch)
+                if ch:
+                    ch.tare(samples=10)
+                self._tare_done.set()
+
+            # Read all channels
+            for name, ch in self._channels.items():
+                if not self._reader_running:
+                    break
+                try:
+                    grams = ch.read_grams(samples=3)
+                    self._cached_readings[name] = WeightReading(
+                        grams=round(grams, 1),
+                        channel=name,
+                        stable=ch._stable,
+                        raw_value=ch._last_raw,
+                        timestamp=time.time(),
+                    )
+                except Exception as e:
+                    logger.error(f"[HX711] Reader error on {name}: {e}")
+
+            # Small sleep between full cycles
+            time.sleep(0.1)
+
+        logger.info("[HX711] Background reader thread stopped")
+
     def read_weight(self, channel: str) -> WeightReading:
         if not self._initialized:
             return WeightReading(grams=0.0, channel=channel, stable=False)
 
-        ch = self._channels.get(channel)
-        if not ch:
-            return WeightReading(grams=0.0, channel=channel, stable=False)
+        # Return cached reading from background thread (non-blocking!)
+        cached = self._cached_readings.get(channel)
+        if cached:
+            return cached
 
-        with self._lock:
-            grams = ch.read_grams(samples=3)
-
-        return WeightReading(
-            grams=round(grams, 1),
-            channel=channel,
-            stable=ch._stable,
-            raw_value=ch._last_raw,
-            timestamp=time.time(),
-        )
+        return WeightReading(grams=0.0, channel=channel, stable=False)
 
     def tare(self, channel: str) -> bool:
         if not self._initialized:
@@ -237,8 +292,11 @@ class RealWeightDriverHX711(WeightDriverInterface):
         if not ch:
             return False
 
-        with self._lock:
-            return ch.tare(samples=10)
+        # Request tare from background thread
+        self._tare_done.clear()
+        self._tare_request = channel
+        # Wait for background thread to complete the tare (max 5s)
+        return self._tare_done.wait(timeout=5.0)
 
     def get_channels(self) -> List[str]:
         return list(self._channels.keys())
@@ -246,13 +304,20 @@ class RealWeightDriverHX711(WeightDriverInterface):
     def is_healthy(self) -> bool:
         if not self._initialized or not HAS_GPIO:
             return False
-        for ch in self._channels.values():
-            raw = ch.read_raw()
-            if raw is None:
+        # Check if we have recent readings (less than 5 seconds old)
+        now = time.time()
+        for name, reading in self._cached_readings.items():
+            if reading.timestamp and (now - reading.timestamp) < 5.0:
+                continue
+            else:
                 return False
         return True
 
     def shutdown(self) -> None:
+        self._reader_running = False
+        if self._reader_thread and self._reader_thread.is_alive():
+            self._reader_thread.join(timeout=3.0)
+
         self._initialized = False
         if HAS_GPIO and self._gpio_handle >= 0:
             try:
