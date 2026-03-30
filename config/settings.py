@@ -109,11 +109,16 @@ RFID_I2C_BUS = 1                 # I2C bus number (usually 1 on RPi)
 RFID_I2C_ADDRESS = 0x24          # Default PN532 I2C address
 RFID_I2C_ADDRESSES = [0x24]     # List for multi-reader setups
 
-# Weight - HX711 Direct GPIO (no Arduino needed for single channel)
+# Weight - HX711 Direct GPIO (2 channels, no Arduino needed)
 WEIGHT_MODE = "hx711_direct"          # "hx711_direct" or "arduino_serial"
-HX711_DT_PIN = 5                      # GPIO pin for HX711 DOUT
-HX711_SCK_PIN = 6                     # GPIO pin for HX711 SCK
+HX711_SHELF_DT = 5                    # Shelf scale: GPIO pin for HX711 DOUT
+HX711_SHELF_SCK = 6                   # Shelf scale: GPIO pin for HX711 SCK
+HX711_MIX_DT = 23                     # Mixing scale: GPIO pin for HX711 DOUT
+HX711_MIX_SCK = 24                    # Mixing scale: GPIO pin for HX711 SCK
 HX711_SCALE_FACTOR = 23.45            # Raw units per gram (calibrated 2026-03-25: 23450 units/kg)
+# Legacy aliases (backward compat)
+HX711_DT_PIN = HX711_SHELF_DT
+HX711_SCK_PIN = HX711_SHELF_SCK
 
 # Weight - Arduino Nano via Serial (HX711 bridge, for multi-channel setups)
 # Protocol: Arduino sends JSON lines: {"channel":"shelf1","grams":1234.5,"stable":true}

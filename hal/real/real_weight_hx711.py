@@ -170,11 +170,18 @@ class RealWeightDriverHX711(WeightDriverInterface):
             GPIO.setmode(GPIO.BCM)
             GPIO.setwarnings(False)
 
-            # Default channel configuration
-            # shelf1: DT=GPIO5, SCK=GPIO6
+            # Channel configuration: each HX711 on separate GPIO pins
+            # shelf1:       DT=GPIO5,  SCK=GPIO6
+            # mixing_scale: DT=GPIO23, SCK=GPIO24
+            from config import settings
+            shelf_dt = getattr(settings, 'HX711_SHELF_DT', 5)
+            shelf_sck = getattr(settings, 'HX711_SHELF_SCK', 6)
+            mix_dt = getattr(settings, 'HX711_MIX_DT', 23)
+            mix_sck = getattr(settings, 'HX711_MIX_SCK', 24)
+
             self._channels = {
-                "shelf1": HX711Channel("shelf1", dt_pin=5, sck_pin=6),
-                "mixing_scale": HX711Channel("mixing_scale", dt_pin=5, sck_pin=6),
+                "shelf1": HX711Channel("shelf1", dt_pin=shelf_dt, sck_pin=shelf_sck),
+                "mixing_scale": HX711Channel("mixing_scale", dt_pin=mix_dt, sck_pin=mix_sck),
             }
 
             for ch in self._channels.values():
