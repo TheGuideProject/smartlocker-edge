@@ -3,11 +3,12 @@ Real Weight Driver - HX711 Load Cell Amplifier Direct GPIO
 
 Reads HX711 ADC directly from Raspberry Pi GPIO pins (no Arduino needed).
 Supports multiple channels via separate HX711 modules.
+Uses lgpio directly for RPi5 + Python 3.13 compatibility.
 
 Hardware:
-  - HX711 VCC → 3.3V, GND → GND
-  - HX711 DT (DOUT) → configurable GPIO (default: GPIO 5)
-  - HX711 SCK (CLK) → configurable GPIO (default: GPIO 6)
+  - HX711 VCC -> 3.3V, GND -> GND
+  - Shelf:  DT=GPIO5,  SCK=GPIO6
+  - Mixing: DT=GPIO23, SCK=GPIO24
 
 Calibration:
   offset = raw reading at zero load (tare value)
@@ -26,23 +27,24 @@ from hal.interfaces import WeightDriverInterface, WeightReading
 logger = logging.getLogger("smartlocker.sensor")
 
 try:
-    import RPi.GPIO as GPIO
+    import lgpio
     HAS_GPIO = True
 except ImportError:
     HAS_GPIO = False
-    GPIO = None
-    logger.warning("[HX711] RPi.GPIO not available. Weight driver non-functional.")
+    lgpio = None
+    logger.warning("[HX711] lgpio not available. Weight driver non-functional.")
 
 
 class HX711Channel:
     """Single HX711 channel with calibration."""
 
-    def __init__(self, name: str, dt_pin: int, sck_pin: int):
+    def __init__(self, name: str, dt_pin: int, sck_pin: int, gpio_handle: int = -1):
         self.name = name
         self.dt_pin = dt_pin
         self.sck_pin = sck_pin
+        self._h = gpio_handle
         self.offset = 0       # Raw value at zero load
-        self.scale = 23.45    # Raw units per gram (calibrated 2026-03-25)
+        self.scale = 9.81     # Raw units per gram (calibrated 2026-03-30)
         self.inverted = True  # True = raw values DECREASE with weight
         self._last_raw = 0
         self._last_grams = 0.0
@@ -50,19 +52,18 @@ class HX711Channel:
         self._stable = False
 
     def setup_gpio(self):
-        GPIO.setup(self.sck_pin, GPIO.OUT)
-        GPIO.setup(self.dt_pin, GPIO.IN)
-        GPIO.output(self.sck_pin, False)
+        lgpio.gpio_claim_output(self._h, self.sck_pin, 0)
+        lgpio.gpio_claim_input(self._h, self.dt_pin)
 
     def read_raw(self) -> Optional[int]:
         """Read raw 24-bit value from HX711."""
-        if not HAS_GPIO:
+        if not HAS_GPIO or self._h < 0:
             return None
 
         try:
             # Wait for HX711 to be ready (DT goes LOW)
             timeout = time.time() + 2.0
-            while GPIO.input(self.dt_pin):
+            while lgpio.gpio_read(self._h, self.dt_pin):
                 if time.time() > timeout:
                     logger.warning(f"[HX711] Timeout waiting for {self.name}")
                     return None
@@ -70,15 +71,15 @@ class HX711Channel:
             # Read 24 bits
             count = 0
             for _ in range(24):
-                GPIO.output(self.sck_pin, True)
+                lgpio.gpio_write(self._h, self.sck_pin, 1)
                 count = count << 1
-                GPIO.output(self.sck_pin, False)
-                if GPIO.input(self.dt_pin):
+                lgpio.gpio_write(self._h, self.sck_pin, 0)
+                if lgpio.gpio_read(self._h, self.dt_pin):
                     count += 1
 
             # 25th pulse for gain 128 on channel A
-            GPIO.output(self.sck_pin, True)
-            GPIO.output(self.sck_pin, False)
+            lgpio.gpio_write(self._h, self.sck_pin, 1)
+            lgpio.gpio_write(self._h, self.sck_pin, 0)
 
             # Convert to signed
             if count & 0x800000:
@@ -151,28 +152,26 @@ class HX711Channel:
 
 class RealWeightDriverHX711(WeightDriverInterface):
     """
-    Direct HX711 weight driver — reads load cells via RPi GPIO.
-    No Arduino needed.
+    Direct HX711 weight driver -- reads load cells via RPi GPIO.
+    Uses lgpio for RPi5 compatibility. No Arduino needed.
     """
 
     def __init__(self):
-        # Default: single channel for shelf1
         self._channels: Dict[str, HX711Channel] = {}
         self._initialized = False
         self._lock = threading.Lock()
+        self._gpio_handle = -1
 
     def initialize(self) -> bool:
         if not HAS_GPIO:
-            logger.warning("[HX711] Cannot initialize: RPi.GPIO not available.")
+            logger.warning("[HX711] Cannot initialize: lgpio not available.")
             return False
 
         try:
-            GPIO.setmode(GPIO.BCM)
-            GPIO.setwarnings(False)
+            # Open GPIO chip (0 works on RPi5)
+            self._gpio_handle = lgpio.gpiochip_open(0)
 
-            # Channel configuration: each HX711 on separate GPIO pins
-            # shelf1:       DT=GPIO5,  SCK=GPIO6
-            # mixing_scale: DT=GPIO23, SCK=GPIO24
+            # Channel configuration from settings
             from config import settings
             shelf_dt = getattr(settings, 'HX711_SHELF_DT', 5)
             shelf_sck = getattr(settings, 'HX711_SHELF_SCK', 6)
@@ -180,13 +179,15 @@ class RealWeightDriverHX711(WeightDriverInterface):
             mix_sck = getattr(settings, 'HX711_MIX_SCK', 24)
 
             self._channels = {
-                "shelf1": HX711Channel("shelf1", dt_pin=shelf_dt, sck_pin=shelf_sck),
-                "mixing_scale": HX711Channel("mixing_scale", dt_pin=mix_dt, sck_pin=mix_sck),
+                "shelf1": HX711Channel("shelf1", dt_pin=shelf_dt, sck_pin=shelf_sck,
+                                       gpio_handle=self._gpio_handle),
+                "mixing_scale": HX711Channel("mixing_scale", dt_pin=mix_dt, sck_pin=mix_sck,
+                                             gpio_handle=self._gpio_handle),
             }
 
             # Apply calibration values (calibrated 2026-03-30 with 2kg reference)
-            shelf_scale = getattr(settings, 'HX711_SHELF_SCALE', 10.78)
-            mix_scale = getattr(settings, 'HX711_MIX_SCALE', 17.86)
+            shelf_scale = getattr(settings, 'HX711_SHELF_SCALE', 9.81)
+            mix_scale = getattr(settings, 'HX711_MIX_SCALE', 20.69)
             self._channels["shelf1"].scale = shelf_scale
             self._channels["shelf1"].inverted = True
             self._channels["mixing_scale"].scale = mix_scale
@@ -245,7 +246,6 @@ class RealWeightDriverHX711(WeightDriverInterface):
     def is_healthy(self) -> bool:
         if not self._initialized or not HAS_GPIO:
             return False
-        # Quick check: can we read a value?
         for ch in self._channels.values():
             raw = ch.read_raw()
             if raw is None:
@@ -254,9 +254,15 @@ class RealWeightDriverHX711(WeightDriverInterface):
 
     def shutdown(self) -> None:
         self._initialized = False
-        if HAS_GPIO:
+        if HAS_GPIO and self._gpio_handle >= 0:
             try:
-                GPIO.cleanup()
+                for ch in self._channels.values():
+                    try:
+                        lgpio.gpio_free(self._gpio_handle, ch.dt_pin)
+                        lgpio.gpio_free(self._gpio_handle, ch.sck_pin)
+                    except Exception:
+                        pass
+                lgpio.gpiochip_close(self._gpio_handle)
             except Exception:
                 pass
         logger.info("[HX711] Shutdown")
