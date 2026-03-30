@@ -14,12 +14,30 @@ from PyQt6.QtWidgets import (
     QApplication, QMainWindow, QStackedWidget, QWidget,
     QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QFrame,
 )
-from PyQt6.QtCore import Qt, QTimer
+from PyQt6.QtCore import Qt, QTimer, QEvent, QObject
 from PyQt6.QtGui import QFont
 
 from ui_qt.theme import STYLESHEET, C, F, S
 
 logger = logging.getLogger("smartlocker.qt_app")
+
+
+class ClickSoundFilter(QObject):
+    """Global event filter: plays buzzer TICK on every button press."""
+
+    def __init__(self, app_window):
+        super().__init__()
+        self._app = app_window
+
+    def eventFilter(self, obj, event):
+        if (event.type() == QEvent.Type.MouseButtonPress
+                and isinstance(obj, QPushButton)):
+            try:
+                from hal.interfaces import BuzzerPattern
+                self._app.buzzer.play(BuzzerPattern.TICK)
+            except Exception:
+                pass
+        return False  # Don't consume the event
 
 
 class SmartLockerWindow(QMainWindow):
@@ -78,6 +96,10 @@ class SmartLockerWindow(QMainWindow):
         self._poll_timer = QTimer()
         self._poll_timer.timeout.connect(self._poll_sensors)
         self._poll_timer.start(500)
+
+        # Global click sound: buzzer TICK on every button press
+        self._click_filter = ClickSoundFilter(self)
+        QApplication.instance().installEventFilter(self._click_filter)
 
     def _add_screen(self, name, widget):
         self._screens[name] = widget
