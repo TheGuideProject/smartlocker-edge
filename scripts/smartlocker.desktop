@@ -1,7 +1,7 @@
 [Desktop Entry]
 Name=SmartLocker
 Comment=Paint Inventory & Mixing System
-Exec=/usr/bin/python3 /home/jacopo22295/smartlocker-edge/main.py
+Exec=sudo /home/jacopo22295/smartlocker-edge/venv/bin/python3 /home/jacopo22295/smartlocker-edge/main.py
 Path=/home/jacopo22295/smartlocker-edge
 Icon=/home/jacopo22295/smartlocker-edge/scripts/smartlocker-icon.png
 Terminal=false
