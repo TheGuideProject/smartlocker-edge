@@ -33,8 +33,8 @@ MODE = "auto"
 #   mixed     -> "hybrid" mode
 #   all real  -> "live" mode
 # ============================================================
-DRIVER_RFID = "fake"       # "fake" or "real"
-RFID_MODULE = "rc522"      # "rc522" (SPI, MFRC522) or "pn532" (I2C, Adafruit)
+DRIVER_RFID = "real"       # "fake" or "real"
+RFID_MODULE = "pn532_usb"  # "pn532_usb" (USB serial) or "rc522" (SPI) or "pn532" (I2C)
 DRIVER_WEIGHT = "real"     # "fake" or "real" - HX711 direct GPIO (calibrated 2026-03-25)
 DRIVER_LED = "fake"        # "fake" or "real" - WS2812B LED strip via SPI
 DRIVER_BUZZER = "real"     # "fake" or "real" - GPIO PWM buzzer on GPIO 13

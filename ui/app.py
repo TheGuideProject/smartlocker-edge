@@ -492,7 +492,10 @@ class SmartLockerApp(App):
         # ---- RFID Driver ----
         if drv_rfid == "real":
             from config.settings import RFID_MODULE
-            if RFID_MODULE == "rc522":
+            if RFID_MODULE == "pn532_usb":
+                from hal.real.real_rfid_pn532_usb import RealRFIDDriverPN532USB
+                self.rfid = RealRFIDDriverPN532USB()
+            elif RFID_MODULE == "rc522":
                 from hal.real.real_rfid_rc522 import RealRFIDDriverRC522
                 self.rfid = RealRFIDDriverRC522()
             else:

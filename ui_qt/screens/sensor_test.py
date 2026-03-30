@@ -300,22 +300,21 @@ class SensorTestScreen(QWidget):
 
         # Main reading card
         reading_layout = QVBoxLayout()
-        reading_layout.setSpacing(4)
+        reading_layout.setSpacing(2)
 
         # Grams display
         self._weight_grams = QLabel("---")
-        self._weight_grams.setObjectName("hero")
         self._weight_grams.setStyleSheet(
-            f"font-size: 52px; font-weight: bold; color: {C.PRIMARY};"
+            f"font-size: 36px; font-weight: bold; color: {C.PRIMARY};"
         )
-        self._weight_grams.setMinimumHeight(64)
+        self._weight_grams.setMinimumHeight(40)
         self._weight_grams.setAlignment(Qt.AlignmentFlag.AlignCenter)
         reading_layout.addWidget(self._weight_grams)
 
         # Kg display
         self._weight_kg = QLabel("--- kg")
         self._weight_kg.setStyleSheet(
-            f"font-size: {F.H2}px; color: {C.TEXT_SEC};"
+            f"font-size: {F.BODY}px; color: {C.TEXT_SEC};"
         )
         self._weight_kg.setAlignment(Qt.AlignmentFlag.AlignCenter)
         reading_layout.addWidget(self._weight_kg)
@@ -472,7 +471,7 @@ class SensorTestScreen(QWidget):
 
         self._rfid_uid = QLabel("No tag scanned")
         self._rfid_uid.setStyleSheet(
-            f"font-size: {F.H1}px; font-weight: bold; color: {C.PRIMARY}; "
+            f"font-size: {F.H3}px; font-weight: bold; color: {C.PRIMARY}; "
             f"font-family: 'Consolas', 'Courier New', monospace;"
         )
         self._rfid_uid.setAlignment(Qt.AlignmentFlag.AlignCenter)
@@ -624,7 +623,7 @@ class SensorTestScreen(QWidget):
         for i in range(slot_count):
             slot_id = f"shelf1_slot{i + 1}"
             btn = QPushButton(f"S{i + 1}\nOFF")
-            btn.setMinimumHeight(80)
+            btn.setMinimumHeight(48)
             btn.setStyleSheet(self._led_btn_style(LEDColor.OFF))
             btn.setCursor(Qt.CursorShape.PointingHandCursor)
             btn.clicked.connect(lambda checked, sid=slot_id: self._cycle_slot_color(sid))
@@ -788,29 +787,35 @@ class SensorTestScreen(QWidget):
 
         for pattern, name, desc in patterns_info:
             btn_layout = QHBoxLayout()
+            btn_layout.setSpacing(8)
 
-            btn = _action_btn(f"{name}", "accent")
-            btn.setMinimumHeight(S.BTN_H)
+            btn = _action_btn(f"{name}")
+            btn.setStyleSheet(
+                f"QPushButton {{ background-color: {C.ACCENT_BG}; color: {C.ACCENT};"
+                f"border: 1px solid {C.ACCENT}; border-radius: 8px;"
+                f"font-size: {F.BODY}px; font-weight: bold;"
+                f"padding: 6px 16px; min-height: 36px; }}"
+                f"QPushButton:hover {{ background-color: {C.BG_HOVER}; }}"
+            )
             btn.clicked.connect(lambda checked, p=pattern: self._play_buzzer(p))
             btn_layout.addWidget(btn, stretch=1)
 
             desc_lbl = QLabel(desc)
             desc_lbl.setStyleSheet(
-                f"font-size: {F.SMALL}px; color: {C.TEXT_SEC}; padding-left: 8px;"
+                f"font-size: {F.TINY}px; color: {C.TEXT_SEC};"
             )
             desc_lbl.setWordWrap(True)
-            desc_lbl.setMinimumWidth(180)
             btn_layout.addWidget(desc_lbl, stretch=1)
 
             card_layout = QHBoxLayout()
-            card_layout.setContentsMargins(S.PAD_CARD, S.PAD_CARD, S.PAD_CARD, S.PAD_CARD)
+            card_layout.setContentsMargins(6, 4, 6, 4)
             card_layout.addLayout(btn_layout)
             card = _card(card_layout)
             layout.addWidget(card)
 
         # STOP button
         stop_btn = _action_btn("STOP", "danger")
-        stop_btn.setMinimumHeight(S.BTN_H_LG)
+        stop_btn.setMinimumHeight(S.BTN_H)
         stop_btn.clicked.connect(self._stop_buzzer)
         layout.addWidget(stop_btn)
 
