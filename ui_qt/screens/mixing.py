@@ -706,16 +706,23 @@ class MixingScreen(QWidget):
         self._weight_timer.start(300)
 
     def _update_weight(self):
-        status = self.app.mixing_engine.check_weight_target()
-        if not status:
-            # Read weight directly
-            try:
+        # Read weight in try/except with logging
+        current = 0.0
+        try:
+            status = self.app.mixing_engine.check_weight_target()
+            if status:
+                current = status["current_g"]
+            else:
+                # Fallback: read scale directly
                 reading = self.app.weight.read_weight("mixing_scale")
                 current = reading.grams
-            except Exception:
-                return
-        else:
-            current = status["current_g"]
+                logger.debug(
+                    f"Weight direct read: {current:.1f}g "
+                    f"(raw={reading.raw_value}, stable={reading.stable})"
+                )
+        except Exception as e:
+            logger.error(f"Weight read error: {e}")
+            return
 
         self._lbl_weight_current.setText(f"{current:.0f}g")
 
