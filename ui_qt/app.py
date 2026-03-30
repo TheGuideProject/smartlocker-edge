@@ -62,6 +62,7 @@ class SmartLockerWindow(QMainWindow):
             "shelf_map": "ui_qt.screens.shelf_map:ShelfMapScreen",
             "alarm": "ui_qt.screens.alarm:AlarmScreen",
             "demo": "ui_qt.screens.demo:DemoScreen",
+            "tag_writer": "ui_qt.screens.tag_writer:TagWriterScreen",
         }
 
         # Start on home (or pairing if not paired)

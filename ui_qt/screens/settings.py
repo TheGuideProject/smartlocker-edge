@@ -266,6 +266,19 @@ class SettingsScreen(QWidget):
 
         lay.addLayout(btn_row)
 
+        btn_row2 = QHBoxLayout()
+        btn_row2.setSpacing(S.GAP)
+
+        btn_tag = QPushButton("TAG WRITER")
+        btn_tag.setObjectName("secondary")
+        btn_tag.setCursor(Qt.CursorShape.PointingHandCursor)
+        btn_tag.setMinimumHeight(40)
+        btn_tag.clicked.connect(lambda: self.app.go_screen("tag_writer"))
+        btn_row2.addWidget(btn_tag)
+        btn_row2.addStretch()
+
+        lay.addLayout(btn_row2)
+
         return card
 
     # ══════════════════════════════════════════════════════
