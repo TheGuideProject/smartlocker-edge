@@ -1,8 +1,8 @@
 """
-SmartLocker Sensor Testing Screen
+SmartLocker Sensor Testing Screen — optimized for 800x480 4.3" touch
 
 QTabWidget with 4 tabs: Weight, RFID, LED, Buzzer.
-Each tab provides live testing of the corresponding hardware driver.
+Each tab uses compact horizontal layouts to maximize use of limited height.
 """
 
 import time
@@ -12,7 +12,6 @@ from collections import deque
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
     QFrame, QTabWidget, QGridLayout, QScrollArea, QSizePolicy,
-    QSpacerItem,
 )
 from PyQt6.QtCore import Qt, QTimer, QRectF, QPointF
 from PyQt6.QtGui import QPainter, QPen, QColor, QFont, QPainterPath
@@ -22,20 +21,25 @@ from hal.interfaces import LEDColor, LEDPattern, BuzzerPattern
 
 logger = logging.getLogger("smartlocker.sensor_test")
 
+# Compact font sizes for 480px height
+_F_BIG = 28       # Main reading
+_F_MED = 14       # Labels
+_F_SM = 12        # Secondary info
+_PAD = 6          # Reduced padding
+
 
 # ══════════════════════════════════════════════════════════
-# WEIGHT CHART — Custom QPainter line chart
+# WEIGHT CHART
 # ══════════════════════════════════════════════════════════
 
 class WeightChartWidget(QWidget):
-    """Rolling line chart of the last 50 weight readings using QPainter."""
-
+    """Rolling line chart of weight readings."""
     MAX_POINTS = 50
 
     def __init__(self, parent=None):
         super().__init__(parent)
         self._data = deque(maxlen=self.MAX_POINTS)
-        self.setMinimumHeight(120)
+        self.setMinimumHeight(80)
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         self.setStyleSheet(f"background-color: {C.BG_INPUT}; border-radius: 6px;")
 
@@ -50,135 +54,114 @@ class WeightChartWidget(QWidget):
     def paintEvent(self, event):
         painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-
-        w = self.width()
-        h = self.height()
-        margin = 8
-
-        # Background
+        w, h = self.width(), self.height()
+        m = 6
         painter.fillRect(self.rect(), QColor(C.BG_INPUT))
 
         if len(self._data) < 2:
             painter.setPen(QColor(C.TEXT_MUTED))
-            painter.setFont(QFont("Segoe UI", 10))
-            painter.drawText(self.rect(), Qt.AlignmentFlag.AlignCenter, "Waiting for data...")
+            painter.setFont(QFont("Segoe UI", 9))
+            painter.drawText(self.rect(), Qt.AlignmentFlag.AlignCenter, "Waiting...")
             painter.end()
             return
 
         data = list(self._data)
-        min_val = min(data)
-        max_val = max(data)
-        val_range = max_val - min_val
-        if val_range < 1.0:
-            val_range = 1.0
-            min_val = min_val - 0.5
-            max_val = max_val + 0.5
+        mn, mx = min(data), max(data)
+        rng = mx - mn
+        if rng < 1.0:
+            rng = 1.0
+            mn -= 0.5
+            mx += 0.5
 
-        plot_x = margin
-        plot_y = margin
-        plot_w = w - margin * 2
-        plot_h = h - margin * 2
+        pw, ph = w - m * 2, h - m * 2
 
-        # Grid lines
-        grid_pen = QPen(QColor(C.BORDER), 1, Qt.PenStyle.DotLine)
-        painter.setPen(grid_pen)
-        for i in range(5):
-            y = plot_y + (plot_h * i / 4)
-            painter.drawLine(QPointF(plot_x, y), QPointF(plot_x + plot_w, y))
+        # Grid
+        painter.setPen(QPen(QColor(C.BORDER), 1, Qt.PenStyle.DotLine))
+        for i in range(3):
+            y = m + (ph * i / 2)
+            painter.drawLine(QPointF(m, y), QPointF(m + pw, y))
 
-        # Axis labels
+        # Labels
         painter.setPen(QColor(C.TEXT_MUTED))
-        label_font = QFont("Segoe UI", 7)
-        painter.setFont(label_font)
-        painter.drawText(QRectF(0, plot_y - 2, margin + 30, 14),
-                         Qt.AlignmentFlag.AlignLeft, f"{max_val:.0f}g")
-        painter.drawText(QRectF(0, plot_y + plot_h - 12, margin + 30, 14),
-                         Qt.AlignmentFlag.AlignLeft, f"{min_val:.0f}g")
+        painter.setFont(QFont("Segoe UI", 7))
+        painter.drawText(QRectF(0, m - 2, 36, 12), Qt.AlignmentFlag.AlignLeft, f"{mx:.0f}g")
+        painter.drawText(QRectF(0, m + ph - 10, 36, 12), Qt.AlignmentFlag.AlignLeft, f"{mn:.0f}g")
 
-        # Data line
+        # Line + fill
         n = len(data)
-        points = []
-        for i, val in enumerate(data):
-            x = plot_x + (plot_w * i / (n - 1))
-            y = plot_y + plot_h - ((val - min_val) / val_range * plot_h)
-            points.append(QPointF(x, y))
+        pts = [QPointF(m + pw * i / (n - 1), m + ph - (v - mn) / rng * ph) for i, v in enumerate(data)]
 
-        # Fill area under the line
-        if points:
-            fill_path = QPainterPath()
-            fill_path.moveTo(QPointF(points[0].x(), plot_y + plot_h))
-            for pt in points:
-                fill_path.lineTo(pt)
-            fill_path.lineTo(QPointF(points[-1].x(), plot_y + plot_h))
-            fill_path.closeSubpath()
-            fill_color = QColor(C.PRIMARY)
-            fill_color.setAlpha(30)
-            painter.fillPath(fill_path, fill_color)
+        fill = QPainterPath()
+        fill.moveTo(QPointF(pts[0].x(), m + ph))
+        for p in pts:
+            fill.lineTo(p)
+        fill.lineTo(QPointF(pts[-1].x(), m + ph))
+        fill.closeSubpath()
+        fc = QColor(C.PRIMARY)
+        fc.setAlpha(30)
+        painter.fillPath(fill, fc)
 
-        # Draw the line
-        line_pen = QPen(QColor(C.PRIMARY), 2)
-        painter.setPen(line_pen)
-        for i in range(len(points) - 1):
-            painter.drawLine(points[i], points[i + 1])
+        painter.setPen(QPen(QColor(C.PRIMARY), 2))
+        for i in range(len(pts) - 1):
+            painter.drawLine(pts[i], pts[i + 1])
 
-        # Current value dot
-        if points:
-            last = points[-1]
-            painter.setBrush(QColor(C.PRIMARY))
-            painter.setPen(Qt.PenStyle.NoPen)
-            painter.drawEllipse(last, 4, 4)
-
+        painter.setBrush(QColor(C.PRIMARY))
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.drawEllipse(pts[-1], 3, 3)
         painter.end()
 
 
 # ══════════════════════════════════════════════════════════
-# HELPER — create a card frame
+# HELPERS
 # ══════════════════════════════════════════════════════════
 
 def _card(layout=None) -> QFrame:
-    """Create a QFrame styled as a card."""
-    frame = QFrame()
-    frame.setObjectName("card")
+    f = QFrame()
+    f.setObjectName("card")
     if layout:
-        frame.setLayout(layout)
-    return frame
+        f.setLayout(layout)
+    return f
 
 
-def _status_header(driver_name: str, driver_type: str, is_healthy: bool) -> QHBoxLayout:
-    """Build a driver status header row: [BADGE] DriverName  [HEALTH DOT]."""
+def _badge(text: str, is_real: bool) -> QLabel:
+    lbl = QLabel(text)
+    if is_real:
+        lbl.setStyleSheet(
+            f"background-color: {C.SUCCESS_BG}; color: {C.SUCCESS};"
+            f"border: 1px solid {C.SUCCESS}; border-radius: 3px;"
+            f"padding: 1px 6px; font-size: {_F_SM}px; font-weight: bold;"
+        )
+    else:
+        lbl.setStyleSheet(
+            f"background-color: {C.BG_CARD_ALT}; color: {C.TEXT_MUTED};"
+            f"border: 1px solid {C.TEXT_MUTED}; border-radius: 3px;"
+            f"padding: 1px 6px; font-size: {_F_SM}px;"
+        )
+    return lbl
+
+
+def _hdr_row(name: str, drv_type: str, healthy: bool) -> QHBoxLayout:
     row = QHBoxLayout()
     row.setContentsMargins(0, 0, 0, 0)
-
-    badge = QLabel(driver_type.upper())
-    badge.setObjectName("badge_real" if driver_type == "real" else "badge_fake")
-    badge.setFixedHeight(22)
-    row.addWidget(badge)
-
-    name_lbl = QLabel(f"  {driver_name}")
-    name_lbl.setStyleSheet(f"font-size: {F.H3}px; font-weight: bold; color: {C.TEXT};")
-    row.addWidget(name_lbl)
-
+    row.setSpacing(6)
+    row.addWidget(_badge(drv_type.upper(), drv_type == "real"))
+    lbl = QLabel(name)
+    lbl.setStyleSheet(f"font-size: {_F_MED}px; font-weight: bold; color: {C.TEXT};")
+    row.addWidget(lbl)
     row.addStretch()
-
-    dot_color = C.SUCCESS if is_healthy else C.DANGER
-    dot = QLabel("*")
-    dot.setStyleSheet(f"font-size: 14px; color: {dot_color};")
+    c = C.SUCCESS if healthy else C.DANGER
+    dot = QLabel("Healthy" if healthy else "Offline")
+    dot.setStyleSheet(f"font-size: {_F_SM}px; color: {c}; font-weight: bold;")
     row.addWidget(dot)
-
-    status_text = "Healthy" if is_healthy else "Unhealthy"
-    status_lbl = QLabel(status_text)
-    status_lbl.setStyleSheet(f"font-size: {F.SMALL}px; color: {dot_color};")
-    row.addWidget(status_lbl)
-
     return row
 
 
-def _action_btn(text: str, obj_name: str = "") -> QPushButton:
-    btn = QPushButton(text)
-    if obj_name:
-        btn.setObjectName(obj_name)
-    btn.setCursor(Qt.CursorShape.PointingHandCursor)
-    return btn
+def _btn(text: str, style: str = "") -> QPushButton:
+    b = QPushButton(text)
+    b.setCursor(Qt.CursorShape.PointingHandCursor)
+    if style:
+        b.setStyleSheet(style)
+    return b
 
 
 # ══════════════════════════════════════════════════════════
@@ -186,342 +169,286 @@ def _action_btn(text: str, obj_name: str = "") -> QPushButton:
 # ══════════════════════════════════════════════════════════
 
 class SensorTestScreen(QWidget):
-    """Sensor testing screen with 4 hardware tabs."""
 
     def __init__(self, app):
         super().__init__()
         self.app = app
-
-        # State
         self._weight_timer = QTimer()
         self._weight_timer.setInterval(300)
         self._weight_timer.timeout.connect(self._update_weight)
-
         self._active_channel = None
-        self._led_slot_colors = {}       # slot_id -> LEDColor index
+        self._led_slot_colors = {}
         self._led_current_pattern = LEDPattern.SOLID
         self._rfid_history = deque(maxlen=10)
-
-        # Color cycling order
         self._color_cycle = [
             LEDColor.OFF, LEDColor.GREEN, LEDColor.RED,
             LEDColor.YELLOW, LEDColor.BLUE, LEDColor.WHITE,
         ]
-
         self._build_ui()
-
-    # ──────────────────────────────────────────────────
-    # UI CONSTRUCTION
-    # ──────────────────────────────────────────────────
 
     def _build_ui(self):
         root = QVBoxLayout(self)
-        root.setContentsMargins(S.PAD, S.PAD, S.PAD, S.PAD)
-        root.setSpacing(S.GAP)
+        root.setContentsMargins(_PAD, _PAD, _PAD, _PAD)
+        root.setSpacing(4)
 
-        # Top bar
+        # Top bar — compact
         top = QHBoxLayout()
-        self._back_btn = _action_btn("<  Back", "ghost")
-        self._back_btn.clicked.connect(self.app.go_back)
-        top.addWidget(self._back_btn)
-
-        title = QLabel("Sensor Testing")
-        title.setObjectName("title")
-        top.addWidget(title)
+        top.setSpacing(8)
+        back = _btn("< Back", f"QPushButton {{ background: transparent; color: {C.TEXT_SEC}; border: none; font-size: {_F_MED}px; }}")
+        back.clicked.connect(self.app.go_back)
+        top.addWidget(back)
+        t = QLabel("SENSOR TEST")
+        t.setStyleSheet(f"font-size: {F.H3}px; font-weight: bold; color: {C.TEXT};")
+        top.addWidget(t)
         top.addStretch()
-
-        self._mode_lbl = QLabel(self.app.mode.upper())
-        self._mode_lbl.setObjectName(
-            "badge_real" if self.app.mode in ("live", "hybrid") else "badge_fake"
+        m = QLabel(self.app.mode.upper())
+        m.setStyleSheet(
+            f"background-color: {C.SUCCESS_BG if self.app.mode != 'test' else C.BG_CARD_ALT};"
+            f"color: {C.SUCCESS if self.app.mode != 'test' else C.TEXT_MUTED};"
+            f"border: 1px solid {C.SUCCESS if self.app.mode != 'test' else C.TEXT_MUTED};"
+            f"border-radius: 3px; padding: 1px 6px; font-size: {_F_SM}px; font-weight: bold;"
         )
-        top.addWidget(self._mode_lbl)
+        top.addWidget(m)
         root.addLayout(top)
 
         # Tab widget
         self._tabs = QTabWidget()
+        self._tabs.setStyleSheet(
+            f"QTabBar::tab {{ padding: 6px 14px; font-size: {_F_MED}px; min-width: 60px; }}"
+        )
         root.addWidget(self._tabs, stretch=1)
-
         self._tabs.addTab(self._build_weight_tab(), "Weight")
         self._tabs.addTab(self._build_rfid_tab(), "RFID")
         self._tabs.addTab(self._build_led_tab(), "LED")
         self._tabs.addTab(self._build_buzzer_tab(), "Buzzer")
 
     # ──────────────────────────────────────────────────
-    # WEIGHT TAB
+    # WEIGHT TAB — horizontal: reading left, chart right
     # ──────────────────────────────────────────────────
 
     def _build_weight_tab(self) -> QWidget:
         tab = QWidget()
         layout = QVBoxLayout(tab)
-        layout.setContentsMargins(S.PAD, S.PAD, S.PAD, S.PAD)
-        layout.setSpacing(S.GAP)
+        layout.setContentsMargins(_PAD, _PAD, _PAD, _PAD)
+        layout.setSpacing(4)
 
-        # Status header
+        # Header
         healthy = False
         try:
             healthy = self.app.weight.is_healthy()
         except Exception:
             pass
-        hdr = _status_header(
-            "Weight Sensor (HX711)",
-            self.app.driver_status.get("weight", "fake"),
-            healthy,
-        )
-        self._weight_health_row = hdr
-        layout.addLayout(hdr)
+        layout.addLayout(_hdr_row("HX711 Weight", self.app.driver_status.get("weight", "fake"), healthy))
 
         # Channel selector
         chan_row = QHBoxLayout()
-        chan_label = QLabel("Channel:")
-        chan_label.setStyleSheet(f"font-size: {F.BODY}px; color: {C.TEXT_SEC};")
-        chan_row.addWidget(chan_label)
-
+        chan_row.setSpacing(4)
+        lbl = QLabel("CH:")
+        lbl.setStyleSheet(f"font-size: {_F_SM}px; color: {C.TEXT_SEC};")
+        chan_row.addWidget(lbl)
         self._channel_btns = {}
         channels = []
         try:
             channels = self.app.weight.get_channels()
         except Exception:
             channels = ["shelf1", "mixing_scale"]
-
         for ch in channels:
-            btn = _action_btn(ch)
-            btn.setCheckable(True)
-            btn.clicked.connect(lambda checked, c=ch: self._select_channel(c))
-            chan_row.addWidget(btn)
-            self._channel_btns[ch] = btn
-
+            b = _btn(ch, f"QPushButton {{ font-size: {_F_SM}px; padding: 2px 8px; border: 1px solid {C.BORDER}; border-radius: 4px; color: {C.TEXT}; background: {C.BG_CARD}; }}")
+            b.setCheckable(True)
+            b.clicked.connect(lambda checked, c=ch: self._select_channel(c))
+            chan_row.addWidget(b)
+            self._channel_btns[ch] = b
         chan_row.addStretch()
         layout.addLayout(chan_row)
-
-        # Select first channel by default
         if channels:
             self._active_channel = channels[0]
             self._channel_btns[channels[0]].setChecked(True)
 
-        # Main reading card
-        reading_layout = QVBoxLayout()
-        reading_layout.setSpacing(2)
+        # Main area: reading (left) + chart (right)
+        main_row = QHBoxLayout()
+        main_row.setSpacing(8)
 
-        # Grams display
+        # Left: reading card
+        read_lay = QVBoxLayout()
+        read_lay.setSpacing(0)
+        read_lay.setContentsMargins(8, 4, 8, 4)
+
         self._weight_grams = QLabel("---")
-        self._weight_grams.setStyleSheet(
-            f"font-size: 36px; font-weight: bold; color: {C.PRIMARY};"
-        )
-        self._weight_grams.setMinimumHeight(40)
+        self._weight_grams.setStyleSheet(f"font-size: {_F_BIG}px; font-weight: bold; color: {C.PRIMARY};")
         self._weight_grams.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        reading_layout.addWidget(self._weight_grams)
+        read_lay.addWidget(self._weight_grams)
 
-        # Kg display
         self._weight_kg = QLabel("--- kg")
-        self._weight_kg.setStyleSheet(
-            f"font-size: {F.BODY}px; color: {C.TEXT_SEC};"
-        )
+        self._weight_kg.setStyleSheet(f"font-size: {_F_MED}px; color: {C.TEXT_SEC};")
         self._weight_kg.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        reading_layout.addWidget(self._weight_kg)
+        read_lay.addWidget(self._weight_kg)
 
-        # Stability indicator
         stab_row = QHBoxLayout()
         stab_row.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self._stability_dot = QLabel("*")
-        self._stability_dot.setStyleSheet(f"font-size: 14px; color: {C.WARNING};")
+        self._stability_dot.setStyleSheet(f"font-size: {_F_SM}px; color: {C.WARNING};")
         stab_row.addWidget(self._stability_dot)
-        self._stability_text = QLabel("WAITING")
-        self._stability_text.setStyleSheet(
-            f"font-size: {F.SMALL}px; font-weight: bold; color: {C.WARNING};"
-        )
+        self._stability_text = QLabel("WAIT")
+        self._stability_text.setStyleSheet(f"font-size: {_F_SM}px; font-weight: bold; color: {C.WARNING};")
         stab_row.addWidget(self._stability_text)
-        reading_layout.addLayout(stab_row)
+        read_lay.addLayout(stab_row)
 
-        # Raw ADC
-        self._weight_raw = QLabel("RAW ADC: ---")
-        self._weight_raw.setStyleSheet(
-            f"font-size: {F.TINY}px; color: {C.TEXT_MUTED};"
-        )
+        self._weight_raw = QLabel("RAW: ---")
+        self._weight_raw.setStyleSheet(f"font-size: {_F_SM}px; color: {C.TEXT_MUTED};")
         self._weight_raw.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        reading_layout.addWidget(self._weight_raw)
+        read_lay.addWidget(self._weight_raw)
 
-        reading_card = _card(reading_layout)
-        layout.addWidget(reading_card)
+        read_card = _card(read_lay)
+        read_card.setFixedWidth(220)
+        main_row.addWidget(read_card)
 
-        # Chart
+        # Right: chart
         self._weight_chart = WeightChartWidget()
-        layout.addWidget(self._weight_chart, stretch=1)
+        main_row.addWidget(self._weight_chart, stretch=1)
 
-        # Action buttons
+        layout.addLayout(main_row, stretch=1)
+
+        # Bottom buttons
         btn_row = QHBoxLayout()
-
-        self._tare_btn = _action_btn("TARE  (Zero)", "primary")
+        btn_row.setSpacing(4)
+        self._tare_btn = _btn("TARE", f"QPushButton {{ background: {C.PRIMARY}; color: {C.BG_DARK}; border: none; border-radius: 6px; font-size: {_F_MED}px; font-weight: bold; padding: 8px 16px; }} QPushButton:hover {{ background: {C.PRIMARY_DIM}; }}")
         self._tare_btn.clicked.connect(self._do_tare)
         btn_row.addWidget(self._tare_btn)
 
-        self._calibrate_btn = _action_btn("CALIBRATE", "secondary")
+        self._calibrate_btn = _btn("CALIBRATE", f"QPushButton {{ background: {C.SECONDARY_BG}; color: {C.SECONDARY}; border: 1px solid {C.SECONDARY}; border-radius: 6px; font-size: {_F_MED}px; padding: 8px 16px; }} QPushButton:hover {{ background: {C.BG_HOVER}; }}")
         self._calibrate_btn.clicked.connect(self._do_calibrate)
         btn_row.addWidget(self._calibrate_btn)
 
-        self._clear_chart_btn = _action_btn("Clear Chart", "ghost")
-        self._clear_chart_btn.clicked.connect(self._weight_chart.clear_data)
-        btn_row.addWidget(self._clear_chart_btn)
-
+        clr = _btn("Clear", f"QPushButton {{ background: transparent; color: {C.TEXT_SEC}; border: none; font-size: {_F_SM}px; }}")
+        clr.clicked.connect(self._weight_chart.clear_data)
+        btn_row.addWidget(clr)
+        btn_row.addStretch()
         layout.addLayout(btn_row)
 
         return tab
 
-    def _select_channel(self, channel: str):
+    def _select_channel(self, channel):
         self._active_channel = channel
-        for ch, btn in self._channel_btns.items():
-            btn.setChecked(ch == channel)
+        for ch, b in self._channel_btns.items():
+            b.setChecked(ch == channel)
         self._weight_chart.clear_data()
 
     def _update_weight(self):
         if not self._active_channel:
             return
         try:
-            reading = self.app.weight.read_weight(self._active_channel)
-            grams = reading.grams
-            kg = grams / 1000.0
-            stable = reading.stable
-            raw = reading.raw_value
-
-            self._weight_grams.setText(f"{grams:.1f} g")
-            self._weight_kg.setText(f"{kg:.3f} kg")
-            self._weight_raw.setText(f"RAW ADC: {raw}")
-
-            if stable:
-                self._stability_dot.setStyleSheet(f"font-size: 14px; color: {C.SUCCESS};")
-                self._stability_text.setText("STABLE")
-                self._stability_text.setStyleSheet(
-                    f"font-size: {F.SMALL}px; font-weight: bold; color: {C.SUCCESS};"
-                )
-            else:
-                self._stability_dot.setStyleSheet(f"font-size: 14px; color: {C.WARNING};")
-                self._stability_text.setText("SETTLING...")
-                self._stability_text.setStyleSheet(
-                    f"font-size: {F.SMALL}px; font-weight: bold; color: {C.WARNING};"
-                )
-
-            self._weight_chart.add_point(grams)
-
+            r = self.app.weight.read_weight(self._active_channel)
+            self._weight_grams.setText(f"{r.grams:.1f} g")
+            self._weight_kg.setText(f"{r.grams / 1000:.3f} kg")
+            self._weight_raw.setText(f"RAW: {r.raw_value}")
+            c = C.SUCCESS if r.stable else C.WARNING
+            txt = "STABLE" if r.stable else "..."
+            self._stability_dot.setStyleSheet(f"font-size: {_F_SM}px; color: {c};")
+            self._stability_text.setText(txt)
+            self._stability_text.setStyleSheet(f"font-size: {_F_SM}px; font-weight: bold; color: {c};")
+            self._weight_chart.add_point(r.grams)
         except Exception as e:
             self._weight_grams.setText("ERR")
-            self._weight_kg.setText("---")
-            self._weight_raw.setText(f"Error: {e}")
-            self._stability_dot.setStyleSheet(f"font-size: 14px; color: {C.DANGER};")
-            self._stability_text.setText("ERROR")
-            self._stability_text.setStyleSheet(
-                f"font-size: {F.SMALL}px; font-weight: bold; color: {C.DANGER};"
-            )
+            self._weight_raw.setText(str(e)[:30])
 
     def _do_tare(self):
         if not self._active_channel:
             return
         try:
-            ok = self.app.weight.tare(self._active_channel)
-            if ok:
-                self._tare_btn.setText("TARED!")
-                self._weight_chart.clear_data()
-                QTimer.singleShot(1500, lambda: self._tare_btn.setText("TARE  (Zero)"))
-            else:
-                self._tare_btn.setText("TARE FAILED")
-                QTimer.singleShot(1500, lambda: self._tare_btn.setText("TARE  (Zero)"))
-        except Exception as e:
-            logger.error(f"Tare error: {e}")
-            self._tare_btn.setText("TARE ERROR")
-            QTimer.singleShot(1500, lambda: self._tare_btn.setText("TARE  (Zero)"))
+            self.app.weight.tare(self._active_channel)
+            self._tare_btn.setText("OK!")
+            self._weight_chart.clear_data()
+            QTimer.singleShot(1000, lambda: self._tare_btn.setText("TARE"))
+        except Exception:
+            self._tare_btn.setText("FAIL")
+            QTimer.singleShot(1000, lambda: self._tare_btn.setText("TARE"))
 
     def _do_calibrate(self):
-        # Placeholder — show message in the button
-        self._calibrate_btn.setText("Coming Soon...")
-        QTimer.singleShot(2000, lambda: self._calibrate_btn.setText("CALIBRATE"))
+        self._calibrate_btn.setText("Soon...")
+        QTimer.singleShot(1500, lambda: self._calibrate_btn.setText("CALIBRATE"))
 
     # ──────────────────────────────────────────────────
-    # RFID TAB
+    # RFID TAB — compact: scan + result side by side
     # ──────────────────────────────────────────────────
 
     def _build_rfid_tab(self) -> QWidget:
         tab = QWidget()
         layout = QVBoxLayout(tab)
-        layout.setContentsMargins(S.PAD, S.PAD, S.PAD, S.PAD)
-        layout.setSpacing(S.GAP)
+        layout.setContentsMargins(_PAD, _PAD, _PAD, _PAD)
+        layout.setSpacing(4)
 
-        # Status header
+        # Header
         healthy = False
         try:
             healthy = self.app.rfid.is_healthy()
         except Exception:
             pass
-        hdr = _status_header(
-            "RFID / NFC Reader",
-            self.app.driver_status.get("rfid", "fake"),
-            healthy,
-        )
-        layout.addLayout(hdr)
+        layout.addLayout(_hdr_row("PN532 USB NFC", self.app.driver_status.get("rfid", "fake"), healthy))
 
-        # Scan button
-        self._rfid_scan_btn = _action_btn("SCAN NOW", "primary")
+        # Scan button — not huge
+        self._rfid_scan_btn = _btn("SCAN NOW", f"QPushButton {{ background: {C.PRIMARY}; color: {C.BG_DARK}; border: none; border-radius: 6px; font-size: {_F_MED}px; font-weight: bold; padding: 10px; }} QPushButton:hover {{ background: {C.PRIMARY_DIM}; }}")
+        self._rfid_scan_btn.setFixedHeight(40)
         self._rfid_scan_btn.clicked.connect(self._do_rfid_scan)
         layout.addWidget(self._rfid_scan_btn)
 
-        # Current tag card
-        tag_layout = QVBoxLayout()
-        tag_layout.setSpacing(4)
+        # Result card — 2 column grid
+        result_grid = QGridLayout()
+        result_grid.setContentsMargins(8, 6, 8, 6)
+        result_grid.setHorizontalSpacing(12)
+        result_grid.setVerticalSpacing(4)
 
-        tag_title = QLabel("Last Detected Tag")
-        tag_title.setObjectName("section")
-        tag_layout.addWidget(tag_title)
+        def _lbl(text, style=""):
+            l = QLabel(text)
+            l.setStyleSheet(style or f"font-size: {_F_SM}px; color: {C.TEXT_MUTED};")
+            return l
 
-        self._rfid_uid = QLabel("No tag scanned")
-        self._rfid_uid.setStyleSheet(
-            f"font-size: {F.H3}px; font-weight: bold; color: {C.PRIMARY}; "
-            f"font-family: 'Consolas', 'Courier New', monospace;"
-        )
-        self._rfid_uid.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self._rfid_uid.setWordWrap(True)
-        tag_layout.addWidget(self._rfid_uid)
+        def _val(text, style=""):
+            l = QLabel(text)
+            l.setStyleSheet(style or f"font-size: {_F_MED}px; color: {C.TEXT}; font-weight: bold;")
+            l.setWordWrap(True)
+            return l
 
-        self._rfid_signal = QLabel("Signal: ---")
-        self._rfid_signal.setStyleSheet(
-            f"font-size: {F.SMALL}px; color: {C.TEXT_SEC};"
-        )
-        self._rfid_signal.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        tag_layout.addWidget(self._rfid_signal)
+        result_grid.addWidget(_lbl("UID:"), 0, 0)
+        self._rfid_uid = _val("---", f"font-size: {_F_MED}px; color: {C.PRIMARY}; font-weight: bold; font-family: monospace;")
+        result_grid.addWidget(self._rfid_uid, 0, 1)
 
-        # Product data
-        prod_title = QLabel("Product Data")
-        prod_title.setObjectName("section")
-        tag_layout.addWidget(prod_title)
+        result_grid.addWidget(_lbl("Signal:"), 0, 2)
+        self._rfid_signal = _val("---")
+        result_grid.addWidget(self._rfid_signal, 0, 3)
 
-        self._rfid_ppg = QLabel("PPG Code: ---")
-        self._rfid_ppg.setStyleSheet(f"font-size: {F.BODY}px; color: {C.TEXT};")
-        tag_layout.addWidget(self._rfid_ppg)
+        result_grid.addWidget(_lbl("PPG Code:"), 1, 0)
+        self._rfid_ppg = _val("---")
+        result_grid.addWidget(self._rfid_ppg, 1, 1)
 
-        self._rfid_product = QLabel("Product: ---")
-        self._rfid_product.setStyleSheet(f"font-size: {F.BODY}px; color: {C.TEXT};")
-        tag_layout.addWidget(self._rfid_product)
+        result_grid.addWidget(_lbl("Batch:"), 1, 2)
+        self._rfid_batch = _val("---")
+        result_grid.addWidget(self._rfid_batch, 1, 3)
 
-        self._rfid_color = QLabel("Color: ---")
-        self._rfid_color.setStyleSheet(f"font-size: {F.BODY}px; color: {C.TEXT};")
-        tag_layout.addWidget(self._rfid_color)
+        result_grid.addWidget(_lbl("Product:"), 2, 0)
+        self._rfid_product = _val("---")
+        result_grid.addWidget(self._rfid_product, 2, 1)
 
-        tag_card = _card(tag_layout)
-        layout.addWidget(tag_card)
+        result_grid.addWidget(_lbl("Color:"), 2, 2)
+        self._rfid_color = _val("---")
+        result_grid.addWidget(self._rfid_color, 2, 3)
 
-        # History
-        hist_title = QLabel("Scan History (last 10)")
-        hist_title.setObjectName("section")
-        layout.addWidget(hist_title)
+        result_card = _card(result_grid)
+        layout.addWidget(result_card)
 
-        # Scrollable history list
+        # History — scrollable
+        hist_lbl = QLabel("History")
+        hist_lbl.setStyleSheet(f"font-size: {_F_SM}px; color: {C.SECONDARY}; font-weight: bold; padding-top: 2px;")
+        layout.addWidget(hist_lbl)
+
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
         scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
-
         self._rfid_history_container = QWidget()
         self._rfid_history_layout = QVBoxLayout(self._rfid_history_container)
         self._rfid_history_layout.setContentsMargins(0, 0, 0, 0)
-        self._rfid_history_layout.setSpacing(4)
+        self._rfid_history_layout.setSpacing(2)
         self._rfid_history_layout.addStretch()
         scroll.setWidget(self._rfid_history_container)
-
         layout.addWidget(scroll, stretch=1)
 
         return tab
@@ -529,155 +456,116 @@ class SensorTestScreen(QWidget):
     def _do_rfid_scan(self):
         self._rfid_scan_btn.setText("Scanning...")
         self._rfid_scan_btn.setEnabled(False)
+        # Process events so the button text updates
+        from PyQt6.QtWidgets import QApplication
+        QApplication.processEvents()
 
         try:
             tags = self.app.rfid.poll_tags()
             if tags:
-                tag = tags[0]
-                self._rfid_uid.setText(tag.tag_id)
-                self._rfid_signal.setText(f"Signal: {tag.signal_strength}%")
-
-                ppg = tag.ppg_code or (
-                    tag.product_data.split("/")[0] if tag.product_data else "---"
-                )
-                product = tag.product_name or "---"
-                color = tag.color or "---"
-
-                self._rfid_ppg.setText(f"PPG Code: {ppg}")
-                self._rfid_product.setText(f"Product: {product}")
-                self._rfid_color.setText(f"Color: {color}")
-
-                # Add to history
+                t = tags[0]
+                self._rfid_uid.setText(t.tag_id)
+                self._rfid_signal.setText(f"{t.signal_strength}%")
+                self._rfid_ppg.setText(t.ppg_code or "---")
+                self._rfid_batch.setText(t.batch_number or "---")
+                self._rfid_product.setText(t.product_name or "---")
+                self._rfid_color.setText(t.color or "---")
                 ts = time.strftime("%H:%M:%S")
-                self._rfid_history.appendleft(
-                    f"{ts}  |  {tag.tag_id}  |  {ppg}"
-                )
+                self._rfid_history.appendleft(f"{ts} | {t.tag_id} | {t.ppg_code or '?'}")
                 self._rebuild_rfid_history()
             else:
                 self._rfid_uid.setText("No tag found")
-                self._rfid_signal.setText("Signal: ---")
-                self._rfid_ppg.setText("PPG Code: ---")
-                self._rfid_product.setText("Product: ---")
-                self._rfid_color.setText("Color: ---")
+                self._rfid_signal.setText("---")
+                self._rfid_ppg.setText("---")
+                self._rfid_batch.setText("---")
+                self._rfid_product.setText("---")
+                self._rfid_color.setText("---")
         except Exception as e:
-            logger.error(f"RFID scan error: {e}")
-            self._rfid_uid.setText("SCAN ERROR")
-            self._rfid_signal.setText(f"Error: {e}")
+            self._rfid_uid.setText("ERROR")
+            self._rfid_signal.setText(str(e)[:30])
 
         self._rfid_scan_btn.setText("SCAN NOW")
         self._rfid_scan_btn.setEnabled(True)
 
     def _rebuild_rfid_history(self):
-        # Clear existing items (except the stretch)
         while self._rfid_history_layout.count() > 1:
             item = self._rfid_history_layout.takeAt(0)
             w = item.widget()
             if w:
                 w.deleteLater()
-
         for entry in self._rfid_history:
             lbl = QLabel(entry)
             lbl.setStyleSheet(
-                f"font-size: {F.TINY}px; color: {C.TEXT_SEC}; "
-                f"font-family: 'Consolas', monospace; "
-                f"background-color: {C.BG_CARD_ALT}; "
-                f"padding: 4px 8px; border-radius: 4px;"
+                f"font-size: {_F_SM}px; color: {C.TEXT_SEC}; font-family: monospace;"
+                f"background: {C.BG_CARD_ALT}; padding: 2px 6px; border-radius: 3px;"
             )
-            self._rfid_history_layout.insertWidget(
-                self._rfid_history_layout.count() - 1, lbl
-            )
+            self._rfid_history_layout.insertWidget(self._rfid_history_layout.count() - 1, lbl)
 
     # ──────────────────────────────────────────────────
-    # LED TAB
+    # LED TAB — 4-column grid, compact
     # ──────────────────────────────────────────────────
 
     def _build_led_tab(self) -> QWidget:
         tab = QWidget()
         layout = QVBoxLayout(tab)
-        layout.setContentsMargins(S.PAD, S.PAD, S.PAD, S.PAD)
-        layout.setSpacing(S.GAP)
+        layout.setContentsMargins(_PAD, _PAD, _PAD, _PAD)
+        layout.setSpacing(4)
 
-        # Status header
         healthy = False
         try:
             healthy = self.app.led.is_healthy()
         except Exception:
             pass
-        hdr = _status_header(
-            "LED Slot Indicators",
-            self.app.driver_status.get("led", "fake"),
-            healthy,
-        )
-        layout.addLayout(hdr)
+        layout.addLayout(_hdr_row("LED Indicators", self.app.driver_status.get("led", "fake"), healthy))
 
-        # Slot buttons grid
-        slot_title = QLabel("Slot Colors (click to cycle)")
-        slot_title.setObjectName("section")
-        layout.addWidget(slot_title)
-
+        # Slot grid — 4 columns
         slot_grid = QGridLayout()
-        slot_grid.setSpacing(S.GAP)
+        slot_grid.setSpacing(4)
         self._led_slot_btns = {}
-
         slot_count = getattr(self.app, "slot_count", 4)
+        cols = 4
         for i in range(slot_count):
-            slot_id = f"shelf1_slot{i + 1}"
-            btn = QPushButton(f"S{i + 1}\nOFF")
-            btn.setMinimumHeight(48)
-            btn.setStyleSheet(self._led_btn_style(LEDColor.OFF))
-            btn.setCursor(Qt.CursorShape.PointingHandCursor)
-            btn.clicked.connect(lambda checked, sid=slot_id: self._cycle_slot_color(sid))
-            row = i // 2
-            col = i % 2
-            slot_grid.addWidget(btn, row, col)
-            self._led_slot_btns[slot_id] = btn
-            self._led_slot_colors[slot_id] = 0  # index into _color_cycle
+            sid = f"shelf1_slot{i + 1}"
+            b = QPushButton(f"S{i+1}")
+            b.setMinimumHeight(40)
+            b.setStyleSheet(self._led_btn_style(LEDColor.OFF))
+            b.setCursor(Qt.CursorShape.PointingHandCursor)
+            b.clicked.connect(lambda checked, s=sid: self._cycle_slot_color(s))
+            slot_grid.addWidget(b, i // cols, i % cols)
+            self._led_slot_btns[sid] = b
+            self._led_slot_colors[sid] = 0
 
-        slot_card_layout = QVBoxLayout()
-        slot_card_layout.addLayout(slot_grid)
-        slot_card = _card(slot_card_layout)
-        layout.addWidget(slot_card)
+        layout.addLayout(slot_grid)
 
-        # Pattern selector
-        pat_title = QLabel("Pattern")
-        pat_title.setObjectName("section")
-        layout.addWidget(pat_title)
-
+        # Pattern row
         pat_row = QHBoxLayout()
+        pat_row.setSpacing(4)
         self._pattern_btns = {}
-        patterns = [
-            ("SOLID", LEDPattern.SOLID),
-            ("BLINK", LEDPattern.BLINK_SLOW),
-            ("FAST", LEDPattern.BLINK_FAST),
-            ("PULSE", LEDPattern.PULSE),
-        ]
-        for label, pat in patterns:
-            btn = _action_btn(label)
-            btn.setCheckable(True)
-            btn.setChecked(pat == LEDPattern.SOLID)
-            btn.clicked.connect(lambda checked, p=pat: self._set_led_pattern(p))
-            pat_row.addWidget(btn)
-            self._pattern_btns[pat] = btn
+        for label, pat in [("SOLID", LEDPattern.SOLID), ("BLINK", LEDPattern.BLINK_SLOW), ("FAST", LEDPattern.BLINK_FAST), ("PULSE", LEDPattern.PULSE)]:
+            b = _btn(label, f"QPushButton {{ font-size: {_F_SM}px; padding: 4px 8px; border: 1px solid {C.BORDER}; border-radius: 4px; color: {C.TEXT}; background: {C.BG_CARD}; }}")
+            b.setCheckable(True)
+            b.setChecked(pat == LEDPattern.SOLID)
+            b.clicked.connect(lambda checked, p=pat: self._set_led_pattern(p))
+            pat_row.addWidget(b)
+            self._pattern_btns[pat] = b
         layout.addLayout(pat_row)
 
-        # ALL ON / ALL OFF
-        ctrl_row = QHBoxLayout()
-        all_on_btn = _action_btn("ALL ON", "success")
-        all_on_btn.clicked.connect(self._led_all_on)
-        ctrl_row.addWidget(all_on_btn)
-
-        all_off_btn = _action_btn("ALL OFF", "danger")
-        all_off_btn.clicked.connect(self._led_all_off)
-        ctrl_row.addWidget(all_off_btn)
-        layout.addLayout(ctrl_row)
-
+        # ALL ON / OFF
+        ctrl = QHBoxLayout()
+        ctrl.setSpacing(4)
+        on_btn = _btn("ALL ON", f"QPushButton {{ background: {C.SUCCESS_BG}; color: {C.SUCCESS}; border: 1px solid {C.SUCCESS}; border-radius: 6px; font-size: {_F_MED}px; font-weight: bold; padding: 8px; }} QPushButton:hover {{ background: {C.BG_HOVER}; }}")
+        on_btn.clicked.connect(self._led_all_on)
+        ctrl.addWidget(on_btn)
+        off_btn = _btn("ALL OFF", f"QPushButton {{ background: {C.DANGER_BG}; color: {C.DANGER}; border: 1px solid {C.DANGER}; border-radius: 6px; font-size: {_F_MED}px; font-weight: bold; padding: 8px; }} QPushButton:hover {{ background: {C.BG_HOVER}; }}")
+        off_btn.clicked.connect(self._led_all_off)
+        ctrl.addWidget(off_btn)
+        layout.addLayout(ctrl)
         layout.addStretch()
 
         return tab
 
     def _led_btn_style(self, color: LEDColor) -> str:
-        """Return stylesheet for a slot button based on LED color."""
-        color_map = {
+        cmap = {
             LEDColor.OFF: (C.BG_CARD_ALT, C.TEXT_MUTED, C.BORDER),
             LEDColor.GREEN: (C.SUCCESS_BG, C.SUCCESS, C.SUCCESS),
             LEDColor.RED: (C.DANGER_BG, C.DANGER, C.DANGER),
@@ -685,175 +573,142 @@ class SensorTestScreen(QWidget):
             LEDColor.BLUE: (C.SECONDARY_BG, C.SECONDARY, C.SECONDARY),
             LEDColor.WHITE: ("#1A1A2E", C.TEXT, C.TEXT),
         }
-        bg, fg, border = color_map.get(color, (C.BG_CARD_ALT, C.TEXT_MUTED, C.BORDER))
+        bg, fg, bd = cmap.get(color, (C.BG_CARD_ALT, C.TEXT_MUTED, C.BORDER))
         return (
-            f"QPushButton {{ background-color: {bg}; color: {fg}; "
-            f"border: 2px solid {border}; border-radius: 10px; "
-            f"font-size: {F.H3}px; font-weight: bold; }}"
+            f"QPushButton {{ background: {bg}; color: {fg}; border: 2px solid {bd};"
+            f"border-radius: 8px; font-size: {_F_MED}px; font-weight: bold; }}"
         )
 
-    def _cycle_slot_color(self, slot_id: str):
-        idx = self._led_slot_colors.get(slot_id, 0)
-        idx = (idx + 1) % len(self._color_cycle)
+    def _cycle_slot_color(self, slot_id):
+        idx = (self._led_slot_colors.get(slot_id, 0) + 1) % len(self._color_cycle)
         self._led_slot_colors[slot_id] = idx
         color = self._color_cycle[idx]
-
-        btn = self._led_slot_btns[slot_id]
-        short_id = slot_id.split("_")[-1].upper()
-        btn.setText(f"{short_id}\n{color.name}")
-        btn.setStyleSheet(self._led_btn_style(color))
-
+        b = self._led_slot_btns[slot_id]
+        num = slot_id.split("_")[-1].replace("slot", "S")
+        b.setText(f"{num}\n{color.name}" if color != LEDColor.OFF else num)
+        b.setStyleSheet(self._led_btn_style(color))
         try:
             if color == LEDColor.OFF:
                 self.app.led.clear_slot(slot_id)
             else:
                 self.app.led.set_slot(slot_id, color, self._led_current_pattern)
-        except Exception as e:
-            logger.error(f"LED set_slot error: {e}")
+        except Exception:
+            pass
 
-    def _set_led_pattern(self, pattern: LEDPattern):
+    def _set_led_pattern(self, pattern):
         self._led_current_pattern = pattern
-        for pat, btn in self._pattern_btns.items():
-            btn.setChecked(pat == pattern)
-
-        # Re-apply current colors with new pattern
-        for slot_id, idx in self._led_slot_colors.items():
-            color = self._color_cycle[idx]
-            if color != LEDColor.OFF:
+        for p, b in self._pattern_btns.items():
+            b.setChecked(p == pattern)
+        for sid, idx in self._led_slot_colors.items():
+            c = self._color_cycle[idx]
+            if c != LEDColor.OFF:
                 try:
-                    self.app.led.set_slot(slot_id, color, pattern)
-                except Exception as e:
-                    logger.error(f"LED pattern update error: {e}")
+                    self.app.led.set_slot(sid, c, pattern)
+                except Exception:
+                    pass
 
     def _led_all_on(self):
-        slot_count = getattr(self.app, "slot_count", 4)
-        for i in range(slot_count):
-            slot_id = f"shelf1_slot{i + 1}"
-            color = LEDColor.GREEN
-            self._led_slot_colors[slot_id] = self._color_cycle.index(color)
-            btn = self._led_slot_btns.get(slot_id)
-            if btn:
-                short_id = slot_id.split("_")[-1].upper()
-                btn.setText(f"{short_id}\n{color.name}")
-                btn.setStyleSheet(self._led_btn_style(color))
+        for i in range(getattr(self.app, "slot_count", 4)):
+            sid = f"shelf1_slot{i+1}"
+            self._led_slot_colors[sid] = self._color_cycle.index(LEDColor.GREEN)
+            b = self._led_slot_btns.get(sid)
+            if b:
+                b.setText(f"S{i+1}\nGREEN")
+                b.setStyleSheet(self._led_btn_style(LEDColor.GREEN))
             try:
-                self.app.led.set_slot(slot_id, color, self._led_current_pattern)
-            except Exception as e:
-                logger.error(f"LED all_on error: {e}")
+                self.app.led.set_slot(sid, LEDColor.GREEN, self._led_current_pattern)
+            except Exception:
+                pass
 
     def _led_all_off(self):
         try:
             self.app.led.clear_all()
-        except Exception as e:
-            logger.error(f"LED clear_all error: {e}")
-
-        for slot_id, btn in self._led_slot_btns.items():
-            self._led_slot_colors[slot_id] = 0
-            short_id = slot_id.split("_")[-1].upper()
-            btn.setText(f"{short_id}\nOFF")
-            btn.setStyleSheet(self._led_btn_style(LEDColor.OFF))
+        except Exception:
+            pass
+        for sid, b in self._led_slot_btns.items():
+            self._led_slot_colors[sid] = 0
+            num = sid.split("_")[-1].replace("slot", "S")
+            b.setText(num)
+            b.setStyleSheet(self._led_btn_style(LEDColor.OFF))
 
     # ──────────────────────────────────────────────────
-    # BUZZER TAB
+    # BUZZER TAB — grid of buttons, no cards
     # ──────────────────────────────────────────────────
 
     def _build_buzzer_tab(self) -> QWidget:
         tab = QWidget()
         layout = QVBoxLayout(tab)
-        layout.setContentsMargins(S.PAD, S.PAD, S.PAD, S.PAD)
-        layout.setSpacing(S.GAP)
+        layout.setContentsMargins(_PAD, _PAD, _PAD, _PAD)
+        layout.setSpacing(6)
 
-        # Status header
         healthy = False
         try:
             healthy = self.app.buzzer.is_healthy()
         except Exception:
             pass
-        hdr = _status_header(
-            "Buzzer / Audio",
-            self.app.driver_status.get("buzzer", "fake"),
-            healthy,
-        )
-        layout.addLayout(hdr)
+        layout.addLayout(_hdr_row("Buzzer", self.app.driver_status.get("buzzer", "fake"), healthy))
 
-        # Pattern buttons
-        patterns_info = [
-            (BuzzerPattern.CONFIRM, "CONFIRM", "Single short beep — action confirmed"),
-            (BuzzerPattern.WARNING, "WARNING", "Double beep — attention needed"),
-            (BuzzerPattern.ERROR, "ERROR", "Long continuous buzz — something wrong"),
-            (BuzzerPattern.TARGET_REACHED, "TARGET", "Rising tone — pour target reached"),
-            (BuzzerPattern.TICK, "TICK", "Very short click — weight change ack"),
+        # Button grid — 3 columns
+        grid = QGridLayout()
+        grid.setSpacing(6)
+        patterns = [
+            (BuzzerPattern.CONFIRM, "CONFIRM", "Short beep"),
+            (BuzzerPattern.WARNING, "WARNING", "Double beep"),
+            (BuzzerPattern.ERROR, "ERROR", "Long buzz"),
+            (BuzzerPattern.TARGET_REACHED, "TARGET", "Rising tone"),
+            (BuzzerPattern.TICK, "TICK", "Click"),
         ]
-
-        for pattern, name, desc in patterns_info:
-            btn_layout = QHBoxLayout()
-            btn_layout.setSpacing(8)
-
-            btn = _action_btn(f"{name}")
-            btn.setStyleSheet(
-                f"QPushButton {{ background-color: {C.ACCENT_BG}; color: {C.ACCENT};"
+        for i, (pat, name, desc) in enumerate(patterns):
+            b = _btn(f"{name}\n{desc}",
+                f"QPushButton {{ background: {C.ACCENT_BG}; color: {C.ACCENT};"
                 f"border: 1px solid {C.ACCENT}; border-radius: 8px;"
-                f"font-size: {F.BODY}px; font-weight: bold;"
-                f"padding: 6px 16px; min-height: 36px; }}"
-                f"QPushButton:hover {{ background-color: {C.BG_HOVER}; }}"
+                f"font-size: {_F_MED}px; font-weight: bold; padding: 10px 6px; }}"
+                f"QPushButton:hover {{ background: {C.BG_HOVER}; }}"
             )
-            btn.clicked.connect(lambda checked, p=pattern: self._play_buzzer(p))
-            btn_layout.addWidget(btn, stretch=1)
+            b.setMinimumHeight(60)
+            b.clicked.connect(lambda checked, p=pat: self._play_buzzer(p))
+            grid.addWidget(b, i // 3, i % 3)
 
-            desc_lbl = QLabel(desc)
-            desc_lbl.setStyleSheet(
-                f"font-size: {F.TINY}px; color: {C.TEXT_SEC};"
-            )
-            desc_lbl.setWordWrap(True)
-            btn_layout.addWidget(desc_lbl, stretch=1)
+        layout.addLayout(grid)
 
-            card_layout = QHBoxLayout()
-            card_layout.setContentsMargins(6, 4, 6, 4)
-            card_layout.addLayout(btn_layout)
-            card = _card(card_layout)
-            layout.addWidget(card)
-
-        # STOP button
-        stop_btn = _action_btn("STOP", "danger")
-        stop_btn.setMinimumHeight(S.BTN_H)
-        stop_btn.clicked.connect(self._stop_buzzer)
-        layout.addWidget(stop_btn)
-
+        # STOP
+        stop = _btn("STOP",
+            f"QPushButton {{ background: {C.DANGER_BG}; color: {C.DANGER};"
+            f"border: 1px solid {C.DANGER}; border-radius: 8px;"
+            f"font-size: {_F_MED}px; font-weight: bold; padding: 12px; }}"
+            f"QPushButton:hover {{ background: {C.BG_HOVER}; }}"
+        )
+        stop.clicked.connect(self._stop_buzzer)
+        layout.addWidget(stop)
         layout.addStretch()
 
         return tab
 
-    def _play_buzzer(self, pattern: BuzzerPattern):
+    def _play_buzzer(self, pattern):
         try:
             self.app.buzzer.play(pattern)
         except Exception as e:
-            logger.error(f"Buzzer play error: {e}")
+            logger.error(f"Buzzer error: {e}")
 
     def _stop_buzzer(self):
         try:
             self.app.buzzer.stop()
-        except Exception as e:
-            logger.error(f"Buzzer stop error: {e}")
+        except Exception:
+            pass
 
     # ──────────────────────────────────────────────────
     # LIFECYCLE
     # ──────────────────────────────────────────────────
 
     def on_enter(self):
-        """Called when this screen becomes active."""
         self._weight_timer.start()
 
     def on_leave(self):
-        """Called when navigating away from this screen."""
         self._weight_timer.stop()
-
-        # Clean up LEDs
         try:
             self.app.led.clear_all()
         except Exception:
             pass
-
-        # Stop buzzer
         try:
             self.app.buzzer.stop()
         except Exception:
