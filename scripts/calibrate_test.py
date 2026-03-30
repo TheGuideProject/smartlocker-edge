@@ -1,31 +1,35 @@
 #!/usr/bin/env python3
-"""Test both HX711 scales with calibration values."""
-import RPi.GPIO as GPIO
+"""Test both HX711 scales using lgpio directly (RPi5 compatible)."""
+import lgpio
 import time
 
-GPIO.setmode(GPIO.BCM)
-GPIO.setwarnings(False)
+h = lgpio.gpiochip_open(0)
 
 channels = {
     "SCAFFALE": {"dt": 5, "sck": 6, "scale": 10.78},
     "MIXING": {"dt": 23, "sck": 24, "scale": 17.86},
 }
 
+# Setup GPIO
+for name, cfg in channels.items():
+    lgpio.gpio_claim_output(h, cfg["sck"], 0)
+    lgpio.gpio_claim_input(h, cfg["dt"])
+
 
 def read_raw(dt, sck):
     timeout = time.time() + 2
-    while GPIO.input(dt):
+    while lgpio.gpio_read(h, dt):
         if time.time() > timeout:
             return None
     count = 0
     for _ in range(24):
-        GPIO.output(sck, True)
+        lgpio.gpio_write(h, sck, 1)
         count = count << 1
-        GPIO.output(sck, False)
-        if GPIO.input(dt):
+        lgpio.gpio_write(h, sck, 0)
+        if lgpio.gpio_read(h, dt):
             count += 1
-    GPIO.output(sck, True)
-    GPIO.output(sck, False)
+    lgpio.gpio_write(h, sck, 1)
+    lgpio.gpio_write(h, sck, 0)
     if count & 0x800000:
         count -= 0x1000000
     return count
@@ -40,12 +44,6 @@ def read_avg(dt, sck, n=10):
         time.sleep(0.05)
     return int(sum(vals) / len(vals)) if vals else None
 
-
-# Setup GPIO
-for name, cfg in channels.items():
-    GPIO.setup(cfg["sck"], GPIO.OUT)
-    GPIO.setup(cfg["dt"], GPIO.IN)
-    GPIO.output(cfg["sck"], False)
 
 print("=== TEST BILANCE ===")
 print()
@@ -81,6 +79,6 @@ for name, cfg in channels.items():
     else:
         print(f"  {name}: ERRORE lettura")
 
-GPIO.cleanup()
+lgpio.gpiochip_close(h)
 print()
 print("DONE")
