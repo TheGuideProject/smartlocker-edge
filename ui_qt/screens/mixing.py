@@ -18,6 +18,7 @@ from PyQt6.QtCore import Qt, QTimer
 
 from ui_qt.theme import C, F, S
 from core.models import MixingState, ApplicationMethod
+from hal.interfaces import BuzzerPattern
 
 logger = logging.getLogger("smartlocker.ui.mixing")
 
@@ -38,6 +39,8 @@ class MixingScreen(QWidget):
         self._weight_timer.timeout.connect(self._update_weight)
         self._pot_life_timer = QTimer()
         self._pot_life_timer.timeout.connect(self._update_pot_life)
+        self._last_buzzer_zone = ""   # Track zone changes for buzzer
+        self._tick_counter = 0        # For periodic tick while pouring
         self._build_ui()
 
     def _build_ui(self):
@@ -574,6 +577,8 @@ class MixingScreen(QWidget):
         self._current_recipe = mr
         self._weighing_phase = "base"
         self._weight_target = base_grams
+        self._last_buzzer_zone = ""
+        self._tick_counter = 0
 
         # Update weigh page labels
         m2 = pending.get("m2", 0)
@@ -716,10 +721,6 @@ class MixingScreen(QWidget):
                 # Fallback: read scale directly
                 reading = self.app.weight.read_weight("mixing_scale")
                 current = reading.grams
-                logger.debug(
-                    f"Weight direct read: {current:.1f}g "
-                    f"(raw={reading.raw_value}, stable={reading.stable})"
-                )
         except Exception as e:
             logger.error(f"Weight read error: {e}")
             return
@@ -730,19 +731,50 @@ class MixingScreen(QWidget):
         progress = min(100, max(0, progress))
         self._progress_weight.setValue(int(progress))
 
-        # Color based on zone
+        # Determine zone
         if progress < 90:
+            zone = "pouring"
             color = C.PRIMARY
             zone_text = "Keep pouring..."
         elif progress < 95:
+            zone = "approaching"
             color = C.WARNING
-            zone_text = "Almost there!"
+            zone_text = "Slow down!"
         elif progress <= 105:
+            zone = "in_range"
             color = C.SUCCESS
-            zone_text = "IN RANGE - Confirm!"
+            zone_text = "STOP! Confirm pour"
         else:
+            zone = "over"
             color = C.DANGER
-            zone_text = "OVER TARGET!"
+            zone_text = "TOO MUCH!"
+
+        # ── Buzzer feedback ──
+        try:
+            buzzer = self.app.buzzer
+            if zone != self._last_buzzer_zone:
+                # Zone changed — play transition sound
+                if zone == "approaching":
+                    buzzer.play(BuzzerPattern.WARNING)      # Double beep: slow down!
+                elif zone == "in_range":
+                    buzzer.play(BuzzerPattern.TARGET_REACHED)  # Rising tone: stop!
+                elif zone == "over":
+                    buzzer.play(BuzzerPattern.ERROR)         # Long buzz: too much!
+                self._last_buzzer_zone = zone
+                self._tick_counter = 0
+            else:
+                # Same zone — periodic ticks while pouring
+                self._tick_counter += 1
+                if zone == "pouring" and current > 5:
+                    # Tick every ~3 seconds (every 10th update at 300ms interval)
+                    if self._tick_counter % 10 == 0:
+                        buzzer.play(BuzzerPattern.TICK)
+                elif zone == "approaching":
+                    # Faster ticks: every ~1 second
+                    if self._tick_counter % 3 == 0:
+                        buzzer.play(BuzzerPattern.TICK)
+        except Exception:
+            pass  # Buzzer errors should never break weight display
 
         self._lbl_weight_current.setStyleSheet(
             f"font-size: 48px; font-weight: bold; color: {color};"
@@ -771,6 +803,8 @@ class MixingScreen(QWidget):
 
                 self._weighing_phase = "hardener"
                 self._weight_target = session.base_weight_actual_g + hardener_target
+                self._last_buzzer_zone = ""
+                self._tick_counter = 0
                 self._lbl_pour_title.setText("POUR HARDENER")
                 self._lbl_weight_target.setText(
                     f"Target: +{hardener_target:.0f}g (total {self._weight_target:.0f}g)"
