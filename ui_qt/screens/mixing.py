@@ -514,9 +514,88 @@ class MixingScreen(QWidget):
         self._state_badge.setText("IDLE")
         self._input_user.clear()
 
+        # Check if PaintNow passed pre-calculated quantities
+        pending = getattr(self.app, "pending_mix", None)
+        if pending:
+            self.app.pending_mix = None  # consume it
+            self._auto_start_from_paint_now(pending)
+
     def on_leave(self):
         self._weight_timer.stop()
         self._pot_life_timer.stop()
+
+    def _auto_start_from_paint_now(self, pending: dict):
+        """Auto-start mixing session with pre-calculated quantities from PaintNow."""
+        product_name = pending.get("product_name", "Paint")
+        base_grams = pending.get("base_grams", 0)
+        ratio_base = pending.get("ratio_base", 4.0)
+        ratio_hardener = pending.get("ratio_hardener", 1.0)
+        pot_life = pending.get("pot_life_minutes", 480)
+        tolerance = pending.get("tolerance_pct", 5.0)
+        area_name = pending.get("area_name", "")
+
+        if base_grams <= 0:
+            logger.warning("PaintNow pending_mix has no base_grams, ignoring")
+            return
+
+        # Create a recipe on-the-fly from PaintNow data
+        recipe_id = f"paintnow_{product_name}_{int(time.time())}"
+        recipe_name = f"{product_name}"
+        if area_name:
+            recipe_name = f"{product_name} - {area_name}"
+
+        from core.models import MixingRecipe
+        mr = MixingRecipe(
+            recipe_id=recipe_id,
+            name=recipe_name,
+            base_product_id=pending.get("product_name", ""),
+            hardener_product_id=pending.get("hardener_name", ""),
+            ratio_base=ratio_base,
+            ratio_hardener=ratio_hardener,
+            tolerance_pct=tolerance,
+            pot_life_minutes=pot_life,
+        )
+
+        # Load recipe and start session
+        self.app.mixing_engine.load_recipes({recipe_id: mr})
+        self.app.mixing_engine.start_session(recipe_id, user_name="Crew")
+
+        # Set amounts via engine
+        self.app.mixing_engine.show_recipe(base_grams)
+
+        # Tare the mixing scale
+        self.app.mixing_engine.tare_scale()
+
+        # Skip to weighing (bypass recipe selection + amount entry pages)
+        session = self.app.mixing_engine.session
+        if session:
+            session.state = MixingState.WEIGH_BASE
+
+        self._current_recipe = mr
+        self._weighing_phase = "base"
+        self._weight_target = base_grams
+
+        # Update weigh page labels
+        m2 = pending.get("m2", 0)
+        liters = pending.get("base_liters", 0)
+        info_text = f"POUR BASE - {product_name}"
+        if m2 > 0:
+            info_text = f"POUR BASE ({m2:.0f}m2 = {liters:.1f}L)"
+        self._lbl_pour_title.setText(info_text)
+        self._lbl_weight_target.setText(f"Target: {base_grams:.0f}g")
+        self._lbl_weight_current.setText("0.0g")
+        self._progress_weight.setValue(0)
+        self._lbl_weight_zone.setText("Place container, then pour...")
+
+        # Jump directly to weigh page (page 2)
+        self._stack.setCurrentIndex(2)
+        self._state_badge.setText("WEIGHING BASE")
+        self._weight_timer.start(300)
+
+        logger.info(
+            f"Auto-started mixing from PaintNow: {recipe_name} "
+            f"base={base_grams:.0f}g target"
+        )
 
     # ══════════════════════════════════════════════════════
     # DATA LOADING

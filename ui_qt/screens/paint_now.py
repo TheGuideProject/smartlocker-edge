@@ -510,7 +510,7 @@ class PaintNowScreen(QWidget):
         btn_mix.setObjectName("primary")
         btn_mix.setCursor(Qt.CursorShape.PointingHandCursor)
         btn_mix.setMinimumHeight(44)
-        btn_mix.clicked.connect(lambda: self.app.go_screen("mixing"))
+        btn_mix.clicked.connect(self._on_start_mixing)
         self._body_layout.addWidget(btn_mix)
 
     # ══════════════════════════════════════════════════════════
@@ -525,6 +525,72 @@ class PaintNowScreen(QWidget):
         self._m2_value = 0.0
         self._quantities = []
         self._set_step(WizardStep.SELECT_AREA)
+
+    def _on_start_mixing(self):
+        """Pass calculated quantities to mixing screen automatically."""
+        if not self._quantities:
+            return
+
+        # Convert liters to grams (paint density ~1.3 kg/L average)
+        DENSITY_G_PER_L = 1300.0
+
+        base_q = None
+        hardener_q = None
+        for q in self._quantities:
+            if q.get("type") == "BASE":
+                base_q = q
+            elif q.get("type") == "HARDENER":
+                hardener_q = q
+
+        if not base_q:
+            return
+
+        base_grams = base_q["liters"] * DENSITY_G_PER_L
+
+        # Find ratio info from chart
+        product_name = base_q.get("product", "Unknown")
+        ratio_base = 4.0
+        ratio_hardener = 1.0
+        pot_life = 480
+        tolerance = 5.0
+        hardener_name = "Hardener"
+
+        chart = getattr(self.app, "maintenance_chart", None)
+        if chart:
+            for p in chart.get("products", []):
+                if p.get("name", "") == product_name and p.get("is_bicomponent"):
+                    ratio_base = p.get("ratio_base", 4.0)
+                    ratio_hardener = p.get("ratio_hardener", 1.0)
+                    pot_life = p.get("pot_life_minutes", 480)
+                    tolerance = p.get("tolerance_pct", 5.0)
+                    hardener_name = p.get("hardener_name", "Hardener")
+                    break
+
+        hardener_grams = base_grams * (ratio_hardener / ratio_base)
+
+        # Store pending mix data on app for the mixing screen to pick up
+        self.app.pending_mix = {
+            "product_name": product_name,
+            "hardener_name": hardener_name,
+            "base_grams": round(base_grams, 0),
+            "hardener_grams": round(hardener_grams, 0),
+            "base_liters": base_q["liters"],
+            "hardener_liters": hardener_q["liters"] if hardener_q else 0,
+            "ratio_base": ratio_base,
+            "ratio_hardener": ratio_hardener,
+            "pot_life_minutes": pot_life,
+            "tolerance_pct": tolerance,
+            "area_name": self._selected_area.get("name", "") if self._selected_area else "",
+            "m2": self._m2_value,
+        }
+
+        logger.info(
+            f"PaintNow -> Mixing: {product_name} "
+            f"base={base_grams:.0f}g hardener={hardener_grams:.0f}g "
+            f"ratio={ratio_base}:{ratio_hardener}"
+        )
+
+        self.app.go_screen("mixing")
 
     def on_leave(self):
         pass
