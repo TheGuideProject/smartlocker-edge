@@ -464,16 +464,17 @@ class SmartLockerWindow(QMainWindow):
             expected_name = getattr(session, "hardener_product_name", "")
             component = "HARDENER"
 
-        if not expected_id:
+        if not expected_id and not component:
             return
 
         # Check match (multiple strategies)
         match = False
-        expected_product = self.db.get_product_by_id(expected_id)
+        expected_product = self.db.get_product_by_id(expected_id) if expected_id else None
         expected_ppg = (expected_product.get("ppg_code", "").upper() if expected_product else "")
+        scanned_type = product_info.get("product_type", "").lower()
 
         # Strategy 1: exact product_id match
-        if scanned_id and scanned_id == expected_id:
+        if scanned_id and expected_id and scanned_id == expected_id:
             match = True
         # Strategy 2: ppg_code match
         elif scanned_ppg and expected_ppg and scanned_ppg == expected_ppg:
@@ -484,9 +485,15 @@ class SmartLockerWindow(QMainWindow):
         # Strategy 4: product name contains expected name
         elif scanned_name and expected_name and expected_name.upper() in scanned_name:
             match = True
+        # Strategy 5: product_type matches component (base scanned during BASE phase)
+        elif component == "BASE" and scanned_type in ("base_paint", "primer"):
+            match = True
+        elif component == "HARDENER" and scanned_type == "hardener":
+            match = True
 
         logger.info(
             f"Barcode verify: scanned_ppg={scanned_ppg} expected_ppg={expected_ppg} "
+            f"scanned_type={scanned_type} component={component} "
             f"scanned_id={scanned_id} expected_id={expected_id} match={match}"
         )
 

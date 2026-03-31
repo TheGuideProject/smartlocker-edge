@@ -575,19 +575,46 @@ class MixingScreen(QWidget):
             recipe_name = f"{product_name} - {area_name}"
 
         # Resolve real product_id from name via DB
-        base_product_id = pending.get("product_name", "")
-        hardener_product_id = pending.get("hardener_name", "")
+        base_product_id = ""
+        hardener_product_id = ""
         try:
+            # Find base product
             base_prod = self.app.db.get_product_by_name(product_name)
             if base_prod:
-                base_product_id = base_prod.get("product_id", base_product_id)
-            hard_prod = self.app.db.get_product_by_name(
-                pending.get("hardener_name", "")
-            )
-            if hard_prod:
-                hardener_product_id = hard_prod.get("product_id", hardener_product_id)
+                base_product_id = base_prod.get("product_id", "")
+
+            # Find hardener: try recipe first, then name match
+            if base_product_id:
+                recipe = self.app.db.find_recipe_by_product_name(product_name)
+                if recipe:
+                    hardener_product_id = recipe.get("hardener_product_id", "")
+
+            # Fallback: search by hardener name from chart
+            if not hardener_product_id:
+                hard_name = pending.get("hardener_name", "")
+                if hard_name and hard_name != "Hardener":
+                    hard_prod = self.app.db.get_product_by_name(hard_name)
+                    if hard_prod:
+                        hardener_product_id = hard_prod.get("product_id", "")
+
+            # Last fallback: search for any hardener product matching base name
+            if not hardener_product_id:
+                products = self.app.db.get_products()
+                for p in products:
+                    if p.get("product_type") == "hardener":
+                        pname = p.get("name", "").upper()
+                        base_short = product_name.upper().replace("SIGMA", "S")
+                        if base_short in pname or product_name.upper()[:6] in pname:
+                            hardener_product_id = p.get("product_id", "")
+                            break
         except Exception as e:
             logger.debug(f"Product lookup for PaintNow recipe: {e}")
+
+        # Use names as fallback if no UUID found
+        if not base_product_id:
+            base_product_id = pending.get("product_name", "")
+        if not hardener_product_id:
+            hardener_product_id = pending.get("hardener_name", "")
 
         from core.models import MixingRecipe
         mr = MixingRecipe(
