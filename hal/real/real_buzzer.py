@@ -60,6 +60,7 @@ _PATTERN_DEFINITIONS = {
     BuzzerPattern.TICK: [
         (1500, 0.05),            # Very short click
     ],
+    BuzzerPattern.ALARM: "LOOP",  # Special: repeating alarm handled in _play_pattern
 }
 
 
@@ -137,8 +138,14 @@ class RealBuzzerDriver(BuzzerDriverInterface):
 
     def _play_pattern(self, pattern: BuzzerPattern) -> None:
         """Background thread: play the tone sequence for a pattern."""
-        tones = _PATTERN_DEFINITIONS.get(pattern, [(1000, 0.15)])
+        defn = _PATTERN_DEFINITIONS.get(pattern, [(1000, 0.15)])
 
+        # ALARM pattern: repeating loop until stopped
+        if defn == "LOOP":
+            self._play_alarm_loop()
+            return
+
+        tones = defn
         for freq, duration in tones:
             if self._stop_flag.is_set():
                 break
@@ -166,6 +173,44 @@ class RealBuzzerDriver(BuzzerDriverInterface):
                 time.sleep(0.01)
 
         # Silence after pattern completes
+        try:
+            if self._pwm:
+                self._pwm.ChangeDutyCycle(0)
+        except Exception:
+            pass
+
+    def _play_alarm_loop(self) -> None:
+        """Play a loud repeating alarm: 3 beeps + pause, in infinite loop."""
+        # Alarm sequence: 3x (high beep 0.2s + silence 0.1s) + pause 0.5s
+        alarm_tones = [
+            (2000, 0.2),  # High beep
+            (0, 0.1),     # Silence
+            (2000, 0.2),  # High beep
+            (0, 0.1),     # Silence
+            (2000, 0.3),  # Long high beep
+            (0, 0.5),     # Pause before repeat
+        ]
+
+        while not self._stop_flag.is_set():
+            for freq, duration in alarm_tones:
+                if self._stop_flag.is_set():
+                    break
+                try:
+                    if freq == 0:
+                        self._pwm.ChangeDutyCycle(0)
+                    else:
+                        self._pwm.ChangeFrequency(freq)
+                        self._pwm.ChangeDutyCycle(50)
+                except Exception:
+                    break
+
+                end_time = time.time() + duration
+                while time.time() < end_time:
+                    if self._stop_flag.is_set():
+                        break
+                    time.sleep(0.01)
+
+        # Silence when stopped
         try:
             if self._pwm:
                 self._pwm.ChangeDutyCycle(0)

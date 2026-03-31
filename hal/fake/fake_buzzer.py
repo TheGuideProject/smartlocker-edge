@@ -18,6 +18,7 @@ _PATTERN_DISPLAY = {
     BuzzerPattern.ERROR: "BZZZZZ (error)",
     BuzzerPattern.TARGET_REACHED: "BEEP-beep-BEEP (target reached)",
     BuzzerPattern.TICK: "tick",
+    BuzzerPattern.ALARM: "BZZZ-BZZZ-BZZZ (ALARM LOOP)",
 }
 
 

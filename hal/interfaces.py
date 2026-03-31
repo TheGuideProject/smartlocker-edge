@@ -70,6 +70,7 @@ class BuzzerPattern(Enum):
     ERROR = "error"               # Long continuous buzz (something wrong)
     TARGET_REACHED = "target"     # Rising tone (pour target reached)
     TICK = "tick"                 # Very short click (weight change acknowledged)
+    ALARM = "alarm"               # Repeating loud alarm (weight alarm, unauthorized)
 
 
 # ============================================================

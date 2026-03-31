@@ -370,18 +370,20 @@ class SmartLockerWindow(QMainWindow):
         QTimer.singleShot(0, lambda: self._show_weight_alarm(alarm_data))
 
     def _show_weight_alarm(self, alarm_data: dict):
-        """Show weight alarm popup on main thread."""
+        """Show weight alarm popup on main thread (NON-MODAL so barcode events still work)."""
         from ui_qt.widgets.weight_alarm_popup import WeightAlarmPopup
 
         popup = WeightAlarmPopup(alarm_data, parent=self)
         self._weight_alarm_popup = popup
 
-        result = popup.exec()
+        # NON-MODAL: show() instead of exec() so barcode scanner events still fire
+        popup.finished.connect(self._on_weight_alarm_closed)
+        popup.show()
 
-        if result != popup.DialogCode.Accepted:
-            # Timeout or skip — already handled by inventory_engine timeout
-            logger.warning("Weight alarm: no barcode scanned (timeout/skip)")
-
+    def _on_weight_alarm_closed(self, result):
+        """Called when weight alarm popup closes (accepted=resolved, rejected=timeout/skip)."""
+        if result == 0:  # Rejected = timeout or skip
+            logger.warning("Weight alarm popup closed without barcode scan")
         self._weight_alarm_popup = None
 
     def _on_barcode_scanned(self, scan_event):

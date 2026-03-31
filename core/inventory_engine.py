@@ -84,13 +84,18 @@ class InventoryEngine:
 
         # ── Shelf weight monitoring (RFID fallback) ──
         self._last_shelf_weights: Dict[str, float] = {}  # shelf_id -> last stable weight
-        self._weight_drop_threshold_g = 100.0  # Min drop to detect can removal
-        self._weight_rise_threshold_g = 100.0  # Min rise to detect can placement
+        self._weight_drop_threshold_g = 5000.0  # 5kg min drop to detect can removal
+        self._weight_rise_threshold_g = 5000.0  # 5kg min rise to detect can placement
         self._rfid_healthy = True  # Tracks RFID health status
         self._pending_weight_alarm = False  # True when waiting for barcode scan
         self._weight_alarm_time = 0.0  # When alarm was triggered
         self._weight_alarm_data: Dict = {}  # Alarm context data
         self.BARCODE_SCAN_TIMEOUT_S = 30  # Seconds to scan barcode after alarm
+
+        # Sustained weight change detection: must persist for 10+ seconds
+        self._weight_change_detected_at: Dict[str, float] = {}  # shelf_id -> first detection time
+        self._weight_change_value: Dict[str, float] = {}  # shelf_id -> weight at detection
+        self.WEIGHT_SUSTAIN_S = 10  # Seconds the weight change must persist
 
         # Callback for UI alarm popup (set by app.py)
         self.on_weight_alarm = None  # Callable: on_weight_alarm(alarm_data)
@@ -504,44 +509,55 @@ class InventoryEngine:
 
         # Only trigger alarm if RFID is NOT healthy and we're not already alarming
         if not self._rfid_healthy and not self._pending_weight_alarm:
+            significant_change = (
+                abs(diff) > self._weight_drop_threshold_g
+            )
 
-            if diff < -self._weight_drop_threshold_g:
-                # ── WEIGHT DROP: can removed without RFID identification ──
-                logger.warning(
-                    f"WEIGHT ALARM: {sid} dropped {abs(diff):.0f}g "
-                    f"(RFID down — need barcode scan!)"
-                )
-                self._trigger_weight_alarm(
-                    shelf_id=sid,
-                    action="removed",
-                    weight_before_g=last_g,
-                    weight_after_g=current_g,
-                    weight_diff_g=abs(diff),
-                )
-                # Update baseline to current (after removal)
-                self._last_shelf_weights[sid] = current_g
-
-            elif diff > self._weight_rise_threshold_g:
-                # ── WEIGHT RISE: can placed without RFID identification ──
-                logger.warning(
-                    f"WEIGHT ALARM: {sid} increased {diff:.0f}g "
-                    f"(RFID down — need barcode scan!)"
-                )
-                self._trigger_weight_alarm(
-                    shelf_id=sid,
-                    action="placed",
-                    weight_before_g=last_g,
-                    weight_after_g=current_g,
-                    weight_diff_g=abs(diff),
-                )
-                # Update baseline to current (after placement)
-                self._last_shelf_weights[sid] = current_g
+            if significant_change:
+                now = time.time()
+                if sid not in self._weight_change_detected_at:
+                    # First detection — start the sustain timer
+                    self._weight_change_detected_at[sid] = now
+                    self._weight_change_value[sid] = current_g
+                    logger.info(
+                        f"Weight change detected on {sid}: {diff:+.0f}g — "
+                        f"waiting {self.WEIGHT_SUSTAIN_S}s to confirm..."
+                    )
+                else:
+                    # Already detected — check if sustained long enough
+                    elapsed = now - self._weight_change_detected_at[sid]
+                    if elapsed >= self.WEIGHT_SUSTAIN_S:
+                        # CONFIRMED: weight change sustained for 10+ seconds
+                        action = "removed" if diff < 0 else "placed"
+                        logger.warning(
+                            f"WEIGHT ALARM: {sid} {action} {abs(diff):.0f}g "
+                            f"(sustained {elapsed:.0f}s, RFID down)"
+                        )
+                        self._trigger_weight_alarm(
+                            shelf_id=sid,
+                            action=action,
+                            weight_before_g=last_g,
+                            weight_after_g=current_g,
+                            weight_diff_g=abs(diff),
+                        )
+                        # Update baseline & clear sustain tracking
+                        self._last_shelf_weights[sid] = current_g
+                        self._weight_change_detected_at.pop(sid, None)
+                        self._weight_change_value.pop(sid, None)
+            else:
+                # Weight returned to normal — cancel pending detection
+                if sid in self._weight_change_detected_at:
+                    logger.info(f"Weight change on {sid} reverted — cancelling alarm timer")
+                    self._weight_change_detected_at.pop(sid, None)
+                    self._weight_change_value.pop(sid, None)
 
         elif self._rfid_healthy and not self._pending_weight_alarm:
             # RFID is working — just track weight baseline (update slowly to avoid drift)
-            # Only update if reading is stable
             if reading.stable or abs(diff) > 50:
                 self._last_shelf_weights[sid] = current_g
+            # Clear any pending weight change detection
+            self._weight_change_detected_at.pop(sid, None)
+            self._weight_change_value.pop(sid, None)
 
     def _trigger_weight_alarm(self, shelf_id: str, action: str,
                                weight_before_g: float, weight_after_g: float,
@@ -558,8 +574,8 @@ class InventoryEngine:
             "timestamp": time.time(),
         }
 
-        # LOUD BUZZER ALARM
-        self.buzzer.play(BuzzerPattern.ERROR)
+        # LOUD REPEATING BUZZER ALARM (loops until stopped)
+        self.buzzer.play(BuzzerPattern.ALARM)
 
         # RED LED blinking on all slots of this shelf
         shelf = self.shelves.get(shelf_id)
@@ -656,10 +672,13 @@ class InventoryEngine:
         self._clear_weight_alarm()
 
     def _clear_weight_alarm(self) -> None:
-        """Clear the weight alarm state and restore LEDs."""
+        """Clear the weight alarm state, stop buzzer, and restore LEDs."""
         self._pending_weight_alarm = False
         self._weight_alarm_time = 0.0
         self._weight_alarm_data = {}
+
+        # STOP the alarm buzzer
+        self.buzzer.stop()
 
         # Restore LEDs to normal
         for shelf in self.shelves.values():
