@@ -53,9 +53,17 @@ class BarcodeScanEvent:
         """
         raw = self.raw_data
 
-        # Short format: SL-PPG_CODE-BATCH
-        if raw.upper().startswith("SL-") and raw.count("-") >= 2:
-            parts = raw.split("-", 2)  # ['SL', 'PPG_CODE', 'BATCH']
+        # Short format: SL_PPG-CODE_BATCH (underscore separator)
+        if raw.upper().startswith("SL_") and raw.count("_") >= 2:
+            parts = raw.split("_", 2)  # ['SL', 'PPG-CODE', 'BATCH']
+            self.ppg_code = parts[1].strip()
+            self.batch_number = parts[2].strip()
+            self.is_valid = bool(self.ppg_code)
+            return
+
+        # Legacy short format: SL-PPG-BATCH (only if PPG has no hyphens)
+        if raw.upper().startswith("SL-") and raw.count("-") == 2:
+            parts = raw.split("-", 2)
             self.ppg_code = parts[1].strip()
             self.batch_number = parts[2].strip()
             self.is_valid = bool(self.ppg_code)
