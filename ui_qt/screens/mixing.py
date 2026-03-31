@@ -1097,10 +1097,20 @@ class MixingScreen(QWidget):
             self._barcode_icon.setStyleSheet(
                 f"color: {C.DANGER}; font-weight: bold; font-size: {_F_MED}px;"
             )
-            self._barcode_msg.setText(f"WRONG PRODUCT! Scanned: {name}")
+            self._barcode_msg.setText(f"WARNING: {name} — verify correct product!")
             self._barcode_msg.setStyleSheet(
                 f"font-size: {_F_SM}px; font-weight: bold; color: {C.DANGER};"
             )
+
+            # Still unlock weighing even on mismatch — user must be able to pour
+            if component == "BASE" and not self._barcode_verified_base:
+                self._barcode_verified_base = True
+                self._lbl_rfid_hint.setVisible(False)
+                self._weight_timer.start(300)
+            elif component == "HARDENER" and not self._barcode_verified_hardener:
+                self._barcode_verified_hardener = True
+                self._lbl_rfid_hint.setVisible(False)
+                self._weight_timer.start(300)
 
         # Auto-hide after 8 seconds
         QTimer.singleShot(8000, lambda: self._barcode_banner.setVisible(False))

@@ -53,6 +53,12 @@ class BarcodeScanEvent:
         """
         raw = self.raw_data
 
+        # Normalize: scanner sometimes doubles the S (SSL_ instead of SL_)
+        if raw.upper().startswith("SSL_") or raw.upper().startswith("SSL-"):
+            raw = raw[1:]  # Strip extra S
+            self.raw_data = raw
+            logger.info(f"[SCANNER] Normalized double-S: {raw}")
+
         # Short format: SL_PPG-CODE_BATCH (underscore separator)
         if raw.upper().startswith("SL_") and raw.count("_") >= 2:
             parts = raw.split("_", 2)  # ['SL', 'PPG-CODE', 'BATCH']

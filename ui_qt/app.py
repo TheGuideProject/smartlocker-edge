@@ -467,15 +467,28 @@ class SmartLockerWindow(QMainWindow):
         if not expected_id:
             return
 
-        # Check match
+        # Check match (multiple strategies)
         match = False
+        expected_product = self.db.get_product_by_id(expected_id)
+        expected_ppg = (expected_product.get("ppg_code", "").upper() if expected_product else "")
+
+        # Strategy 1: exact product_id match
         if scanned_id and scanned_id == expected_id:
             match = True
-        elif scanned_ppg:
-            # Try matching by ppg_code
-            expected_product = self.db.get_product_by_id(expected_id)
-            if expected_product:
-                match = scanned_ppg == (expected_product.get("ppg_code", "").upper())
+        # Strategy 2: ppg_code match
+        elif scanned_ppg and expected_ppg and scanned_ppg == expected_ppg:
+            match = True
+        # Strategy 3: ppg_code contained in scanned ppg (partial match)
+        elif scanned_ppg and expected_ppg and expected_ppg in scanned_ppg:
+            match = True
+        # Strategy 4: product name contains expected name
+        elif scanned_name and expected_name and expected_name.upper() in scanned_name:
+            match = True
+
+        logger.info(
+            f"Barcode verify: scanned_ppg={scanned_ppg} expected_ppg={expected_ppg} "
+            f"scanned_id={scanned_id} expected_id={expected_id} match={match}"
+        )
 
         # Notify mixing screen
         mixing_screen = self._screens.get("mixing")
