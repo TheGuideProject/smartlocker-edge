@@ -714,14 +714,20 @@ class MixingScreen(QWidget):
         try:
             # Check driver_status FIRST — fake driver means no real RFID
             driver_status = getattr(self.app, "driver_status", {})
-            if driver_status.get("rfid") == "fake":
+            rfid_drv = driver_status.get("rfid", "unknown")
+            if rfid_drv == "fake":
+                logger.info("[MIXING] RFID down: driver_status=fake")
                 return True
             # Then check actual hardware health
             rfid = getattr(self.app, "rfid", None)
             if rfid and hasattr(rfid, "is_healthy"):
-                return not rfid.is_healthy()
+                healthy = rfid.is_healthy()
+                logger.info(f"[MIXING] RFID check: driver={rfid_drv}, is_healthy={healthy}")
+                return not healthy
+            logger.info(f"[MIXING] RFID down: no driver or no is_healthy method")
             return True  # No RFID driver at all
-        except Exception:
+        except Exception as e:
+            logger.info(f"[MIXING] RFID down: exception {e}")
             return True
 
     def _on_tare_and_pour(self):
@@ -757,7 +763,9 @@ class MixingScreen(QWidget):
         self._barcode_banner.setVisible(False)
 
         # If RFID is down, require barcode scan before pouring
-        if self._is_rfid_down():
+        rfid_down = self._is_rfid_down()
+        print(f"[MIXING] RFID down={rfid_down}, requiring barcode={rfid_down}")
+        if rfid_down:
             self._show_barcode_required("BASE")
         else:
             self._weight_timer.start(300)
