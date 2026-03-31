@@ -619,14 +619,26 @@ class MixingScreen(QWidget):
         self._progress_weight.setValue(0)
         self._lbl_weight_zone.setText("Place container, then pour...")
 
+        # Track barcode verification state
+        self._barcode_verified_base = False
+        self._barcode_verified_hardener = False
+
         # Jump directly to weigh page (page 2)
         self._stack.setCurrentIndex(2)
         self._state_badge.setText("WEIGHING BASE")
-        self._weight_timer.start(300)
+        self._barcode_banner.setVisible(False)
+
+        # If RFID is down, require barcode scan before pouring
+        rfid_down = self._is_rfid_down()
+        print(f"[MIXING] PaintNow auto-start: RFID down={rfid_down}")
+        if rfid_down:
+            self._show_barcode_required("BASE")
+        else:
+            self._weight_timer.start(300)
 
         logger.info(
             f"Auto-started mixing from PaintNow: {recipe_name} "
-            f"base={base_grams:.0f}g target"
+            f"base={base_grams:.0f}g target (rfid_down={rfid_down})"
         )
 
     # ══════════════════════════════════════════════════════
