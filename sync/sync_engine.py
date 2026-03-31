@@ -766,21 +766,19 @@ class SyncEngine:
     def _restart_application(self):
         """
         Restart the SmartLocker application.
-        Uses sys.exit() — systemd Restart=always will restart the service automatically.
+        Uses os._exit() — systemd Restart=always will restart the service automatically.
         """
-        import sys
         logger.info("Restarting SmartLocker application (systemd will auto-restart)...")
 
         # Give time for the WS ack to be sent
         time.sleep(1)
 
-        # Try graceful Kivy shutdown first
+        # Try graceful Qt shutdown
         try:
-            from kivy.app import App
-            app = App.get_running_app()
+            from PyQt6.QtWidgets import QApplication
+            app = QApplication.instance()
             if app:
-                from kivy.clock import Clock
-                Clock.schedule_once(lambda dt: app.stop(), 0.5)
+                app.quit()
                 time.sleep(2)
         except Exception:
             pass
