@@ -185,22 +185,79 @@ class InventoryScreen(QWidget):
         top.addWidget(lbl_name, stretch=1)
 
         ptype = item.get("product_type", "BASE").upper()
-        badge = QLabel(ptype)
+        # Normalize display name
+        ptype_display = ptype.replace("_", " ") if ptype else "BASE"
+        badge = QLabel(ptype_display)
         badge_colors = {
+            "BASE_PAINT": (C.PRIMARY_BG, C.PRIMARY, C.PRIMARY),
             "BASE": (C.PRIMARY_BG, C.PRIMARY, C.PRIMARY),
             "HARDENER": (C.ACCENT_BG, C.ACCENT, C.ACCENT),
             "THINNER": (C.SECONDARY_BG, C.SECONDARY, C.SECONDARY),
+            "PRIMER": (C.PRIMARY_BG, C.PRIMARY, C.PRIMARY),
         }
-        bg, fg, border = badge_colors.get(ptype, (C.BG_CARD_ALT, C.TEXT_MUTED, C.TEXT_MUTED))
+        bg, fg, border_c = badge_colors.get(ptype, (C.BG_CARD_ALT, C.TEXT_MUTED, C.TEXT_MUTED))
         badge.setStyleSheet(
             f"background-color: {bg}; color: {fg};"
-            f"border: 1px solid {border}; border-radius: 4px;"
+            f"border: 1px solid {border_c}; border-radius: 4px;"
             f"padding: 2px 8px; font-size: {F.TINY}px; font-weight: bold;"
         )
         badge.setFixedHeight(22)
         top.addWidget(badge)
 
+        # Delete button
+        product_id = item.get("product_id", "")
+        btn_del = QPushButton("X")
+        btn_del.setFixedSize(28, 28)
+        btn_del.setCursor(Qt.CursorShape.PointingHandCursor)
+        btn_del.setStyleSheet(
+            f"background-color: transparent; color: {C.DANGER};"
+            f"font-weight: bold; font-size: 14px; border: 1px solid {C.DANGER};"
+            f"border-radius: 4px;"
+        )
+        btn_del.clicked.connect(lambda checked, pid=product_id: self._delete_item(pid))
+        top.addWidget(btn_del)
+
         layout.addLayout(top)
+
+        # ── Color row (if available) ──
+        colors_json = item.get("colors_json", "[]")
+        if isinstance(colors_json, str):
+            try:
+                import json
+                colors = json.loads(colors_json)
+            except Exception:
+                colors = []
+        else:
+            colors = colors_json or []
+
+        if colors:
+            color_row = QHBoxLayout()
+            color_row.setSpacing(6)
+            for color_entry in colors[:4]:  # Max 4 colors
+                if isinstance(color_entry, dict):
+                    cname = color_entry.get("name", "")
+                    chex = color_entry.get("hex", "#888888")
+                else:
+                    cname = str(color_entry)
+                    chex = "#888888"
+
+                dot = QLabel()
+                dot.setFixedSize(14, 14)
+                dot.setStyleSheet(
+                    f"background-color: {chex}; border-radius: 7px;"
+                    f"border: 1px solid {C.BORDER};"
+                )
+                color_row.addWidget(dot)
+
+                if cname:
+                    clbl = QLabel(cname)
+                    clbl.setStyleSheet(
+                        f"font-size: {F.TINY}px; color: {C.TEXT_SEC};"
+                    )
+                    color_row.addWidget(clbl)
+
+            color_row.addStretch()
+            layout.addLayout(color_row)
 
         # ── Quantity row ──
         qty = float(item.get("current_liters", 0) or item.get("quantity_liters", 0))
@@ -238,6 +295,20 @@ class InventoryScreen(QWidget):
         layout.addWidget(bar)
 
         return card
+
+    # ══════════════════════════════════════════════════════════
+    # ACTIONS
+    # ══════════════════════════════════════════════════════════
+
+    def _delete_item(self, product_id: str):
+        """Delete a product from vessel_stock."""
+        try:
+            deleted = self.app.db.delete_vessel_stock_item(product_id)
+            if deleted:
+                logger.info(f"Deleted vessel_stock item: {product_id}")
+            self._refresh()
+        except Exception as e:
+            logger.error(f"Failed to delete vessel_stock item: {e}")
 
     # ══════════════════════════════════════════════════════════
     # LIFECYCLE

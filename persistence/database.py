@@ -511,15 +511,49 @@ class Database:
                                           weight_g: float = 0.0) -> None:
         """Update vessel_stock when a barcode scan adds/removes a product.
 
+        Always tries to resolve to a real product from the catalog first,
+        to avoid duplicates (e.g., raw barcode key vs UUID key).
+
         Args:
             product_info: dict with product_id, product_name, ppg_code, etc.
             action: 'load' or 'unload'
             weight_g: weight in grams (absolute value of change)
         """
-        product_id = product_info.get("product_id") or product_info.get("ppg_code", "")
+        product_id = product_info.get("product_id", "")
         product_name = product_info.get("product_name", "Unknown")
         product_type = product_info.get("product_type", "base_paint")
         density = float(product_info.get("density_g_per_ml", 1.3))
+        ppg_code = product_info.get("ppg_code", "")
+        colors_json = product_info.get("colors_json", "[]")
+        if isinstance(colors_json, list):
+            import json
+            colors_json = json.dumps(colors_json)
+
+        # Always try to resolve to a real product from catalog
+        # This prevents duplicates (barcode raw key vs proper UUID)
+        resolved = None
+        if product_id:
+            resolved = self.get_product_by_id(product_id)
+        if not resolved and ppg_code:
+            resolved = self.get_product_by_ppg_code(ppg_code)
+        if not resolved and product_name and product_name != "Unknown":
+            resolved = self.get_product_by_name(product_name)
+
+        if resolved:
+            product_id = resolved.get("product_id", product_id)
+            product_name = resolved.get("name", product_name)
+            product_type = resolved.get("product_type", product_type)
+            density = float(resolved.get("density_g_per_ml", density) or density)
+            colors_json_resolved = resolved.get("colors_json", "[]")
+            if colors_json_resolved and colors_json_resolved != "[]":
+                if isinstance(colors_json_resolved, list):
+                    import json
+                    colors_json = json.dumps(colors_json_resolved)
+                else:
+                    colors_json = colors_json_resolved
+
+        if not product_id:
+            product_id = ppg_code or product_name
 
         # Convert weight (grams) to liters: g / (density_g_ml * 1000)
         liters_change = abs(weight_g) / (density * 1000) if density > 0 else 0.0
@@ -539,9 +573,10 @@ class Database:
                 new_liters = max(0, current - liters_change)
             self.conn.execute(
                 """UPDATE vessel_stock
-                   SET current_liters = ?, updated_at = CURRENT_TIMESTAMP
+                   SET current_liters = ?, product_name = ?, colors_json = ?,
+                       updated_at = CURRENT_TIMESTAMP
                    WHERE product_id = ?""",
-                (new_liters, product_id),
+                (new_liters, product_name, colors_json, product_id),
             )
         else:
             # New product — insert it
@@ -551,16 +586,78 @@ class Database:
                    (product_id, product_name, product_type,
                     current_liters, initial_liters, density_g_per_ml,
                     colors_json, updated_at)
-                   VALUES (?, ?, ?, ?, ?, ?, '[]', CURRENT_TIMESTAMP)""",
+                   VALUES (?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)""",
                 (product_id, product_name, product_type,
-                 initial, initial, density),
+                 initial, initial, density, colors_json),
             )
 
         self.conn.commit()
         logger.info(
-            f"Vessel stock updated: {action} {product_name} "
+            f"Vessel stock updated: {action} {product_name} (id={product_id[:12]}...) "
             f"weight={weight_g:.0f}g liters_change={liters_change:.2f}L"
         )
+
+    def delete_vessel_stock_item(self, product_id: str) -> bool:
+        """Delete a single item from vessel_stock. Returns True if deleted."""
+        cursor = self.conn.execute(
+            "DELETE FROM vessel_stock WHERE product_id = ?", (product_id,)
+        )
+        self.conn.commit()
+        return cursor.rowcount > 0
+
+    def cleanup_vessel_stock_orphans(self) -> int:
+        """Remove vessel_stock entries that don't match any product in catalog.
+
+        Merges orphan quantities into the correct product if possible.
+        Returns count of orphans removed.
+        """
+        removed = 0
+        stock = self.get_vessel_stock()
+        for item in stock:
+            pid = item.get("product_id", "")
+            # Check if this product_id exists in the product catalog
+            real = self.get_product_by_id(pid)
+            if real:
+                continue  # Valid product, keep it
+
+            # Try to find the real product by name
+            pname = item.get("product_name", "")
+            real = None
+            if pname:
+                # Strip "PPG-" prefix if present
+                search_name = pname
+                if search_name.startswith("PPG-"):
+                    search_name = search_name[4:]
+                real = self.get_product_by_name(search_name)
+                if not real:
+                    # Try ppg_code from the product_id (might be a raw code)
+                    real = self.get_product_by_ppg_code(pid)
+
+            if real:
+                # Merge orphan quantity into real product
+                real_id = real.get("product_id", "")
+                orphan_liters = float(item.get("current_liters", 0))
+                if orphan_liters > 0 and real_id:
+                    self.update_vessel_stock_from_barcode(
+                        product_info={
+                            "product_id": real_id,
+                            "product_name": real.get("name", ""),
+                            "product_type": real.get("product_type", ""),
+                            "density_g_per_ml": real.get("density_g_per_ml", 1.3),
+                            "colors_json": real.get("colors_json", "[]"),
+                        },
+                        action="load",
+                        weight_g=orphan_liters * float(real.get("density_g_per_ml", 1.3) or 1.3) * 1000,
+                    )
+                    logger.info(f"Merged orphan '{pname}' ({orphan_liters:.1f}L) into '{real.get('name')}'")
+
+            # Delete the orphan entry
+            self.conn.execute("DELETE FROM vessel_stock WHERE product_id = ?", (pid,))
+            self.conn.commit()
+            removed += 1
+            logger.info(f"Removed orphan vessel_stock entry: {pname} (id={pid})")
+
+        return removed
 
     def clear_vessel_stock(self) -> None:
         """Clear vessel stock table before full refresh."""

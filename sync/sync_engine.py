@@ -453,6 +453,15 @@ class SyncEngine:
                     self.db.upsert_vessel_stock(item)
                 logger.info(f"Vessel inventory synced: {len(vessel_inv)} products")
 
+            # Clean up orphan vessel_stock entries (e.g., from old barcode scans
+            # with raw codes instead of proper product IDs)
+            try:
+                orphans = self.db.cleanup_vessel_stock_orphans()
+                if orphans > 0:
+                    logger.info(f"Cleaned up {orphans} orphan vessel_stock entries")
+            except Exception as e:
+                logger.debug(f"Vessel stock cleanup error: {e}")
+
             # Update admin password if sent from cloud
             new_password = config.get("admin_password")
             if new_password:
