@@ -574,12 +574,27 @@ class MixingScreen(QWidget):
         if area_name:
             recipe_name = f"{product_name} - {area_name}"
 
+        # Resolve real product_id from name via DB
+        base_product_id = pending.get("product_name", "")
+        hardener_product_id = pending.get("hardener_name", "")
+        try:
+            base_prod = self.app.db.get_product_by_name(product_name)
+            if base_prod:
+                base_product_id = base_prod.get("product_id", base_product_id)
+            hard_prod = self.app.db.get_product_by_name(
+                pending.get("hardener_name", "")
+            )
+            if hard_prod:
+                hardener_product_id = hard_prod.get("product_id", hardener_product_id)
+        except Exception as e:
+            logger.debug(f"Product lookup for PaintNow recipe: {e}")
+
         from core.models import MixingRecipe
         mr = MixingRecipe(
             recipe_id=recipe_id,
             name=recipe_name,
-            base_product_id=pending.get("product_name", ""),
-            hardener_product_id=pending.get("hardener_name", ""),
+            base_product_id=base_product_id,
+            hardener_product_id=hardener_product_id,
             ratio_base=ratio_base,
             ratio_hardener=ratio_hardener,
             tolerance_pct=tolerance,
