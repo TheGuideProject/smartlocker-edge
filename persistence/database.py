@@ -331,24 +331,72 @@ class Database:
     # BARCODE LOOKUP (for barcode scanner inventory)
     # ============================================================
 
-    def get_barcode_product(self, barcode_data: str) -> Optional[Dict[str, Any]]:
-        """Look up a barcode string and return linked product info."""
+    def get_barcode_product(self, barcode_data: str,
+                            ppg_code: str = "") -> Optional[Dict[str, Any]]:
+        """Look up a barcode string and return linked product info.
+
+        Tries:
+        1. Exact barcode_data match
+        2. PPG code match in product_barcode table
+        3. PPG code match in product table
+        """
+        # Strategy 1: exact barcode match
         cursor = self.conn.execute(
-            """SELECT b.*, p.name, p.product_type, p.density_g_per_ml, p.ppg_code as p_ppg
+            """SELECT b.*, p.name as p_name, p.product_type as p_type,
+                      p.density_g_per_ml, p.ppg_code as p_ppg
                FROM product_barcode b
                LEFT JOIN product p ON b.product_id = p.product_id
                WHERE b.barcode_data = ?""",
             (barcode_data,),
         )
         row = cursor.fetchone()
+
+        # Strategy 2: ppg_code match in product_barcode table
+        if not row and ppg_code:
+            cursor = self.conn.execute(
+                """SELECT b.*, p.name as p_name, p.product_type as p_type,
+                          p.density_g_per_ml, p.ppg_code as p_ppg
+                   FROM product_barcode b
+                   LEFT JOIN product p ON b.product_id = p.product_id
+                   WHERE UPPER(b.ppg_code) = UPPER(?)
+                   LIMIT 1""",
+                (ppg_code,),
+            )
+            row = cursor.fetchone()
+
+        # Strategy 3: ppg_code match in product table only
+        if not row and ppg_code:
+            cursor = self.conn.execute(
+                """SELECT product_id, name as p_name, ppg_code as p_ppg,
+                          product_type as p_type, density_g_per_ml
+                   FROM product
+                   WHERE UPPER(ppg_code) = UPPER(?)""",
+                (ppg_code,),
+            )
+            row = cursor.fetchone()
+            if row:
+                d = dict(row)
+                return {
+                    "product_id": d.get("product_id", ""),
+                    "product_name": d.get("p_name", ""),
+                    "ppg_code": d.get("p_ppg", ppg_code),
+                    "product_type": d.get("p_type", ""),
+                    "density_g_per_ml": d.get("density_g_per_ml", 1.3),
+                    "batch_number": "",
+                    "color": "",
+                    "match_type": "ppg_product",
+                }
+
         if not row:
             return None
+
         d = dict(row)
         return {
             "product_id": d.get("product_id", ""),
-            "product_name": d.get("name") or d.get("product_name", ""),
+            "product_name": d.get("p_name") or d.get("product_name", ""),
             "ppg_code": d.get("p_ppg") or d.get("ppg_code", ""),
-            "product_type": d.get("product_type", ""),
+            "product_type": d.get("p_type") or d.get("product_type", ""),
+            "density_g_per_ml": d.get("density_g_per_ml", 1.3),
             "batch_number": d.get("batch_number", ""),
             "color": d.get("color", ""),
             "match_type": "exact",

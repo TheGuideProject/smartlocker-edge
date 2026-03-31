@@ -243,39 +243,32 @@ def lookup_barcode_product(db, scan: BarcodeScanEvent) -> Optional[Dict[str, Any
             "match_type": "no_db",
         }
 
-    # Strategy 1: Look up by full barcode data string
+    # Unified lookup: tries exact barcode, then ppg_code in barcode table,
+    # then ppg_code in product table
     try:
-        result = db.get_barcode_product(scan.raw_data)
+        result = db.get_barcode_product(scan.raw_data, ppg_code=scan.ppg_code)
         if result:
-            logger.info(f"[SCANNER] DB match (full barcode): {result.get('product_name')}")
+            logger.info(
+                f"[SCANNER] DB match ({result.get('match_type')}): "
+                f"{result.get('product_name')}"
+            )
+            # Fill in batch/color from scan if missing in DB
+            if not result.get("batch_number"):
+                result["batch_number"] = scan.batch_number
+            if not result.get("color"):
+                result["color"] = scan.color
             return result
     except Exception as e:
-        logger.debug(f"[SCANNER] Full barcode lookup error: {e}")
+        logger.debug(f"[SCANNER] Barcode lookup error: {e}")
 
-    # Strategy 2: Look up by PPG code in product table
-    try:
-        result = db.get_product_by_ppg_code(scan.ppg_code)
-        if result:
-            logger.info(f"[SCANNER] DB match (ppg_code): {result.get('name')}")
-            return {
-                "product_id": result.get("product_id") or result.get("id", ""),
-                "product_name": result.get("name", ""),
-                "ppg_code": result.get("ppg_code", ""),
-                "product_type": result.get("product_type", ""),
-                "batch_number": scan.batch_number,
-                "color": scan.color,
-                "match_type": "ppg_code",
-            }
-    except Exception as e:
-        logger.debug(f"[SCANNER] PPG code lookup error: {e}")
-
-    # Strategy 3: ALWAYS return something for valid barcodes
+    # Fallback: ALWAYS return something for valid barcodes
     logger.info(f"[SCANNER] No DB match, using raw data: PPG={scan.ppg_code}")
     return {
         "product_id": "",
         "product_name": scan.product_name or f"PPG-{scan.ppg_code}",
         "ppg_code": scan.ppg_code,
         "product_type": "",
+        "density_g_per_ml": 1.3,
         "batch_number": scan.batch_number,
         "color": scan.color,
         "match_type": "barcode_only",
