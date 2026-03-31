@@ -469,6 +469,8 @@ class MixingEngine:
         # Persist to database
         if self._db:
             self._save_session_to_db(self.session, status="completed")
+            # Update vessel_stock: subtract consumed base + hardener
+            self._update_vessel_stock_consumption(self.session)
 
         # Reset
         self.session = None
@@ -594,6 +596,54 @@ class MixingEngine:
     @property
     def is_active(self) -> bool:
         return self.session is not None and self.session.state != MixingState.IDLE
+
+    def _update_vessel_stock_consumption(self, session: 'MixingSession') -> None:
+        """Subtract consumed amounts from vessel_stock after mixing.
+
+        Uses the actual weighed amounts (base + hardener) to decrease inventory.
+        """
+        try:
+            # Subtract base paint
+            if session.base_product_id and session.base_weight_actual_g > 0:
+                # Look up product for name and density
+                product = self._db.get_product_by_id(session.base_product_id)
+                if product:
+                    self._db.update_vessel_stock_from_barcode(
+                        product_info={
+                            "product_id": product.get("product_id", session.base_product_id),
+                            "product_name": product.get("name", "Base"),
+                            "product_type": product.get("product_type", "base_paint"),
+                            "density_g_per_ml": product.get("density_g_per_ml", 1.3),
+                        },
+                        action="unload",
+                        weight_g=session.base_weight_actual_g,
+                    )
+                    logger.info(
+                        f"Vessel stock updated: -{session.base_weight_actual_g:.0f}g "
+                        f"base ({product.get('name', '?')})"
+                    )
+
+            # Subtract hardener
+            if session.hardener_product_id and session.hardener_weight_actual_g > 0:
+                product = self._db.get_product_by_id(session.hardener_product_id)
+                if product:
+                    self._db.update_vessel_stock_from_barcode(
+                        product_info={
+                            "product_id": product.get("product_id", session.hardener_product_id),
+                            "product_name": product.get("name", "Hardener"),
+                            "product_type": product.get("product_type", "hardener"),
+                            "density_g_per_ml": product.get("density_g_per_ml", 1.0),
+                        },
+                        action="unload",
+                        weight_g=session.hardener_weight_actual_g,
+                    )
+                    logger.info(
+                        f"Vessel stock updated: -{session.hardener_weight_actual_g:.0f}g "
+                        f"hardener ({product.get('name', '?')})"
+                    )
+
+        except Exception as e:
+            logger.error(f"Failed to update vessel stock after mixing: {e}")
 
     def _save_session_to_db(self, session: 'MixingSession', status: str = "completed") -> None:
         """Persist mixing session to database."""
