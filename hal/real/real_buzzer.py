@@ -61,6 +61,15 @@ _PATTERN_DEFINITIONS = {
         (1500, 0.05),            # Very short click
     ],
     BuzzerPattern.ALARM: "LOOP",  # Special: repeating alarm handled in _play_pattern
+    BuzzerPattern.POUR_STEADY: [
+        (1200, 0.08),            # Short beep for steady pouring
+    ],
+    BuzzerPattern.POUR_CLOSE: [
+        (1500, 0.06),            # Quick high beep for approaching target
+    ],
+    BuzzerPattern.POUR_TARGET: [
+        (1800, 0.5),             # Sustained tone at target
+    ],
 }
 
 

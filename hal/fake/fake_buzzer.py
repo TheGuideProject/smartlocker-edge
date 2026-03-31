@@ -19,6 +19,9 @@ _PATTERN_DISPLAY = {
     BuzzerPattern.TARGET_REACHED: "BEEP-beep-BEEP (target reached)",
     BuzzerPattern.TICK: "tick",
     BuzzerPattern.ALARM: "BZZZ-BZZZ-BZZZ (ALARM LOOP)",
+    BuzzerPattern.POUR_STEADY: "bip (pour steady)",
+    BuzzerPattern.POUR_CLOSE: "bip-bip (pour close)",
+    BuzzerPattern.POUR_TARGET: "BEEEEEP (pour target)",
 }
 
 

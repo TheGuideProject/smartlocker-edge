@@ -41,6 +41,8 @@ class MixingScreen(QWidget):
         self._pot_life_timer.timeout.connect(self._update_pot_life)
         self._last_buzzer_zone = ""   # Track zone changes for buzzer
         self._tick_counter = 0        # For periodic tick while pouring
+        self._barcode_verified_base = False
+        self._barcode_verified_hardener = False
         self._build_ui()
 
     def _build_ui(self):
@@ -707,6 +709,17 @@ class MixingScreen(QWidget):
             self._lbl_calc_base.setText("")
             self._lbl_calc_hardener.setText("")
 
+    def _is_rfid_down(self) -> bool:
+        """Check if RFID is unavailable (fake driver or unhealthy)."""
+        try:
+            rfid = getattr(self.app, "rfid", None)
+            if rfid and hasattr(rfid, "is_healthy"):
+                return not rfid.is_healthy()
+            driver_status = getattr(self.app, "driver_status", {})
+            return driver_status.get("rfid") == "fake"
+        except Exception:
+            return True
+
     def _on_tare_and_pour(self):
         try:
             base_g = float(self._input_amount.text())
@@ -719,10 +732,14 @@ class MixingScreen(QWidget):
         # Tare the mixing scale
         engine.tare_scale()
 
-        # Skip pick phases (no RFID for now), go straight to weighing
+        # Skip pick phases, go straight to weighing
         session = engine.session
         if session:
             session.state = MixingState.WEIGH_BASE
+
+        # Track barcode verification state
+        self._barcode_verified_base = False
+        self._barcode_verified_hardener = False
 
         self._weighing_phase = "base"
         self._weight_target = base_g
@@ -734,8 +751,32 @@ class MixingScreen(QWidget):
         self._stack.setCurrentIndex(2)
         self._state_badge.setText("WEIGHING BASE")
         self._barcode_banner.setVisible(False)
-        self._check_rfid_status()
-        self._weight_timer.start(300)
+
+        # If RFID is down, require barcode scan before pouring
+        if self._is_rfid_down():
+            self._show_barcode_required("BASE")
+        else:
+            self._weight_timer.start(300)
+
+    def _show_barcode_required(self, component: str):
+        """Show barcode scan requirement banner and pause weighing."""
+        self._barcode_banner.setVisible(True)
+        self._barcode_banner.setStyleSheet(
+            f"background-color: {C.ACCENT_BG}; border: 2px solid {C.ACCENT};"
+            f"border-radius: 6px; padding: 8px;"
+        )
+        self._barcode_icon.setText(">>")
+        self._barcode_icon.setStyleSheet(
+            f"color: {C.ACCENT}; font-weight: bold; font-size: {_F_MED}px;"
+        )
+        self._barcode_msg.setText(
+            f"SCAN {component} BARCODE TO START POURING"
+        )
+        self._barcode_msg.setStyleSheet(
+            f"font-size: {_F_SM}px; font-weight: bold; color: {C.ACCENT};"
+        )
+        self._lbl_weight_zone.setText(f"Scan {component.lower()} barcode...")
+        self._lbl_rfid_hint.setVisible(True)
 
     def _update_weight(self):
         # Read weight in try/except with logging
@@ -758,16 +799,16 @@ class MixingScreen(QWidget):
         progress = min(100, max(0, progress))
         self._progress_weight.setValue(int(progress))
 
-        # Determine zone
-        if progress < 90:
+        # Determine zone (with audio-optimized thresholds)
+        if progress < 85:
             zone = "pouring"
             color = C.PRIMARY
             zone_text = "Keep pouring..."
-        elif progress < 95:
+        elif progress < 98:
             zone = "approaching"
             color = C.WARNING
             zone_text = "Slow down!"
-        elif progress <= 105:
+        elif progress <= 100:
             zone = "in_range"
             color = C.SUCCESS
             zone_text = "STOP! Confirm pour"
@@ -776,30 +817,33 @@ class MixingScreen(QWidget):
             color = C.DANGER
             zone_text = "TOO MUCH!"
 
-        # ── Buzzer feedback ──
+        # ── Buzzer feedback (audio guide for blind pouring) ──
+        # Timer runs every 300ms. Beep frequencies:
+        #   Pouring (<85%):     every 2 ticks = ~0.6s
+        #   Approaching (85-98%): every tick = ~0.3s
+        #   Target (98-100%):   continuous tone
+        #   Over (>100%):       error buzz once
         try:
             buzzer = self.app.buzzer
-            if zone != self._last_buzzer_zone:
-                # Zone changed — play transition sound
-                if zone == "approaching":
-                    buzzer.play(BuzzerPattern.WARNING)      # Double beep: slow down!
-                elif zone == "in_range":
-                    buzzer.play(BuzzerPattern.TARGET_REACHED)  # Rising tone: stop!
-                elif zone == "over":
-                    buzzer.play(BuzzerPattern.ERROR)         # Long buzz: too much!
-                self._last_buzzer_zone = zone
-                self._tick_counter = 0
-            else:
-                # Same zone — periodic ticks while pouring
-                self._tick_counter += 1
-                if zone == "pouring" and current > 5:
-                    # Tick every ~3 seconds (every 10th update at 300ms interval)
-                    if self._tick_counter % 10 == 0:
-                        buzzer.play(BuzzerPattern.TICK)
-                elif zone == "approaching":
-                    # Faster ticks: every ~1 second
-                    if self._tick_counter % 3 == 0:
-                        buzzer.play(BuzzerPattern.TICK)
+            self._tick_counter += 1
+
+            if zone == "pouring" and current > 5:
+                # Steady beep every ~0.6s while pouring
+                if self._tick_counter % 2 == 0:
+                    buzzer.play(BuzzerPattern.POUR_STEADY)
+            elif zone == "approaching":
+                # Fast beep every tick (~0.3s) when close
+                buzzer.play(BuzzerPattern.POUR_CLOSE)
+            elif zone == "in_range":
+                # Continuous tone at target — play sustained beep
+                if self._tick_counter % 2 == 0:
+                    buzzer.play(BuzzerPattern.POUR_TARGET)
+            elif zone == "over":
+                # Error once when entering over zone
+                if self._last_buzzer_zone != "over":
+                    buzzer.play(BuzzerPattern.ERROR)
+
+            self._last_buzzer_zone = zone
         except Exception:
             pass  # Buzzer errors should never break weight display
 
@@ -841,7 +885,13 @@ class MixingScreen(QWidget):
                 self._lbl_weight_zone.setText("Pour hardener...")
 
                 self._state_badge.setText("WEIGHING HARDENER")
-                self._weight_timer.start(300)
+                self._barcode_banner.setVisible(False)
+
+                # If RFID is down, require barcode scan for hardener too
+                if self._is_rfid_down():
+                    self._show_barcode_required("HARDENER")
+                else:
+                    self._weight_timer.start(300)
 
         elif self._weighing_phase == "hardener":
             engine.confirm_hardener_weighed()
@@ -982,6 +1032,7 @@ class MixingScreen(QWidget):
         """Called by app when barcode is scanned during mixing.
 
         Shows a banner on the weigh page indicating match/mismatch.
+        If RFID is down and barcode matches, unlocks weighing.
         """
         name = product_info.get("product_name", "Unknown")
         self._barcode_banner.setVisible(True)
@@ -999,6 +1050,20 @@ class MixingScreen(QWidget):
             self._barcode_msg.setStyleSheet(
                 f"font-size: {_F_SM}px; font-weight: bold; color: {C.SUCCESS};"
             )
+
+            # Unlock weighing if barcode was required (RFID down)
+            if component == "BASE" and not self._barcode_verified_base:
+                self._barcode_verified_base = True
+                self._lbl_rfid_hint.setVisible(False)
+                self._weight_timer.start(300)  # Start weighing
+                QTimer.singleShot(3000, lambda: self._barcode_banner.setVisible(False))
+                return
+            elif component == "HARDENER" and not self._barcode_verified_hardener:
+                self._barcode_verified_hardener = True
+                self._lbl_rfid_hint.setVisible(False)
+                self._weight_timer.start(300)  # Resume weighing
+                QTimer.singleShot(3000, lambda: self._barcode_banner.setVisible(False))
+                return
         else:
             self._barcode_banner.setStyleSheet(
                 f"background-color: {C.DANGER_BG}; border: 2px solid {C.DANGER};"
@@ -1008,7 +1073,7 @@ class MixingScreen(QWidget):
             self._barcode_icon.setStyleSheet(
                 f"color: {C.DANGER}; font-weight: bold; font-size: {_F_MED}px;"
             )
-            self._barcode_msg.setText(f"WRONG PRODUCT! Scanned: {name} — Expected different {component}")
+            self._barcode_msg.setText(f"WRONG PRODUCT! Scanned: {name}")
             self._barcode_msg.setStyleSheet(
                 f"font-size: {_F_SM}px; font-weight: bold; color: {C.DANGER};"
             )

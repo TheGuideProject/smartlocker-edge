@@ -71,6 +71,9 @@ class BuzzerPattern(Enum):
     TARGET_REACHED = "target"     # Rising tone (pour target reached)
     TICK = "tick"                 # Very short click (weight change acknowledged)
     ALARM = "alarm"               # Repeating loud alarm (weight alarm, unauthorized)
+    POUR_STEADY = "pour_steady"   # Mixing: periodic beep while pouring (0.5s)
+    POUR_CLOSE = "pour_close"     # Mixing: fast beep approaching target (0.2s)
+    POUR_TARGET = "pour_target"   # Mixing: continuous tone at target (98-100%)
 
 
 # ============================================================
