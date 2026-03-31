@@ -396,12 +396,17 @@ class SmartLockerWindow(QMainWindow):
         """
         from core.barcode_scanner import lookup_barcode_product
 
-        logger.info(f"Barcode scan: {scan_event}")
+        logger.info(f"=== BARCODE HANDLER CALLED === raw={scan_event.raw_data}")
+        print(f"\n*** BARCODE SCANNED: {scan_event.raw_data} ***\n")
 
         # Look up product in local DB
         product_info = lookup_barcode_product(self.db, scan_event)
+        logger.info(f"=== LOOKUP RESULT: {product_info} ===")
+        print(f"*** LOOKUP: {product_info} ***")
+
         if not product_info:
             logger.warning(f"Barcode not recognized: {scan_event.raw_data}")
+            print(f"*** BARCODE NOT RECOGNIZED ***")
             try:
                 from hal.interfaces import BuzzerPattern
                 self.buzzer.play(BuzzerPattern.ERROR)
@@ -423,10 +428,11 @@ class SmartLockerWindow(QMainWindow):
         )
 
         if mixing_active:
-            # MIXING MODE: use barcode to verify product on scale
+            logger.info("=== ROUTING TO MIXING VERIFY ===")
             self._barcode_verify_mixing(product_info, scan_event)
         else:
-            # INVENTORY MODE: show load/unload popup
+            logger.info("=== ROUTING TO INVENTORY POPUP ===")
+            print(f"*** OPENING INVENTORY POPUP for {product_info.get('product_name')} ***")
             self._barcode_inventory_action(product_info)
 
     def _barcode_verify_mixing(self, product_info: dict, scan_event):

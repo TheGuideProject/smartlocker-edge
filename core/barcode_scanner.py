@@ -7,7 +7,7 @@ rapidly (< 50ms between keystrokes) followed by Enter.
 This module provides a global Qt event filter that:
 1. Detects rapid keyboard input (barcode scan vs. human typing)
 2. Collects characters until Enter
-3. Parses barcode data: PPG_CODE/BATCH/PRODUCT_NAME/COLOR
+3. Parses barcode data: SL-PPG_CODE-BATCH or PPG_CODE/BATCH/NAME/COLOR
 4. Emits a signal with the parsed product info
 5. Looks up the product in local database
 
@@ -19,13 +19,14 @@ import time
 import logging
 from typing import Optional, Dict, Any
 
-from PyQt6.QtCore import QObject, QEvent, pyqtSignal, QTimer
+from PyQt6.QtCore import QObject, QEvent, pyqtSignal, QTimer, Qt
 from PyQt6.QtGui import QKeyEvent
 
 logger = logging.getLogger("smartlocker.barcode")
 
 # Max time between keystrokes to be considered a barcode scan (ms)
-SCAN_CHAR_TIMEOUT_MS = 80
+# 150ms is generous enough for RPi under load
+SCAN_CHAR_TIMEOUT_MS = 150
 # Min chars for a valid barcode
 MIN_BARCODE_LENGTH = 5
 
@@ -53,7 +54,7 @@ class BarcodeScanEvent:
         raw = self.raw_data
 
         # Short format: SL-PPG_CODE-BATCH
-        if raw.startswith("SL-") and raw.count("-") >= 2:
+        if raw.upper().startswith("SL-") and raw.count("-") >= 2:
             parts = raw.split("-", 2)  # ['SL', 'PPG_CODE', 'BATCH']
             self.ppg_code = parts[1].strip()
             self.batch_number = parts[2].strip()
@@ -71,7 +72,7 @@ class BarcodeScanEvent:
             self.is_valid = bool(self.ppg_code and self.product_name)
             return
 
-        # Single value — might be just a PPG code or tag UID
+        # Single value — might be just a PPG code or product code
         self.ppg_code = raw
         self.is_valid = len(raw) >= MIN_BARCODE_LENGTH
 
@@ -131,13 +132,17 @@ class BarcodeScanner(QObject):
         text = key_event.text()
         now = time.time() * 1000  # ms
 
-        # Enter key — end of scan
-        if key in (16777220, 16777221):  # Qt.Key.Key_Return, Qt.Key.Key_Enter
+        # Enter/Return key — end of scan
+        if key in (Qt.Key.Key_Return, Qt.Key.Key_Enter):
             if self._buffer and len(self._buffer) >= MIN_BARCODE_LENGTH:
+                logger.info(f"[SCANNER] Enter pressed, buffer='{self._buffer}' ({len(self._buffer)} chars)")
                 self._process_scan()
                 return True  # Consume the Enter key
-            else:
+            elif self._buffer:
+                logger.debug(f"[SCANNER] Enter but buffer too short: '{self._buffer}'")
                 self._reset()
+                return False
+            else:
                 return False
 
         # Only printable characters
@@ -149,6 +154,8 @@ class BarcodeScanner(QObject):
 
         if self._buffer and time_since_last > SCAN_CHAR_TIMEOUT_MS:
             # Too slow — this is human typing, not a scanner
+            if len(self._buffer) > 2:
+                logger.debug(f"[SCANNER] Timeout reset, had '{self._buffer}' ({time_since_last:.0f}ms gap)")
             self._reset()
             return False
 
@@ -157,12 +164,18 @@ class BarcodeScanner(QObject):
         self._last_key_time = now
         self._scanning = True
 
+        # Log first char and periodically
+        if len(self._buffer) == 1:
+            logger.debug(f"[SCANNER] Scan starting: '{text}'")
+        elif len(self._buffer) % 5 == 0:
+            logger.debug(f"[SCANNER] Buffer: '{self._buffer}' ({len(self._buffer)} chars)")
+
         # Restart timeout timer
         self._timeout_timer.stop()
-        self._timeout_timer.start(int(SCAN_CHAR_TIMEOUT_MS * 1.5))
+        self._timeout_timer.start(int(SCAN_CHAR_TIMEOUT_MS * 2))
 
-        # Consume event if we're in scanning mode (don't pass to widgets)
-        if len(self._buffer) > 2:
+        # ALWAYS consume events while scanning (prevent chars going to text inputs)
+        if len(self._buffer) > 1:
             return True
 
         return False
@@ -173,14 +186,18 @@ class BarcodeScanner(QObject):
         self._reset()
 
         if len(raw) < MIN_BARCODE_LENGTH:
+            logger.warning(f"[SCANNER] Rejected scan, too short: '{raw}'")
             return
 
-        logger.info(f"Barcode scanned: {raw}")
+        logger.info(f"[SCANNER] SCAN COMPLETE: '{raw}'")
         scan = BarcodeScanEvent(raw)
+        logger.info(f"[SCANNER] Parsed: {scan}")
         self.barcode_scanned.emit(scan)
 
     def _on_timeout(self):
         """Buffer timeout — not a barcode scan."""
+        if self._buffer:
+            logger.debug(f"[SCANNER] Timeout, discarding buffer: '{self._buffer}'")
         self._reset()
 
     def _reset(self):
@@ -202,10 +219,12 @@ def lookup_barcode_product(db, scan: BarcodeScanEvent) -> Optional[Dict[str, Any
     NEVER returns None for a valid barcode — worst case returns raw data.
     """
     if not scan.is_valid:
+        logger.warning(f"[SCANNER] Invalid scan event: {scan.raw_data}")
         return None
 
     if not db:
         # No database — return raw barcode data
+        logger.info(f"[SCANNER] No DB, returning raw data for {scan.ppg_code}")
         return {
             "product_id": "",
             "product_name": scan.product_name or f"PPG-{scan.ppg_code}",
@@ -220,16 +239,16 @@ def lookup_barcode_product(db, scan: BarcodeScanEvent) -> Optional[Dict[str, Any
     try:
         result = db.get_barcode_product(scan.raw_data)
         if result:
-            logger.info(f"Barcode matched (full): {result.get('product_name')}")
+            logger.info(f"[SCANNER] DB match (full barcode): {result.get('product_name')}")
             return result
     except Exception as e:
-        logger.debug(f"Barcode full lookup failed: {e}")
+        logger.debug(f"[SCANNER] Full barcode lookup error: {e}")
 
     # Strategy 2: Look up by PPG code in product table
     try:
         result = db.get_product_by_ppg_code(scan.ppg_code)
         if result:
-            logger.info(f"Barcode matched (ppg_code): {result.get('name')}")
+            logger.info(f"[SCANNER] DB match (ppg_code): {result.get('name')}")
             return {
                 "product_id": result.get("product_id") or result.get("id", ""),
                 "product_name": result.get("name", ""),
@@ -240,11 +259,10 @@ def lookup_barcode_product(db, scan: BarcodeScanEvent) -> Optional[Dict[str, Any
                 "match_type": "ppg_code",
             }
     except Exception as e:
-        logger.debug(f"Barcode ppg_code lookup failed: {e}")
+        logger.debug(f"[SCANNER] PPG code lookup error: {e}")
 
     # Strategy 3: ALWAYS return something for valid barcodes
-    # Use whatever we parsed from the barcode itself
-    logger.info(f"Barcode not in DB — using raw data: PPG={scan.ppg_code}")
+    logger.info(f"[SCANNER] No DB match, using raw data: PPG={scan.ppg_code}")
     return {
         "product_id": "",
         "product_name": scan.product_name or f"PPG-{scan.ppg_code}",
