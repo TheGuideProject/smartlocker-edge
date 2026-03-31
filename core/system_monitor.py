@@ -191,6 +191,14 @@ class SystemMonitor:
                 ErrorCode.E029_SYSTEM_CLOCK_ERROR, "system"
             )
 
+        # ── CPU Usage (%) ────────────────────────────────
+        cpu_pct = self._get_cpu_usage()
+        result["cpu_pct"] = cpu_pct
+
+        # ── Network info ────────────────────────────────
+        net_info = self._get_network_info()
+        result["network"] = net_info
+
         # ── Save to history and cache ────────────────────────
         self._last_check = result
         self._history.append(result)
@@ -199,6 +207,12 @@ class SystemMonitor:
 
     def get_last_check(self) -> Dict[str, Any]:
         """Return results from the most recent health check."""
+        return dict(self._last_check)
+
+    def get_metrics(self) -> Optional[Dict[str, Any]]:
+        """Alias for get_last_check — used by UI SystemHealthScreen."""
+        if not self._last_check:
+            return None
         return dict(self._last_check)
 
     def get_history(self) -> List[Dict[str, Any]]:
@@ -370,3 +384,60 @@ class SystemMonitor:
 
         # Fallback: check if year is reasonable (for Windows / test mode)
         return datetime.datetime.now().year >= 2025
+
+    def _get_cpu_usage(self) -> Optional[float]:
+        """Get CPU usage percentage."""
+        try:
+            import psutil
+            return psutil.cpu_percent(interval=0.5)
+        except ImportError:
+            pass
+        # Fallback: parse /proc/stat
+        try:
+            with open("/proc/stat", "r") as f:
+                line = f.readline()
+            parts = line.split()
+            idle = int(parts[4])
+            total = sum(int(p) for p in parts[1:])
+            if not hasattr(self, "_prev_cpu"):
+                self._prev_cpu = (idle, total)
+                return 0.0
+            prev_idle, prev_total = self._prev_cpu
+            self._prev_cpu = (idle, total)
+            d_idle = idle - prev_idle
+            d_total = total - prev_total
+            if d_total == 0:
+                return 0.0
+            return ((d_total - d_idle) / d_total) * 100
+        except Exception:
+            return None
+
+    def _get_network_info(self) -> Dict[str, Any]:
+        """Get basic network connectivity info."""
+        info = {"connected": False, "ip": None, "interface": None}
+        try:
+            import socket
+            s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            s.settimeout(2)
+            s.connect(("8.8.8.8", 53))
+            ip = s.getsockname()[0]
+            s.close()
+            info["connected"] = True
+            info["ip"] = ip
+        except Exception:
+            pass
+
+        # Try to find active interface
+        try:
+            import psutil
+            for name, addrs in psutil.net_if_addrs().items():
+                if name in ("lo", "localhost"):
+                    continue
+                for addr in addrs:
+                    if addr.family == socket.AF_INET and addr.address == info.get("ip"):
+                        info["interface"] = name
+                        break
+        except Exception:
+            pass
+
+        return info

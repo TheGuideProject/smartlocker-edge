@@ -292,6 +292,20 @@ class SmartLockerWindow(QMainWindow):
         self.cloud = CloudClient()
         self.sync_engine = SyncEngine(self.db, self.cloud)
 
+        # Set monitoring references so heartbeats include sensor health + telemetry
+        self.cloud.set_monitoring_refs(
+            driver_status=self.driver_status,
+            sensors={
+                'rfid': self.rfid,
+                'weight': self.weight,
+            },
+            db_ref=self.db,
+            system_monitor=self.system_monitor,
+        )
+
+        # Start system monitor background checks
+        self.system_monitor.start(interval_s=60)
+
         # Load maintenance chart
         self.maintenance_chart = self.db.get_maintenance_chart()
         if self.maintenance_chart:
@@ -324,6 +338,10 @@ class SmartLockerWindow(QMainWindow):
     def closeEvent(self, event):
         """Clean shutdown."""
         self._poll_timer.stop()
+        try:
+            self.system_monitor.stop()
+        except Exception:
+            pass
         try:
             self.sync_engine.stop()
         except Exception:
