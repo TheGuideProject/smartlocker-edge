@@ -31,6 +31,8 @@ class BarcodeInventoryPopup(QDialog):
         self.product_info = product_info
         self._action = None  # "load" or "unload"
         self._initial_weight = None
+        self._final_weight = None
+        self._weight_diff = 0.0
         self._confirmed = False
 
         self.setWindowTitle("Barcode Scan")
@@ -220,6 +222,9 @@ class BarcodeInventoryPopup(QDialog):
         diff = current - self._initial_weight
         self._weight_label.setText(f"{current:.0f} g")
 
+        self._final_weight = current
+        self._weight_diff = diff
+
         if self._action == "load":
             # Expect weight increase (> 100g = can placed)
             if diff > 100:
@@ -264,6 +269,9 @@ class BarcodeInventoryPopup(QDialog):
             "action": self._action,
             "product_info": self.product_info,
             "weight_confirmed": self._confirmed,
+            "weight_before_g": self._initial_weight or 0,
+            "weight_after_g": self._final_weight or 0,
+            "weight_diff_g": abs(self._weight_diff),
         }
 
     def reject(self):

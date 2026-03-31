@@ -456,6 +456,11 @@ class SmartLockerWindow(QMainWindow):
                 EventType.CAN_PLACED if action == "load"
                 else EventType.CAN_REMOVED
             )
+            # Weight data from popup verification
+            weight_g = result.get("weight_diff_g", 0)
+            weight_before = result.get("weight_before_g", 0)
+            weight_after = result.get("weight_after_g", 0)
+
             event = Event(
                 event_type=event_type,
                 tag_id=f"barcode:{product.get('ppg_code', '')}:{product.get('batch_number', '')}",
@@ -468,12 +473,15 @@ class SmartLockerWindow(QMainWindow):
                     "color": product.get("color", ""),
                     "source": "barcode_scan",
                     "weight_confirmed": result.get("weight_confirmed", False),
+                    "weight_g": weight_g,
+                    "weight_before_g": weight_before,
+                    "weight_after_g": weight_after,
                 },
             )
             self.event_bus.publish(event)
             logger.info(
                 f"Inventory {action}: {product.get('product_name')} "
-                f"(barcode, weight_ok={result.get('weight_confirmed')})"
+                f"weight={weight_g:.0f}g (barcode, confirmed={result.get('weight_confirmed')})"
             )
 
     def _poll_sensors(self):
