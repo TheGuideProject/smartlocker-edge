@@ -217,5 +217,20 @@ CREATE INDEX IF NOT EXISTS idx_alarm_log_status ON alarm_log(status);
 CREATE INDEX IF NOT EXISTS idx_alarm_log_severity ON alarm_log(severity);
 CREATE INDEX IF NOT EXISTS idx_alarm_log_raised ON alarm_log(raised_at);
 
+-- Product barcodes (synced from cloud)
+CREATE TABLE IF NOT EXISTS product_barcode (
+    barcode_data TEXT PRIMARY KEY,
+    product_id TEXT NOT NULL,
+    ppg_code TEXT NOT NULL,
+    batch_number TEXT NOT NULL,
+    product_name TEXT NOT NULL,
+    color TEXT DEFAULT '',
+    barcode_type TEXT DEFAULT 'code128',
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX IF NOT EXISTS idx_barcode_product ON product_barcode(product_id);
+CREATE INDEX IF NOT EXISTS idx_barcode_ppg ON product_barcode(ppg_code);
+
 -- Initialize singleton sync state
 INSERT OR IGNORE INTO sync_state (id) VALUES (1);

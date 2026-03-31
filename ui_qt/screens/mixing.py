@@ -311,6 +311,31 @@ class MixingScreen(QWidget):
         self._lbl_weight_zone.setAlignment(Qt.AlignmentFlag.AlignCenter)
         wc_lay.addWidget(self._lbl_weight_zone)
 
+        # Barcode verification banner (hidden until scan)
+        self._barcode_banner = QFrame()
+        self._barcode_banner.setVisible(False)
+        bb_lay = QHBoxLayout(self._barcode_banner)
+        bb_lay.setContentsMargins(8, 6, 8, 6)
+        bb_lay.setSpacing(6)
+        self._barcode_icon = QLabel()
+        self._barcode_icon.setFixedWidth(24)
+        self._barcode_icon.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        bb_lay.addWidget(self._barcode_icon)
+        self._barcode_msg = QLabel("")
+        self._barcode_msg.setStyleSheet(f"font-size: {_F_SM}px; font-weight: bold;")
+        bb_lay.addWidget(self._barcode_msg, stretch=1)
+        wc_lay.addWidget(self._barcode_banner)
+
+        # RFID hint when RFID is down
+        rfid_status = getattr(self, '_app_rfid_ok', True)
+        self._lbl_rfid_hint = QLabel("RFID unavailable — scan barcode to verify product")
+        self._lbl_rfid_hint.setStyleSheet(
+            f"font-size: {_F_SM}px; color: {C.WARNING}; font-style: italic;"
+        )
+        self._lbl_rfid_hint.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self._lbl_rfid_hint.setVisible(False)
+        wc_lay.addWidget(self._lbl_rfid_hint)
+
         lay.addWidget(weight_card, stretch=1)
 
         btn_row = QHBoxLayout()
@@ -708,6 +733,8 @@ class MixingScreen(QWidget):
 
         self._stack.setCurrentIndex(2)
         self._state_badge.setText("WEIGHING BASE")
+        self._barcode_banner.setVisible(False)
+        self._check_rfid_status()
         self._weight_timer.start(300)
 
     def _update_weight(self):
@@ -946,3 +973,59 @@ class MixingScreen(QWidget):
             self._on_abort()
         else:
             self.app.go_back()
+
+    # ══════════════════════════════════════════════════════
+    # BARCODE VERIFICATION (called from app barcode handler)
+    # ══════════════════════════════════════════════════════
+
+    def on_barcode_verified(self, match: bool, component: str, product_info: dict):
+        """Called by app when barcode is scanned during mixing.
+
+        Shows a banner on the weigh page indicating match/mismatch.
+        """
+        name = product_info.get("product_name", "Unknown")
+        self._barcode_banner.setVisible(True)
+
+        if match:
+            self._barcode_banner.setStyleSheet(
+                f"background-color: {C.SUCCESS_BG}; border: 1px solid {C.SUCCESS};"
+                f"border-radius: 6px;"
+            )
+            self._barcode_icon.setText("OK")
+            self._barcode_icon.setStyleSheet(
+                f"color: {C.SUCCESS}; font-weight: bold; font-size: {_F_MED}px;"
+            )
+            self._barcode_msg.setText(f"CORRECT {component}: {name}")
+            self._barcode_msg.setStyleSheet(
+                f"font-size: {_F_SM}px; font-weight: bold; color: {C.SUCCESS};"
+            )
+        else:
+            self._barcode_banner.setStyleSheet(
+                f"background-color: {C.DANGER_BG}; border: 2px solid {C.DANGER};"
+                f"border-radius: 6px;"
+            )
+            self._barcode_icon.setText("!!")
+            self._barcode_icon.setStyleSheet(
+                f"color: {C.DANGER}; font-weight: bold; font-size: {_F_MED}px;"
+            )
+            self._barcode_msg.setText(f"WRONG PRODUCT! Scanned: {name} — Expected different {component}")
+            self._barcode_msg.setStyleSheet(
+                f"font-size: {_F_SM}px; font-weight: bold; color: {C.DANGER};"
+            )
+
+        # Auto-hide after 8 seconds
+        QTimer.singleShot(8000, lambda: self._barcode_banner.setVisible(False))
+
+    def _check_rfid_status(self):
+        """Check if RFID is healthy and show hint if not."""
+        try:
+            rfid = getattr(self.app, "rfid", None)
+            if rfid and hasattr(rfid, "is_healthy"):
+                healthy = rfid.is_healthy()
+                self._lbl_rfid_hint.setVisible(not healthy)
+            else:
+                driver_status = getattr(self.app, "driver_status", {})
+                if driver_status.get("rfid") == "fake":
+                    self._lbl_rfid_hint.setVisible(True)
+        except Exception:
+            pass

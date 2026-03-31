@@ -101,6 +101,12 @@ class SmartLockerWindow(QMainWindow):
         self._click_filter = ClickSoundFilter(self)
         QApplication.instance().installEventFilter(self._click_filter)
 
+        # Global barcode scanner — always listening for USB scanner input
+        from core.barcode_scanner import BarcodeScanner
+        self._barcode_scanner = BarcodeScanner(self)
+        self._barcode_scanner.barcode_scanned.connect(self._on_barcode_scanned)
+        QApplication.instance().installEventFilter(self._barcode_scanner)
+
     def _add_screen(self, name, widget):
         self._screens[name] = widget
         self.stack.addWidget(widget)
@@ -327,6 +333,138 @@ class SmartLockerWindow(QMainWindow):
             print(f"    Real: {', '.join(real)}")
         if fake:
             print(f"    Fake: {', '.join(fake)}")
+
+    def _on_barcode_scanned(self, scan_event):
+        """Handle barcode scan from USB scanner — always active.
+
+        If in mixing mode: verify product on scale (RFID fallback).
+        Otherwise: show inventory load/unload popup.
+        """
+        from core.barcode_scanner import lookup_barcode_product
+
+        logger.info(f"Barcode scan: {scan_event}")
+
+        # Look up product in local DB
+        product_info = lookup_barcode_product(self.db, scan_event)
+        if not product_info:
+            logger.warning(f"Barcode not recognized: {scan_event.raw_data}")
+            try:
+                from hal.interfaces import BuzzerPattern
+                self.buzzer.play(BuzzerPattern.ERROR)
+            except Exception:
+                pass
+            return
+
+        # Check if mixing session is active
+        mixing_active = (
+            hasattr(self, 'mixing_engine')
+            and self.mixing_engine.session is not None
+        )
+
+        if mixing_active:
+            # MIXING MODE: use barcode to verify product on scale
+            self._barcode_verify_mixing(product_info, scan_event)
+        else:
+            # INVENTORY MODE: show load/unload popup
+            self._barcode_inventory_action(product_info)
+
+    def _barcode_verify_mixing(self, product_info: dict, scan_event):
+        """During mixing: verify the scanned barcode matches expected product."""
+        from hal.interfaces import BuzzerPattern
+
+        session = self.mixing_engine.session
+        if not session:
+            return
+
+        scanned_name = product_info.get("product_name", "").upper()
+        scanned_ppg = product_info.get("ppg_code", "").upper()
+        scanned_id = product_info.get("product_id", "")
+
+        # Determine which product is expected based on mixing state
+        from core.models import MixingState
+        state = self.mixing_engine.state
+
+        expected_id = ""
+        expected_name = ""
+        component = ""
+
+        if state in (MixingState.PICK_BASE, MixingState.WEIGH_BASE):
+            expected_id = session.base_product_id
+            expected_name = getattr(session, "base_product_name", "")
+            component = "BASE"
+        elif state in (MixingState.PICK_HARDENER, MixingState.WEIGH_HARDENER):
+            expected_id = session.hardener_product_id
+            expected_name = getattr(session, "hardener_product_name", "")
+            component = "HARDENER"
+
+        if not expected_id:
+            return
+
+        # Check match
+        match = False
+        if scanned_id and scanned_id == expected_id:
+            match = True
+        elif scanned_ppg:
+            # Try matching by ppg_code
+            expected_product = self.db.get_product_by_id(expected_id)
+            if expected_product:
+                match = scanned_ppg == (expected_product.get("ppg_code", "").upper())
+
+        # Notify mixing screen
+        mixing_screen = self._screens.get("mixing")
+        if mixing_screen and hasattr(mixing_screen, "on_barcode_verified"):
+            mixing_screen.on_barcode_verified(match, component, product_info)
+
+        if match:
+            self.buzzer.play(BuzzerPattern.CONFIRM)
+            logger.info(f"Barcode MATCH for {component}: {scanned_name}")
+        else:
+            self.buzzer.play(BuzzerPattern.ERROR)
+            logger.warning(
+                f"Barcode MISMATCH for {component}: "
+                f"expected={expected_name}, scanned={scanned_name}"
+            )
+
+    def _barcode_inventory_action(self, product_info: dict):
+        """Outside mixing: show load/unload inventory popup."""
+        from ui_qt.widgets.barcode_inventory_popup import BarcodeInventoryPopup
+        from hal.interfaces import BuzzerPattern
+        from core.event_types import Event, EventType
+
+        self.buzzer.play(BuzzerPattern.CONFIRM)
+
+        popup = BarcodeInventoryPopup(self, product_info, parent=self)
+        result_code = popup.exec()
+
+        if result_code == popup.DialogCode.Accepted:
+            result = popup.get_result()
+            action = result["action"]
+            product = result["product_info"]
+
+            # Create inventory event
+            event_type = (
+                EventType.CAN_PLACED if action == "load"
+                else EventType.CAN_REMOVED
+            )
+            event = Event(
+                event_type=event_type,
+                tag_id=f"barcode:{product.get('ppg_code', '')}:{product.get('batch_number', '')}",
+                slot_id="barcode_scan",
+                data={
+                    "product_id": product.get("product_id", ""),
+                    "product_name": product.get("product_name", ""),
+                    "ppg_code": product.get("ppg_code", ""),
+                    "batch_number": product.get("batch_number", ""),
+                    "color": product.get("color", ""),
+                    "source": "barcode_scan",
+                    "weight_confirmed": result.get("weight_confirmed", False),
+                },
+            )
+            self.event_bus.publish(event)
+            logger.info(
+                f"Inventory {action}: {product.get('product_name')} "
+                f"(barcode, weight_ok={result.get('weight_confirmed')})"
+            )
 
     def _poll_sensors(self):
         """Periodic sensor polling (every 500ms)."""

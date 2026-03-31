@@ -318,6 +318,57 @@ class Database:
         row = cursor.fetchone()
         return dict(row) if row else None
 
+    def get_product_by_ppg_code(self, ppg_code: str) -> Optional[Dict[str, Any]]:
+        """Find a product by PPG code."""
+        cursor = self.conn.execute(
+            "SELECT * FROM product WHERE UPPER(ppg_code) = UPPER(?)",
+            (ppg_code,),
+        )
+        row = cursor.fetchone()
+        return dict(row) if row else None
+
+    # ============================================================
+    # BARCODE LOOKUP (for barcode scanner inventory)
+    # ============================================================
+
+    def get_barcode_product(self, barcode_data: str) -> Optional[Dict[str, Any]]:
+        """Look up a barcode string and return linked product info."""
+        cursor = self.conn.execute(
+            """SELECT b.*, p.name, p.product_type, p.density_g_per_ml, p.ppg_code as p_ppg
+               FROM product_barcode b
+               LEFT JOIN product p ON b.product_id = p.product_id
+               WHERE b.barcode_data = ?""",
+            (barcode_data,),
+        )
+        row = cursor.fetchone()
+        if not row:
+            return None
+        d = dict(row)
+        return {
+            "product_id": d.get("product_id", ""),
+            "product_name": d.get("name") or d.get("product_name", ""),
+            "ppg_code": d.get("p_ppg") or d.get("ppg_code", ""),
+            "product_type": d.get("product_type", ""),
+            "batch_number": d.get("batch_number", ""),
+            "color": d.get("color", ""),
+            "match_type": "exact",
+        }
+
+    def save_barcode(self, barcode_data: str, product_id: str,
+                     ppg_code: str, batch_number: str,
+                     product_name: str, color: str = "",
+                     barcode_type: str = "code128") -> None:
+        """Save or update a product barcode mapping."""
+        self.conn.execute(
+            """INSERT OR REPLACE INTO product_barcode
+               (barcode_data, product_id, ppg_code, batch_number,
+                product_name, color, barcode_type)
+               VALUES (?, ?, ?, ?, ?, ?, ?)""",
+            (barcode_data, product_id, ppg_code, batch_number,
+             product_name, color, barcode_type),
+        )
+        self.conn.commit()
+
     # ============================================================
     # VESSEL STOCK (cloud-synced vessel inventory)
     # ============================================================
