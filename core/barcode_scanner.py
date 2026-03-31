@@ -43,8 +43,25 @@ class BarcodeScanEvent:
         self._parse()
 
     def _parse(self):
-        """Parse barcode format: PPG_CODE/BATCH/PRODUCT_NAME/COLOR"""
-        parts = self.raw_data.split("/")
+        """Parse barcode format.
+
+        Supported formats:
+          - Short: SL-{PPG_CODE}-{BATCH}  (e.g. SL-616826-001)
+          - Legacy: PPG_CODE/BATCH/PRODUCT_NAME/COLOR
+          - Single value: treated as PPG code
+        """
+        raw = self.raw_data
+
+        # Short format: SL-PPG_CODE-BATCH
+        if raw.startswith("SL-") and raw.count("-") >= 2:
+            parts = raw.split("-", 2)  # ['SL', 'PPG_CODE', 'BATCH']
+            self.ppg_code = parts[1].strip()
+            self.batch_number = parts[2].strip()
+            self.is_valid = bool(self.ppg_code)
+            return
+
+        # Legacy format: PPG_CODE/BATCH/PRODUCT_NAME/COLOR
+        parts = raw.split("/")
         if len(parts) >= 3:
             self.ppg_code = parts[0].strip()
             self.batch_number = parts[1].strip()
@@ -52,10 +69,11 @@ class BarcodeScanEvent:
             if len(parts) >= 4:
                 self.color = parts[3].strip()
             self.is_valid = bool(self.ppg_code and self.product_name)
-        else:
-            # Single value — might be just a PPG code or tag UID
-            self.ppg_code = self.raw_data
-            self.is_valid = len(self.raw_data) >= MIN_BARCODE_LENGTH
+            return
+
+        # Single value — might be just a PPG code or tag UID
+        self.ppg_code = raw
+        self.is_valid = len(raw) >= MIN_BARCODE_LENGTH
 
     def __repr__(self):
         return (f"BarcodeScanEvent(ppg={self.ppg_code}, batch={self.batch_number}, "
