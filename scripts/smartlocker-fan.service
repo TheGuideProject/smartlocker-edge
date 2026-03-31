@@ -1,0 +1,15 @@
+[Unit]
+Description=SmartLocker Aggressive Fan Control (PWM)
+After=multi-user.target
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/python3 /home/pi/smartlocker-edge/scripts/fan_control.py
+Restart=always
+RestartSec=5
+User=root
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
