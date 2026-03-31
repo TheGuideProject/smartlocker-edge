@@ -1,5 +1,5 @@
 """
-SmartLocker Design System — PySide6 Theme
+SmartLocker Design System — PyQt6 Theme
 
 Maritime Tech dark theme with PPG brand accent colors.
 QSS (Qt Style Sheets) for consistent styling across all widgets.
@@ -253,14 +253,14 @@ QScrollArea {{
 
 QScrollBar:vertical {{
     background: {C.BG_DARK};
-    width: 6px;
-    border-radius: 3px;
+    width: 14px;
+    border-radius: 7px;
 }}
 
 QScrollBar::handle:vertical {{
     background: {C.BORDER};
-    border-radius: 3px;
-    min-height: 30px;
+    border-radius: 7px;
+    min-height: 40px;
 }}
 
 QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {{
@@ -321,3 +321,35 @@ QFrame#status_bar {{
     max-height: {S.STATUS_H}px;
 }}
 """
+
+
+def enable_touch_scroll(scroll_area):
+    """Enable finger/touch kinetic scrolling on a QScrollArea.
+
+    Call this after creating any QScrollArea to allow
+    drag-to-scroll on touchscreens (RPi 5" display).
+    """
+    from PyQt6.QtWidgets import QScroller, QScrollerProperties
+    from PyQt6.QtCore import QVariant
+
+    scroller = QScroller.scroller(scroll_area.viewport())
+    scroller.grabGesture(
+        scroll_area.viewport(),
+        QScroller.ScrollerGestureType.LeftMouseButtonGesture,
+    )
+
+    # Tune for small touchscreen: responsive, not too much overshoot
+    props = scroller.scrollerProperties()
+    props.setScrollMetric(
+        QScrollerProperties.ScrollMetric.DragVelocitySmoothingFactor, 0.6
+    )
+    props.setScrollMetric(
+        QScrollerProperties.ScrollMetric.OvershootDragResistanceFactor, 0.4
+    )
+    props.setScrollMetric(
+        QScrollerProperties.ScrollMetric.SnapPositionRatio, 0.2
+    )
+    props.setScrollMetric(
+        QScrollerProperties.ScrollMetric.DecelerationFactor, 0.3
+    )
+    scroller.setScrollerProperties(props)

@@ -16,7 +16,7 @@ from PyQt6.QtWidgets import (
 from PyQt6.QtCore import Qt, QTimer, QRectF, QPointF
 from PyQt6.QtGui import QPainter, QPen, QColor, QFont, QPainterPath
 
-from ui_qt.theme import C, F, S
+from ui_qt.theme import C, F, S, enable_touch_scroll
 from hal.interfaces import LEDColor, LEDPattern, BuzzerPattern
 
 logger = logging.getLogger("smartlocker.sensor_test")
@@ -457,6 +457,7 @@ class SensorTestScreen(QWidget):
         self._rfid_history_layout.setSpacing(2)
         self._rfid_history_layout.addStretch()
         scroll.setWidget(self._rfid_history_container)
+        enable_touch_scroll(scroll)
         layout.addWidget(scroll, stretch=1)
 
         return tab

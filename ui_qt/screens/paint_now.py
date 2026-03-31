@@ -16,7 +16,7 @@ from PyQt6.QtWidgets import (
 from PyQt6.QtCore import Qt
 from PyQt6.QtGui import QDoubleValidator
 
-from ui_qt.theme import C, F, S
+from ui_qt.theme import C, F, S, enable_touch_scroll
 
 logger = logging.getLogger("smartlocker.ui.paint_now")
 
@@ -127,6 +127,7 @@ class PaintNowScreen(QWidget):
         self._body_layout.setSpacing(S.GAP)
 
         scroll.setWidget(self._body_widget)
+        enable_touch_scroll(scroll)
         root.addWidget(scroll, stretch=1)
 
     # ══════════════════════════════════════════════════════════

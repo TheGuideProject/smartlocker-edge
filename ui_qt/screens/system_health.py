@@ -21,7 +21,7 @@ from PyQt6.QtWidgets import (
 from PyQt6.QtCore import Qt, QTimer
 from PyQt6.QtGui import QPainter, QPen, QColor
 
-from ui_qt.theme import C, F, S
+from ui_qt.theme import C, F, S, enable_touch_scroll
 
 logger = logging.getLogger("smartlocker.ui.system_health")
 
@@ -189,6 +189,7 @@ class SystemHealthScreen(QWidget):
         body.addStretch(1)
 
         scroll.setWidget(body_widget)
+        enable_touch_scroll(scroll)
         root.addWidget(scroll, stretch=1)
 
     # ──────────────────────────────────────────────────────

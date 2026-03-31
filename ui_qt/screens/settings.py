@@ -14,7 +14,7 @@ from PyQt6.QtWidgets import (
 )
 from PyQt6.QtCore import Qt, QTimer
 
-from ui_qt.theme import C, F, S
+from ui_qt.theme import C, F, S, enable_touch_scroll
 
 logger = logging.getLogger("smartlocker.settings")
 
@@ -98,6 +98,7 @@ class SettingsScreen(QWidget):
 
         scroll_lay.addStretch()
         scroll.setWidget(scroll_content)
+        enable_touch_scroll(scroll)
         root.addWidget(scroll, 1)
 
     # ──────────────────────────────────────────────────────

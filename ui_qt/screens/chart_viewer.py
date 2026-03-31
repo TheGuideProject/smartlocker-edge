@@ -12,7 +12,7 @@ from PyQt6.QtWidgets import (
 )
 from PyQt6.QtCore import Qt
 
-from ui_qt.theme import C, F, S
+from ui_qt.theme import C, F, S, enable_touch_scroll
 
 logger = logging.getLogger("smartlocker.ui.chart_viewer")
 
@@ -81,6 +81,7 @@ class ChartViewerScreen(QWidget):
         self._cards_layout.addStretch(1)
 
         scroll.setWidget(self._scroll_content)
+        enable_touch_scroll(scroll)
         root.addWidget(scroll, stretch=1)
 
     # ══════════════════════════════════════════════════════════
