@@ -449,7 +449,7 @@ class SmartLockerWindow(QMainWindow):
 
         # Determine which product is expected based on mixing state
         from core.models import MixingState
-        state = self.mixing_engine.state
+        state = session.state
 
         expected_id = ""
         expected_name = ""
