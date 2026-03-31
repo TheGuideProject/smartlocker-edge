@@ -410,6 +410,21 @@ class SyncEngine:
                 self.db.save_maintenance_chart(chart)
                 logger.info(f"Maintenance chart synced: {chart.get('vessel_name', '?')}")
 
+            # Sync product barcodes from cloud
+            barcodes = config.get("barcodes", [])
+            if barcodes:
+                for bc in barcodes:
+                    self.db.save_barcode(
+                        barcode_data=bc.get("barcode_data", ""),
+                        product_id=bc.get("product_id", ""),
+                        ppg_code=bc.get("ppg_code", ""),
+                        batch_number=bc.get("batch_number", ""),
+                        product_name=bc.get("product_name", ""),
+                        color=bc.get("color", ""),
+                        barcode_type=bc.get("barcode_type", "code128"),
+                    )
+                logger.info(f"Barcodes synced from cloud: {len(barcodes)}")
+
             # Save vessel inventory from cloud
             vessel_inv = config.get("vessel_inventory")
             if vessel_inv is not None:
