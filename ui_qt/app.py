@@ -107,6 +107,12 @@ class SmartLockerWindow(QMainWindow):
         self._barcode_scanner.barcode_scanned.connect(self._on_barcode_scanned)
         QApplication.instance().installEventFilter(self._barcode_scanner)
 
+        # Weight alarm popup tracker (for RFID-down barcode fallback)
+        self._weight_alarm_popup = None
+
+        # Connect inventory engine weight alarm to UI
+        self.inventory_engine.on_weight_alarm = self._on_weight_alarm
+
     def _add_screen(self, name, widget):
         self._screens[name] = widget
         self.stack.addWidget(widget)
@@ -344,11 +350,47 @@ class SmartLockerWindow(QMainWindow):
         if fake:
             print(f"    Fake: {', '.join(fake)}")
 
+    def _on_weight_alarm(self, alarm_data: dict):
+        """Called by InventoryEngine when shelf weight changes and RFID is down.
+
+        Shows a full-screen alarm popup requesting barcode scan within 30s.
+        """
+        from ui_qt.widgets.weight_alarm_popup import WeightAlarmPopup
+
+        logger.warning(f"WEIGHT ALARM triggered: {alarm_data}")
+
+        # Close any existing alarm popup
+        if self._weight_alarm_popup:
+            try:
+                self._weight_alarm_popup.close()
+            except Exception:
+                pass
+
+        # Use QTimer to show popup from main thread (alarm may fire from poll thread)
+        QTimer.singleShot(0, lambda: self._show_weight_alarm(alarm_data))
+
+    def _show_weight_alarm(self, alarm_data: dict):
+        """Show weight alarm popup on main thread."""
+        from ui_qt.widgets.weight_alarm_popup import WeightAlarmPopup
+
+        popup = WeightAlarmPopup(alarm_data, parent=self)
+        self._weight_alarm_popup = popup
+
+        result = popup.exec()
+
+        if result != popup.DialogCode.Accepted:
+            # Timeout or skip — already handled by inventory_engine timeout
+            logger.warning("Weight alarm: no barcode scanned (timeout/skip)")
+
+        self._weight_alarm_popup = None
+
     def _on_barcode_scanned(self, scan_event):
         """Handle barcode scan from USB scanner — always active.
 
-        If in mixing mode: verify product on scale (RFID fallback).
-        Otherwise: show inventory load/unload popup.
+        Priority:
+        1. Weight alarm active: resolve alarm with scanned product
+        2. Mixing mode: verify product on scale (RFID fallback)
+        3. Normal: show inventory load/unload popup
         """
         from core.barcode_scanner import lookup_barcode_product
 
@@ -365,7 +407,14 @@ class SmartLockerWindow(QMainWindow):
                 pass
             return
 
-        # Check if mixing session is active
+        # PRIORITY 1: Weight alarm active — resolve with barcode
+        if self._weight_alarm_popup and self.inventory_engine._pending_weight_alarm:
+            self.inventory_engine.resolve_weight_alarm(product_info)
+            self._weight_alarm_popup.on_barcode_resolved(product_info)
+            logger.info(f"Weight alarm resolved via barcode: {product_info.get('product_name')}")
+            return
+
+        # PRIORITY 2: Mixing session active
         mixing_active = (
             hasattr(self, 'mixing_engine')
             and self.mixing_engine.session is not None

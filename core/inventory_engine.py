@@ -82,6 +82,19 @@ class InventoryEngine:
         # Whether there's an active touchscreen session (set by mixing engine)
         self.active_session = False
 
+        # ── Shelf weight monitoring (RFID fallback) ──
+        self._last_shelf_weights: Dict[str, float] = {}  # shelf_id -> last stable weight
+        self._weight_drop_threshold_g = 100.0  # Min drop to detect can removal
+        self._weight_rise_threshold_g = 100.0  # Min rise to detect can placement
+        self._rfid_healthy = True  # Tracks RFID health status
+        self._pending_weight_alarm = False  # True when waiting for barcode scan
+        self._weight_alarm_time = 0.0  # When alarm was triggered
+        self._weight_alarm_data: Dict = {}  # Alarm context data
+        self.BARCODE_SCAN_TIMEOUT_S = 30  # Seconds to scan barcode after alarm
+
+        # Callback for UI alarm popup (set by app.py)
+        self.on_weight_alarm = None  # Callable: on_weight_alarm(alarm_data)
+
     def set_database(self, db: 'Database') -> None:
         """Set the database reference for product lookups and slot state persistence."""
         self._db = db
@@ -214,35 +227,47 @@ class InventoryEngine:
 
         Reads all sensors, detects changes, publishes events.
         """
-        # 1. Poll RFID tags
-        current_readings = self.rfid.poll_tags()
-        current_tag_ids = {r.tag_id for r in current_readings}
-        current_by_reader = {r.reader_id: r for r in current_readings}
+        # 0. Check RFID health periodically
+        try:
+            self._rfid_healthy = self.rfid.is_healthy()
+        except Exception:
+            self._rfid_healthy = False
 
-        # 2. Detect newly appeared tags (can placed)
-        new_tags = current_tag_ids - self._previous_tags
-        for reading in current_readings:
-            if reading.tag_id in new_tags:
-                self._handle_tag_appeared(reading)
+        # 1. Poll RFID tags (only if healthy)
+        if self._rfid_healthy:
+            current_readings = self.rfid.poll_tags()
+            current_tag_ids = {r.tag_id for r in current_readings}
 
-        # 3. Detect disappeared tags (can removed)
-        gone_tags = self._previous_tags - current_tag_ids
-        for tag_id in gone_tags:
-            self._handle_tag_disappeared(tag_id)
+            # 2. Detect newly appeared tags (can placed)
+            new_tags = current_tag_ids - self._previous_tags
+            for reading in current_readings:
+                if reading.tag_id in new_tags:
+                    self._handle_tag_appeared(reading)
+
+            # 3. Detect disappeared tags (can removed)
+            gone_tags = self._previous_tags - current_tag_ids
+            for tag_id in gone_tags:
+                self._handle_tag_disappeared(tag_id)
+
+            # Update previous state
+            self._previous_tags = current_tag_ids
+        else:
+            # RFID down — clear previous tags to avoid stale state
+            self._previous_tags = set()
 
         # 4. Check removal timeouts
         self._check_removal_timeouts()
 
-        # 5. Read shelf weights (for logging and anomaly detection)
+        # 5. Check barcode scan timeout (alarm mode)
+        self._check_weight_alarm_timeout()
+
+        # 6. Read shelf weights (for logging and anomaly detection)
         for shelf in self.shelves.values():
             try:
                 reading = self.weight.read_weight(shelf.weight_channel)
                 self._process_weight_reading(shelf, reading)
             except Exception as e:
                 logger.warning(f"Weight read failed for {shelf.shelf_id}: {e}")
-
-        # Update previous state
-        self._previous_tags = current_tag_ids
 
     def _handle_tag_appeared(self, reading: TagReading) -> None:
         """A new tag was detected — can was placed on a slot."""
@@ -465,10 +490,184 @@ class InventoryEngine:
             self._removal_times.pop(slot_id, None)
 
     def _process_weight_reading(self, shelf: Shelf, reading: WeightReading) -> None:
-        """Process a weight reading for anomaly detection and logging."""
-        # For now, just store the reading.
-        # Weight-based usage estimation is handled in usage_calculator.py
-        pass
+        """Process a weight reading — detects can removal/placement when RFID is down."""
+        sid = shelf.shelf_id
+        current_g = reading.grams
+
+        # Initialize baseline on first read
+        if sid not in self._last_shelf_weights:
+            self._last_shelf_weights[sid] = current_g
+            return
+
+        last_g = self._last_shelf_weights[sid]
+        diff = current_g - last_g
+
+        # Only trigger alarm if RFID is NOT healthy and we're not already alarming
+        if not self._rfid_healthy and not self._pending_weight_alarm:
+
+            if diff < -self._weight_drop_threshold_g:
+                # ── WEIGHT DROP: can removed without RFID identification ──
+                logger.warning(
+                    f"WEIGHT ALARM: {sid} dropped {abs(diff):.0f}g "
+                    f"(RFID down — need barcode scan!)"
+                )
+                self._trigger_weight_alarm(
+                    shelf_id=sid,
+                    action="removed",
+                    weight_before_g=last_g,
+                    weight_after_g=current_g,
+                    weight_diff_g=abs(diff),
+                )
+                # Update baseline to current (after removal)
+                self._last_shelf_weights[sid] = current_g
+
+            elif diff > self._weight_rise_threshold_g:
+                # ── WEIGHT RISE: can placed without RFID identification ──
+                logger.warning(
+                    f"WEIGHT ALARM: {sid} increased {diff:.0f}g "
+                    f"(RFID down — need barcode scan!)"
+                )
+                self._trigger_weight_alarm(
+                    shelf_id=sid,
+                    action="placed",
+                    weight_before_g=last_g,
+                    weight_after_g=current_g,
+                    weight_diff_g=abs(diff),
+                )
+                # Update baseline to current (after placement)
+                self._last_shelf_weights[sid] = current_g
+
+        elif self._rfid_healthy and not self._pending_weight_alarm:
+            # RFID is working — just track weight baseline (update slowly to avoid drift)
+            # Only update if reading is stable
+            if reading.stable or abs(diff) > 50:
+                self._last_shelf_weights[sid] = current_g
+
+    def _trigger_weight_alarm(self, shelf_id: str, action: str,
+                               weight_before_g: float, weight_after_g: float,
+                               weight_diff_g: float) -> None:
+        """Trigger alarm: buzzer + request barcode scan within 30 seconds."""
+        self._pending_weight_alarm = True
+        self._weight_alarm_time = time.time()
+        self._weight_alarm_data = {
+            "shelf_id": shelf_id,
+            "action": action,  # "removed" or "placed"
+            "weight_before_g": weight_before_g,
+            "weight_after_g": weight_after_g,
+            "weight_diff_g": weight_diff_g,
+            "timestamp": time.time(),
+        }
+
+        # LOUD BUZZER ALARM
+        self.buzzer.play(BuzzerPattern.ERROR)
+
+        # RED LED blinking on all slots of this shelf
+        shelf = self.shelves.get(shelf_id)
+        if shelf:
+            for slot in shelf.slots:
+                self.led.set_slot(slot.slot_id, LEDColor.RED, LEDPattern.BLINK_FAST)
+
+        # Notify UI to show alarm popup
+        if self.on_weight_alarm:
+            try:
+                self.on_weight_alarm(self._weight_alarm_data)
+            except Exception as e:
+                logger.error(f"Weight alarm callback failed: {e}")
+
+    def resolve_weight_alarm(self, product_info: dict) -> None:
+        """Called when user scans barcode to resolve weight alarm.
+
+        Args:
+            product_info: Product info from barcode scan lookup
+        """
+        if not self._pending_weight_alarm:
+            return
+
+        alarm = self._weight_alarm_data
+        action = alarm.get("action", "removed")
+
+        # Determine event type
+        event_type = (
+            EventType.CAN_REMOVED if action == "removed"
+            else EventType.CAN_PLACED
+        )
+
+        # Publish event with product + weight info
+        self.event_bus.publish(Event(
+            event_type=event_type,
+            device_id=settings.DEVICE_ID,
+            shelf_id=alarm.get("shelf_id", ""),
+            tag_id=f"barcode:{product_info.get('ppg_code', '')}:{product_info.get('batch_number', '')}",
+            data={
+                "product_id": product_info.get("product_id", ""),
+                "product_name": product_info.get("product_name", ""),
+                "ppg_code": product_info.get("ppg_code", ""),
+                "batch_number": product_info.get("batch_number", ""),
+                "color": product_info.get("color", ""),
+                "source": "weight_alarm_barcode",
+                "weight_confirmed": True,
+                "weight_g": alarm.get("weight_diff_g", 0),
+                "weight_before_g": alarm.get("weight_before_g", 0),
+                "weight_after_g": alarm.get("weight_after_g", 0),
+            },
+            confirmation=EventConfirmation.CONFIRMED.value,
+        ))
+
+        logger.info(
+            f"Weight alarm RESOLVED: {action} {product_info.get('product_name')} "
+            f"({alarm.get('weight_diff_g', 0):.0f}g)"
+        )
+
+        # Clear alarm state
+        self._clear_weight_alarm()
+        self.buzzer.play(BuzzerPattern.CONFIRM)
+
+    def _check_weight_alarm_timeout(self) -> None:
+        """Check if barcode scan timeout expired — log unauthorized event."""
+        if not self._pending_weight_alarm:
+            return
+
+        elapsed = time.time() - self._weight_alarm_time
+        if elapsed < self.BARCODE_SCAN_TIMEOUT_S:
+            return
+
+        # TIMEOUT — no barcode scanned in 30 seconds
+        alarm = self._weight_alarm_data
+        logger.warning(
+            f"Weight alarm TIMEOUT: no barcode scanned in {self.BARCODE_SCAN_TIMEOUT_S}s — "
+            f"logging unauthorized {alarm.get('action', 'removal')}"
+        )
+
+        # Publish unauthorized event
+        self.event_bus.publish(Event(
+            event_type=EventType.UNAUTHORIZED_REMOVAL,
+            device_id=settings.DEVICE_ID,
+            shelf_id=alarm.get("shelf_id", ""),
+            data={
+                "source": "weight_alarm_timeout",
+                "action": alarm.get("action", "removed"),
+                "weight_before_g": alarm.get("weight_before_g", 0),
+                "weight_after_g": alarm.get("weight_after_g", 0),
+                "weight_diff_g": alarm.get("weight_diff_g", 0),
+                "timeout_s": self.BARCODE_SCAN_TIMEOUT_S,
+            },
+        ))
+
+        self._clear_weight_alarm()
+
+    def _clear_weight_alarm(self) -> None:
+        """Clear the weight alarm state and restore LEDs."""
+        self._pending_weight_alarm = False
+        self._weight_alarm_time = 0.0
+        self._weight_alarm_data = {}
+
+        # Restore LEDs to normal
+        for shelf in self.shelves.values():
+            for slot in shelf.slots:
+                if slot.status == SlotStatus.OCCUPIED:
+                    self.led.set_slot(slot.slot_id, LEDColor.GREEN, LEDPattern.SOLID)
+                else:
+                    self.led.clear_slot(slot.slot_id)
 
     # ---- PUBLIC API ----
 
