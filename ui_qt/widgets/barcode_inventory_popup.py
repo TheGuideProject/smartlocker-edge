@@ -212,7 +212,7 @@ class BarcodeInventoryPopup(QDialog):
             reading = self.app.weight.read_weight("shelf1")
             current = reading.grams
         except Exception:
-            self._weight_label.setText("-- g")
+            self._weight_label.setText("-- kg")
             return
 
         if self._initial_weight is None:
@@ -220,7 +220,7 @@ class BarcodeInventoryPopup(QDialog):
             return
 
         diff = current - self._initial_weight
-        self._weight_label.setText(f"{current:.0f} g")
+        self._weight_label.setText(f"{current / 1000:.2f} kg")
 
         self._final_weight = current
         self._weight_diff = diff
@@ -232,7 +232,7 @@ class BarcodeInventoryPopup(QDialog):
                     f"font-size: {F.H1}px; font-weight: bold; color: {C.SUCCESS};"
                 )
                 self._status_label.setText(
-                    f"Weight increased +{diff:.0f}g — can detected!"
+                    f"Weight increased +{diff / 1000:.2f} kg -- product detected!"
                 )
                 self._btn_confirm.setEnabled(True)
                 self._confirmed = True
@@ -248,7 +248,7 @@ class BarcodeInventoryPopup(QDialog):
                     f"font-size: {F.H1}px; font-weight: bold; color: {C.WARNING};"
                 )
                 self._status_label.setText(
-                    f"Weight decreased {diff:.0f}g — can removed!"
+                    f"Weight decreased {diff / 1000:.2f} kg -- product removed!"
                 )
                 self._btn_confirm.setEnabled(True)
                 self._confirmed = True

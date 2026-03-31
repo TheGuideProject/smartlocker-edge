@@ -80,7 +80,7 @@ class WeightAlarmPopup(QDialog):
         # Weight info
         diff_g = self.alarm_data.get("weight_diff_g", 0)
         direction = "-" if self._is_removal else "+"
-        weight_lbl = QLabel(f"Weight change: {direction}{diff_g:.0f}g")
+        weight_lbl = QLabel(f"Weight change: {direction}{diff_g / 1000:.2f} kg")
         weight_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
         weight_lbl.setStyleSheet(
             f"font-size: {F.H2}px; color: {C.WARNING}; background: transparent;"

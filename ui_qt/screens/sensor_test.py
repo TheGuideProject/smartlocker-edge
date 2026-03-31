@@ -84,8 +84,8 @@ class WeightChartWidget(QWidget):
         # Labels
         painter.setPen(QColor(C.TEXT_MUTED))
         painter.setFont(QFont("Segoe UI", 7))
-        painter.drawText(QRectF(0, m - 2, 36, 12), Qt.AlignmentFlag.AlignLeft, f"{mx:.0f}g")
-        painter.drawText(QRectF(0, m + ph - 10, 36, 12), Qt.AlignmentFlag.AlignLeft, f"{mn:.0f}g")
+        painter.drawText(QRectF(0, m - 2, 44, 12), Qt.AlignmentFlag.AlignLeft, f"{mx / 1000:.1f}kg")
+        painter.drawText(QRectF(0, m + ph - 10, 44, 12), Qt.AlignmentFlag.AlignLeft, f"{mn / 1000:.1f}kg")
 
         # Line + fill
         n = len(data)
@@ -338,8 +338,8 @@ class SensorTestScreen(QWidget):
             return
         try:
             r = self.app.weight.read_weight(self._active_channel)
-            self._weight_grams.setText(f"{r.grams:.1f} g")
-            self._weight_kg.setText(f"{r.grams / 1000:.3f} kg")
+            self._weight_grams.setText(f"{r.grams / 1000:.2f} kg")
+            self._weight_kg.setText(f"{r.grams:.0f} g")
             self._weight_raw.setText(f"RAW: {r.raw_value}")
             c = C.SUCCESS if r.stable else C.WARNING
             txt = "STABLE" if r.stable else "..."

@@ -197,12 +197,24 @@ def lookup_barcode_product(db, scan: BarcodeScanEvent) -> Optional[Dict[str, Any
     Tries multiple strategies:
     1. Full barcode_data match in product_barcodes table
     2. PPG code match in product table
-    3. Product name match
+    3. Fallback: return barcode data as-is (always works for valid scans)
 
-    Returns dict with product info or None.
+    NEVER returns None for a valid barcode — worst case returns raw data.
     """
-    if not db or not scan.is_valid:
+    if not scan.is_valid:
         return None
+
+    if not db:
+        # No database — return raw barcode data
+        return {
+            "product_id": "",
+            "product_name": scan.product_name or f"PPG-{scan.ppg_code}",
+            "ppg_code": scan.ppg_code,
+            "product_type": "",
+            "batch_number": scan.batch_number,
+            "color": scan.color,
+            "match_type": "no_db",
+        }
 
     # Strategy 1: Look up by full barcode data string
     try:
@@ -210,10 +222,10 @@ def lookup_barcode_product(db, scan: BarcodeScanEvent) -> Optional[Dict[str, Any
         if result:
             logger.info(f"Barcode matched (full): {result.get('product_name')}")
             return result
-    except Exception:
-        pass
+    except Exception as e:
+        logger.debug(f"Barcode full lookup failed: {e}")
 
-    # Strategy 2: Look up by PPG code
+    # Strategy 2: Look up by PPG code in product table
     try:
         result = db.get_product_by_ppg_code(scan.ppg_code)
         if result:
@@ -227,19 +239,18 @@ def lookup_barcode_product(db, scan: BarcodeScanEvent) -> Optional[Dict[str, Any
                 "color": scan.color,
                 "match_type": "ppg_code",
             }
-    except Exception:
-        pass
+    except Exception as e:
+        logger.debug(f"Barcode ppg_code lookup failed: {e}")
 
-    # Strategy 3: Return parsed barcode data without DB match
-    if scan.product_name:
-        return {
-            "product_id": "",
-            "product_name": scan.product_name,
-            "ppg_code": scan.ppg_code,
-            "product_type": "",
-            "batch_number": scan.batch_number,
-            "color": scan.color,
-            "match_type": "barcode_only",
-        }
-
-    return None
+    # Strategy 3: ALWAYS return something for valid barcodes
+    # Use whatever we parsed from the barcode itself
+    logger.info(f"Barcode not in DB — using raw data: PPG={scan.ppg_code}")
+    return {
+        "product_id": "",
+        "product_name": scan.product_name or f"PPG-{scan.ppg_code}",
+        "ppg_code": scan.ppg_code,
+        "product_type": "",
+        "batch_number": scan.batch_number,
+        "color": scan.color,
+        "match_type": "barcode_only",
+    }

@@ -197,7 +197,7 @@ class MixingScreen(QWidget):
         lay.addWidget(card)
 
         # Amount input
-        lbl_amount = QLabel("BASE AMOUNT (grams)")
+        lbl_amount = QLabel("BASE AMOUNT (kg)")
         lbl_amount.setStyleSheet(f"font-size: {_F_SM}px; font-weight: bold; color: {C.SECONDARY};")
         lay.addWidget(lbl_amount)
 
@@ -279,14 +279,14 @@ class MixingScreen(QWidget):
         wc_lay.setContentsMargins(_PAD, _PAD, _PAD, _PAD)
         wc_lay.setSpacing(4)
 
-        self._lbl_weight_current = QLabel("0.0g")
+        self._lbl_weight_current = QLabel("0.00 kg")
         self._lbl_weight_current.setStyleSheet(
             f"font-size: 48px; font-weight: bold; color: {C.PRIMARY};"
         )
         self._lbl_weight_current.setAlignment(Qt.AlignmentFlag.AlignCenter)
         wc_lay.addWidget(self._lbl_weight_current)
 
-        self._lbl_weight_target = QLabel("Target: ---g")
+        self._lbl_weight_target = QLabel("Target: --- kg")
         self._lbl_weight_target.setStyleSheet(
             f"font-size: {_F_MED}px; color: {C.TEXT_SEC};"
         )
@@ -612,8 +612,8 @@ class MixingScreen(QWidget):
         if m2 > 0:
             info_text = f"POUR BASE ({m2:.0f}m2 = {liters:.1f}L)"
         self._lbl_pour_title.setText(info_text)
-        self._lbl_weight_target.setText(f"Target: {base_grams:.0f}g")
-        self._lbl_weight_current.setText("0.0g")
+        self._lbl_weight_target.setText(f"Target: {base_grams / 1000:.2f} kg")
+        self._lbl_weight_current.setText("0.00 kg")
         self._progress_weight.setValue(0)
         self._lbl_weight_zone.setText("Place container, then pour...")
 
@@ -701,8 +701,8 @@ class MixingScreen(QWidget):
         try:
             base_g = float(text)
             hardener_g = base_g * (self._current_recipe.ratio_hardener / self._current_recipe.ratio_base)
-            self._lbl_calc_base.setText(f"Base: {base_g:.0f}g")
-            self._lbl_calc_hardener.setText(f"Hardener: {hardener_g:.0f}g")
+            self._lbl_calc_base.setText(f"Base: {base_g / 1000:.2f} kg")
+            self._lbl_calc_hardener.setText(f"Hardener: {hardener_g / 1000:.2f} kg")
         except (ValueError, AttributeError):
             self._lbl_calc_base.setText("")
             self._lbl_calc_hardener.setText("")
@@ -727,8 +727,8 @@ class MixingScreen(QWidget):
         self._weighing_phase = "base"
         self._weight_target = base_g
         self._lbl_pour_title.setText("POUR BASE")
-        self._lbl_weight_target.setText(f"Target: {base_g:.0f}g")
-        self._lbl_weight_current.setText("0.0g")
+        self._lbl_weight_target.setText(f"Target: {base_g / 1000:.2f} kg")
+        self._lbl_weight_current.setText("0.00 kg")
         self._progress_weight.setValue(0)
 
         self._stack.setCurrentIndex(2)
@@ -752,7 +752,7 @@ class MixingScreen(QWidget):
             logger.error(f"Weight read error: {e}")
             return
 
-        self._lbl_weight_current.setText(f"{current:.0f}g")
+        self._lbl_weight_current.setText(f"{current / 1000:.2f} kg")
 
         progress = (current / self._weight_target * 100) if self._weight_target > 0 else 0
         progress = min(100, max(0, progress))
@@ -834,9 +834,9 @@ class MixingScreen(QWidget):
                 self._tick_counter = 0
                 self._lbl_pour_title.setText("POUR HARDENER")
                 self._lbl_weight_target.setText(
-                    f"Target: +{hardener_target:.0f}g (total {self._weight_target:.0f}g)"
+                    f"Target: +{hardener_target / 1000:.2f} kg (total {self._weight_target / 1000:.2f} kg)"
                 )
-                self._lbl_weight_current.setText(f"{session.base_weight_actual_g:.0f}g")
+                self._lbl_weight_current.setText(f"{session.base_weight_actual_g / 1000:.2f} kg")
                 self._progress_weight.setValue(0)
                 self._lbl_weight_zone.setText("Pour hardener...")
 
