@@ -364,8 +364,16 @@ class SensorTestScreen(QWidget):
             QTimer.singleShot(1000, lambda: self._tare_btn.setText("TARE"))
 
     def _do_calibrate(self):
-        self._calibrate_btn.setText("Soon...")
-        QTimer.singleShot(1500, lambda: self._calibrate_btn.setText("CALIBRATE"))
+        if not self._active_channel:
+            return
+        from ui_qt.widgets.calibration_wizard import CalibrationWizard
+        wizard = CalibrationWizard(self.app, self._active_channel, parent=self)
+        result = wizard.exec()
+        if result == wizard.DialogCode.Accepted:
+            self._calibrate_btn.setText("SAVED!")
+            QTimer.singleShot(1500, lambda: self._calibrate_btn.setText("CALIBRATE"))
+        else:
+            self._calibrate_btn.setText("CALIBRATE")
 
     # ──────────────────────────────────────────────────
     # RFID TAB — compact: scan + result side by side

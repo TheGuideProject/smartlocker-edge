@@ -96,8 +96,8 @@ class HX711Channel:
             logger.error(f"[HX711] Read error on {self.name}: {e}")
             return None
 
-    def read_averaged(self, samples: int = 5) -> Optional[int]:
-        """Read multiple samples and return average."""
+    def read_averaged(self, samples: int = 7) -> Optional[int]:
+        """Read multiple samples, remove outliers, return average."""
         values = []
         for _ in range(samples):
             val = self.read_raw()
@@ -135,7 +135,7 @@ class HX711Channel:
         if len(self._readings_buffer) >= 3:
             recent = self._readings_buffer[-3:]
             spread = max(recent) - min(recent)
-            self._stable = spread < 10  # Stable if within 10g
+            self._stable = spread < 15  # Stable if within 15g
         else:
             self._stable = False
 
@@ -199,13 +199,16 @@ class RealWeightDriverHX711(WeightDriverInterface):
                                              gpio_handle=self._gpio_handle),
             }
 
-            # Apply calibration values (calibrated 2026-03-30 with 2kg reference)
+            # Apply calibration values — check DB first, then fall back to settings
             shelf_scale = getattr(settings, 'HX711_SHELF_SCALE', 9.81)
             mix_scale = getattr(settings, 'HX711_MIX_SCALE', 20.69)
             self._channels["shelf1"].scale = shelf_scale
             self._channels["shelf1"].inverted = True
             self._channels["mixing_scale"].scale = mix_scale
             self._channels["mixing_scale"].inverted = True
+
+            # Load saved calibration from DB (overrides defaults)
+            self._load_calibration_from_db()
 
             for ch in self._channels.values():
                 ch.setup_gpio()
@@ -239,6 +242,28 @@ class RealWeightDriverHX711(WeightDriverInterface):
             self._initialized = False
             return False
 
+    def _load_calibration_from_db(self):
+        """Load saved calibration values from SQLite config table."""
+        try:
+            from persistence.database import Database
+            db = Database()
+            db.connect()
+            import json
+            for name in self._channels:
+                raw = db.get_config(f"hx711_cal_{name}")
+                if raw:
+                    cal = json.loads(raw)
+                    ch = self._channels[name]
+                    ch.offset = cal.get("offset", ch.offset)
+                    ch.scale = cal.get("scale", ch.scale)
+                    logger.info(
+                        f"[HX711] Loaded DB calibration for {name}: "
+                        f"offset={ch.offset}, scale={ch.scale:.4f}"
+                    )
+            db.close()
+        except Exception as e:
+            logger.warning(f"[HX711] Could not load calibration from DB: {e}")
+
     def _reader_loop(self):
         """Background thread: continuously reads all channels and caches results."""
         logger.info("[HX711] Background reader thread started")
@@ -257,7 +282,7 @@ class RealWeightDriverHX711(WeightDriverInterface):
                 if not self._reader_running:
                     break
                 try:
-                    grams = ch.read_grams(samples=3)
+                    grams = ch.read_grams(samples=5)
                     self._cached_readings[name] = WeightReading(
                         grams=round(grams, 1),
                         channel=name,
@@ -300,6 +325,41 @@ class RealWeightDriverHX711(WeightDriverInterface):
 
     def get_channels(self) -> List[str]:
         return list(self._channels.keys())
+
+    def get_calibration(self, channel: str) -> dict:
+        """Return current calibration values for a channel."""
+        ch = self._channels.get(channel)
+        if not ch:
+            return {}
+        return {
+            "offset": ch.offset,
+            "scale": ch.scale,
+            "inverted": ch.inverted,
+        }
+
+    def set_calibration(self, channel: str, offset: int, scale: float) -> bool:
+        """Apply new calibration values to a channel and persist to DB."""
+        ch = self._channels.get(channel)
+        if not ch:
+            return False
+        ch.offset = offset
+        ch.scale = scale
+        ch._readings_buffer.clear()
+        ch._last_grams = 0.0
+        logger.info(f"[HX711] Calibration updated for {channel}: offset={offset}, scale={scale:.4f}")
+        return True
+
+    def read_raw_direct(self, channel: str, samples: int = 10) -> int:
+        """Read raw averaged value directly (for calibration wizard).
+        This requests a read from the background thread's channel."""
+        ch = self._channels.get(channel)
+        if not ch:
+            return 0
+        # Use cached raw value from background thread
+        cached = self._cached_readings.get(channel)
+        if cached:
+            return cached.raw_value
+        return 0
 
     def is_healthy(self) -> bool:
         if not self._initialized or not HAS_GPIO:
