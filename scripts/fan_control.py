@@ -179,48 +179,71 @@ def calculate_fan_speed(temp: float, current_speed: int) -> int:
     return current_speed
 
 
+import threading
+
+
+class FanController(threading.Thread):
+    """Background thread for fan control — can be started/stopped from the app."""
+
+    def __init__(self):
+        super().__init__(daemon=True, name="FanController")
+        self._stop_event = threading.Event()
+        self.current_speed = 0
+        self.current_temp = 0.0
+
+    def run(self):
+        """Main fan control loop (runs in background thread)."""
+        pwm_path = find_pwm_fan()
+        use_cooling_device = False
+        use_gpio = False
+
+        if pwm_path and "cooling_device" in pwm_path:
+            use_cooling_device = True
+            log.info(f"Using RPi5 cooling_device: {pwm_path}")
+        elif pwm_path:
+            log.info(f"Using PWM fan control: {pwm_path}")
+        else:
+            use_gpio = True
+            log.info("No sysfs fan found — trying GPIO PWM on pin 14")
+
+        last_temp = 0.0
+
+        log.info("Fan control started — aggressive curve (50C=40%, 70C=100%)")
+        log.info(f"Poll interval: {POLL_INTERVAL_S}s, Hysteresis: {HYSTERESIS_C}C")
+
+        while not self._stop_event.is_set():
+            temp = get_cpu_temp()
+            self.current_temp = temp
+            target_speed = calculate_fan_speed(temp, self.current_speed)
+
+            if target_speed != self.current_speed:
+                log.info(f"CPU {temp:.1f}C -> Fan {self.current_speed}% -> {target_speed}%")
+                self.current_speed = target_speed
+
+                if use_cooling_device:
+                    set_fan_speed_cooling_device(self.current_speed)
+                elif use_gpio:
+                    set_fan_speed_gpio(self.current_speed)
+                else:
+                    set_fan_speed_pwm(pwm_path, self.current_speed)
+
+            elif abs(temp - last_temp) > 3:
+                log.info(f"CPU {temp:.1f}C (fan at {self.current_speed}%)")
+
+            last_temp = temp
+            self._stop_event.wait(POLL_INTERVAL_S)
+
+        log.info("Fan control stopped.")
+
+    def stop(self):
+        """Signal the fan loop to stop."""
+        self._stop_event.set()
+
+
 def run_fan_loop():
-    """Main fan control loop."""
-    pwm_path = find_pwm_fan()
-    use_cooling_device = False
-    use_gpio = False
-
-    if pwm_path and "cooling_device" in pwm_path:
-        use_cooling_device = True
-        log.info(f"Using RPi5 cooling_device: {pwm_path}")
-    elif pwm_path:
-        log.info(f"Using PWM fan control: {pwm_path}")
-    else:
-        use_gpio = True
-        log.info("No sysfs fan found — trying GPIO PWM on pin 14")
-
-    current_speed = 0
-    last_temp = 0.0
-
-    log.info("Fan control started — aggressive curve (50C=40%, 70C=100%)")
-    log.info(f"Poll interval: {POLL_INTERVAL_S}s, Hysteresis: {HYSTERESIS_C}C")
-
-    while True:
-        temp = get_cpu_temp()
-        target_speed = calculate_fan_speed(temp, current_speed)
-
-        if target_speed != current_speed:
-            log.info(f"CPU {temp:.1f}C -> Fan {current_speed}% -> {target_speed}%")
-            current_speed = target_speed
-
-            if use_cooling_device:
-                set_fan_speed_cooling_device(current_speed)
-            elif use_gpio:
-                set_fan_speed_gpio(current_speed)
-            else:
-                set_fan_speed_pwm(pwm_path, current_speed)
-
-        elif abs(temp - last_temp) > 3:
-            # Log significant temp changes even if fan speed unchanged
-            log.info(f"CPU {temp:.1f}C (fan at {current_speed}%)")
-
-        last_temp = temp
-        time.sleep(POLL_INTERVAL_S)
+    """Main fan control loop (standalone mode)."""
+    controller = FanController()
+    controller.run()  # Run in current thread (not as daemon)
 
 
 def main():

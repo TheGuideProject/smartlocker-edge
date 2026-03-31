@@ -312,6 +312,16 @@ class SmartLockerWindow(QMainWindow):
         # Start system monitor background checks
         self.system_monitor.start(interval_s=60)
 
+        # Start fan control background thread
+        try:
+            from scripts.fan_control import FanController
+            self.fan_controller = FanController()
+            self.fan_controller.start()
+            logger.info("Fan control thread started")
+        except Exception as e:
+            self.fan_controller = None
+            logger.warning(f"Fan control not available: {e}")
+
         # Load maintenance chart
         self.maintenance_chart = self.db.get_maintenance_chart()
         if self.maintenance_chart:
@@ -478,6 +488,11 @@ class SmartLockerWindow(QMainWindow):
         self._poll_timer.stop()
         try:
             self.system_monitor.stop()
+        except Exception:
+            pass
+        try:
+            if self.fan_controller:
+                self.fan_controller.stop()
         except Exception:
             pass
         try:
