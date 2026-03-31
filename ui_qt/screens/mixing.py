@@ -953,9 +953,12 @@ class MixingScreen(QWidget):
                 self._state_badge.setText("WEIGHING HARDENER")
                 self._barcode_banner.setVisible(False)
 
-                # Hardener is determined by recipe — no barcode scan needed
-                self._barcode_verified_hardener = True
-                self._weight_timer.start(300)
+                # Require hardener barcode scan when RFID is down
+                if self._is_rfid_down():
+                    self._show_barcode_required("HARDENER")
+                else:
+                    self._barcode_verified_hardener = True
+                    self._weight_timer.start(300)
 
         elif self._weighing_phase == "hardener":
             engine.confirm_hardener_weighed()

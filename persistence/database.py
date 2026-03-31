@@ -101,6 +101,18 @@ class Database:
         except Exception:
             pass  # Column already exists
 
+        # Migration: add sync_retries column to event_log for retry tracking
+        try:
+            self._conn.execute("ALTER TABLE event_log ADD COLUMN sync_retries INTEGER DEFAULT 0")
+        except Exception:
+            pass  # Column already exists
+
+        # Migration: add sync_retries to mixing_session
+        try:
+            self._conn.execute("ALTER TABLE mixing_session ADD COLUMN sync_retries INTEGER DEFAULT 0")
+        except Exception:
+            pass  # Column already exists
+
         self._conn.commit()
 
     def close(self) -> None:
@@ -146,7 +158,10 @@ class Database:
         self.conn.commit()
 
     def get_unsynced_events(self, limit: int = 50) -> List[Dict[str, Any]]:
-        """Get events that haven't been synced to cloud yet."""
+        """Get events that haven't been synced to cloud yet.
+
+        Skips events that have exceeded MAX_SYNC_RETRIES (they get force-marked).
+        """
         cursor = self.conn.execute(
             """SELECT * FROM event_log
                WHERE synced = 0
@@ -158,12 +173,50 @@ class Database:
 
     def mark_events_synced(self, event_ids: List[str]) -> None:
         """Mark events as synced after successful cloud upload."""
+        if not event_ids:
+            return
         placeholders = ",".join("?" * len(event_ids))
         self.conn.execute(
             f"UPDATE event_log SET synced = 1 WHERE event_id IN ({placeholders})",
             event_ids,
         )
         self.conn.commit()
+
+    def increment_event_retries(self, event_ids: List[str]) -> None:
+        """Increment sync_retries counter for failed events."""
+        if not event_ids:
+            return
+        placeholders = ",".join("?" * len(event_ids))
+        self.conn.execute(
+            f"UPDATE event_log SET sync_retries = COALESCE(sync_retries, 0) + 1 WHERE event_id IN ({placeholders})",
+            event_ids,
+        )
+        self.conn.commit()
+
+    def get_stuck_events(self, max_retries: int = 5) -> List[str]:
+        """Get event IDs that have exceeded max retry count."""
+        cursor = self.conn.execute(
+            """SELECT event_id FROM event_log
+               WHERE synced = 0 AND COALESCE(sync_retries, 0) >= ?""",
+            (max_retries,),
+        )
+        return [row[0] for row in cursor.fetchall()]
+
+    def force_mark_stuck_synced(self, max_retries: int = 5) -> int:
+        """Force-mark stuck events as synced to unblock the queue.
+
+        Returns count of events force-marked.
+        """
+        cursor = self.conn.execute(
+            """UPDATE event_log SET synced = 1
+               WHERE synced = 0 AND COALESCE(sync_retries, 0) >= ?""",
+            (max_retries,),
+        )
+        count = cursor.rowcount
+        if count > 0:
+            self.conn.commit()
+            logger.warning(f"Force-marked {count} stuck events as synced (>{max_retries} retries)")
+        return count
 
     def get_event_count(self, synced: Optional[bool] = None) -> int:
         """Count events in the log."""

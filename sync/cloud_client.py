@@ -184,8 +184,11 @@ class CloudClient:
             return True, acked_ids
         else:
             status_code = data.get("status_code", "?") if isinstance(data, dict) else "?"
-            detail = data.get("detail", str(data)[:200]) if isinstance(data, dict) else str(data)[:200]
-            logger.error(f"Event sync failed (HTTP {status_code}): {detail}")
+            detail = data.get("detail", str(data)[:300]) if isinstance(data, dict) else str(data)[:300]
+            logger.error(
+                f"EVENT SYNC FAILED (HTTP {status_code}): {detail} | "
+                f"Batch size: {len(cloud_events)}, Types: {set(e.get('event_type','?') for e in cloud_events)}"
+            )
             # Still return skipped_ids so malformed events don't block queue
             if skipped_ids:
                 return True, skipped_ids

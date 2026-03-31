@@ -39,6 +39,7 @@ class SettingsScreen(QWidget):
         self._lbl_last_sync = None
         self._lbl_events = None
         self._btn_sync = None
+        self._btn_flush = None
         self._btn_unpair = None
 
         self._build_ui()
@@ -217,6 +218,13 @@ class SettingsScreen(QWidget):
         self._btn_sync.clicked.connect(self._on_sync_now)
         btn_row.addWidget(self._btn_sync)
 
+        self._btn_flush = QPushButton("FLUSH QUEUE")
+        self._btn_flush.setObjectName("danger")
+        self._btn_flush.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._btn_flush.setToolTip("Force-clear all stuck pending events")
+        self._btn_flush.clicked.connect(self._on_flush_queue)
+        btn_row.addWidget(self._btn_flush)
+
         self._btn_unpair = QPushButton("UNPAIR")
         self._btn_unpair.setObjectName("danger")
         self._btn_unpair.setCursor(Qt.CursorShape.PointingHandCursor)
@@ -358,10 +366,16 @@ class SettingsScreen(QWidget):
 
         total = sync_info.get("events_total", 0)
         unsynced = sync_info.get("events_unsynced", 0)
-        self._lbl_events.setText(f"{total} total, {unsynced} pending")
+        if unsynced > 10:
+            self._lbl_events.setText(f"{total} total, {unsynced} pending (!)")
+            self._lbl_events.setStyleSheet(f"color: {C.WARNING}; font-size: {F.BODY}px;")
+        else:
+            self._lbl_events.setText(f"{total} total, {unsynced} pending")
+            self._lbl_events.setStyleSheet(f"color: {C.TEXT}; font-size: {F.BODY}px;")
 
         # Button states
         self._btn_sync.setEnabled(is_paired)
+        self._btn_flush.setEnabled(is_paired and unsynced > 0)
         self._btn_unpair.setEnabled(is_paired)
 
     # ══════════════════════════════════════════════════════
@@ -379,6 +393,29 @@ class SettingsScreen(QWidget):
                 logger.error(f"Force sync failed: {e}")
         # Refresh after a short delay to show updated status
         QTimer.singleShot(2000, self._refresh_info)
+
+    def _on_flush_queue(self):
+        """Force-mark all pending events as synced to clear the queue."""
+        db = getattr(self.app, "db", None)
+        if db:
+            try:
+                count = db.get_event_count(synced=False)
+                if count == 0:
+                    logger.info("No pending events to flush")
+                    return
+                # Force mark ALL unsynced as synced
+                db.conn.execute("UPDATE event_log SET synced = 1 WHERE synced = 0")
+                db.conn.commit()
+                # Also flush mixing sessions
+                try:
+                    db.conn.execute("UPDATE mixing_session SET synced = 1 WHERE synced = 0")
+                    db.conn.commit()
+                except Exception:
+                    pass
+                logger.warning(f"FLUSH: Force-cleared {count} pending events from queue")
+            except Exception as e:
+                logger.error(f"Flush queue failed: {e}")
+        QTimer.singleShot(1000, self._refresh_info)
 
     def _on_unpair(self):
         """Unpair device from cloud."""

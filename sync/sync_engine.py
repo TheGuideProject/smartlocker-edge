@@ -267,15 +267,24 @@ class SyncEngine:
     # SYNC OPERATIONS
     # ============================================================
 
+    # Max retries before force-marking an event as synced
+    MAX_EVENT_RETRIES = 5
+
     def _do_event_sync(self) -> None:
         """Upload unsynced events to cloud.
 
         Strategy:
-        1. Try batch upload (fast path)
-        2. If batch fails, try one-by-one (identifies broken events)
-        3. Permanently broken events get marked synced after MAX_EVENT_RETRIES
+        1. Force-mark stuck events (>MAX_EVENT_RETRIES) to unblock queue
+        2. Try batch upload (fast path)
+        3. If batch fails, try one-by-one (identifies broken events)
+        4. Track retry count per event
         """
         try:
+            # Step 0: Clear stuck events that have failed too many times
+            stuck_count = self.db.force_mark_stuck_synced(self.MAX_EVENT_RETRIES)
+            if stuck_count > 0:
+                logger.warning(f"Cleared {stuck_count} stuck events from sync queue")
+
             events = self.db.get_unsynced_events(limit=settings.SYNC_BATCH_SIZE)
             if not events:
                 logger.debug("No events to sync")
@@ -300,34 +309,45 @@ class SyncEngine:
                     self._do_heartbeat()
                 except Exception:
                     pass
-            elif not success and len(events) > 1:
-                # Batch failed — try individual events to find the broken one(s)
-                logger.warning(f"Batch sync failed for {len(events)} events, trying one-by-one...")
-                individual_acked = []
-                for event in events:
-                    try:
-                        ok, aids = self.cloud.sync_events([event])
-                        if ok and aids:
-                            individual_acked.extend(aids)
-                        else:
-                            eid = event.get("event_id", "?")
-                            logger.warning(f"Event {eid} failed individually, will retry later")
-                    except Exception as e:
-                        eid = event.get("event_id", "?")
-                        logger.error(f"Event {eid} caused exception: {e}")
-                        # Mark permanently broken events as synced to unblock queue
-                        individual_acked.append(eid)
-
-                if individual_acked:
-                    self.db.mark_events_synced(individual_acked)
-                    logger.info(f"Individual sync: {len(individual_acked)}/{len(events)} events resolved")
-                    # Force heartbeat to update cloud pending counter
-                    try:
-                        self._do_heartbeat()
-                    except Exception:
-                        pass
             elif not success:
-                logger.warning("Event sync failed, will retry next cycle")
+                # Batch failed — increment retry count for ALL events in batch
+                all_eids = [e.get("event_id", "") for e in events if e.get("event_id")]
+                self.db.increment_event_retries(all_eids)
+                logger.warning(f"Batch sync failed for {len(events)} events, retries incremented")
+
+                # Try individual events to find the broken one(s)
+                if len(events) > 1:
+                    logger.info(f"Trying one-by-one sync for {len(events)} events...")
+                    individual_acked = []
+                    individual_failed = []
+                    for event in events:
+                        eid = event.get("event_id", "?")
+                        try:
+                            ok, aids = self.cloud.sync_events([event])
+                            if ok and aids:
+                                individual_acked.extend(aids)
+                            else:
+                                individual_failed.append(eid)
+                                logger.warning(
+                                    f"Event {eid} failed (type={event.get('event_type', '?')}, "
+                                    f"retries={event.get('sync_retries', 0)})"
+                                )
+                        except Exception as e:
+                            logger.error(f"Event {eid} exception: {e}")
+                            # Mark permanently broken events as synced to unblock queue
+                            individual_acked.append(eid)
+
+                    if individual_acked:
+                        self.db.mark_events_synced(individual_acked)
+                        logger.info(
+                            f"Individual sync: {len(individual_acked)} OK, "
+                            f"{len(individual_failed)} failed (will retry)"
+                        )
+                        # Force heartbeat to update cloud pending counter
+                        try:
+                            self._do_heartbeat()
+                        except Exception:
+                            pass
 
         except Exception as e:
             logger.error(f"Event sync error: {e}")
