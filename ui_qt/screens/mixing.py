@@ -712,11 +712,15 @@ class MixingScreen(QWidget):
     def _is_rfid_down(self) -> bool:
         """Check if RFID is unavailable (fake driver or unhealthy)."""
         try:
+            # Check driver_status FIRST — fake driver means no real RFID
+            driver_status = getattr(self.app, "driver_status", {})
+            if driver_status.get("rfid") == "fake":
+                return True
+            # Then check actual hardware health
             rfid = getattr(self.app, "rfid", None)
             if rfid and hasattr(rfid, "is_healthy"):
                 return not rfid.is_healthy()
-            driver_status = getattr(self.app, "driver_status", {})
-            return driver_status.get("rfid") == "fake"
+            return True  # No RFID driver at all
         except Exception:
             return True
 
