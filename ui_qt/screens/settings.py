@@ -10,9 +10,10 @@ import logging
 
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
-    QFrame, QScrollArea, QGridLayout, QSizePolicy,
+    QFrame, QScrollArea, QGridLayout, QSizePolicy, QDialog, QTextEdit,
 )
 from PyQt6.QtCore import Qt, QTimer
+from PyQt6.QtGui import QFont
 
 from ui_qt.theme import C, F, S, enable_touch_scroll
 
@@ -39,6 +40,7 @@ class SettingsScreen(QWidget):
         self._lbl_last_sync = None
         self._lbl_events = None
         self._btn_sync = None
+        self._btn_view_queue = None
         self._btn_flush = None
         self._btn_unpair = None
 
@@ -218,6 +220,12 @@ class SettingsScreen(QWidget):
         self._btn_sync.clicked.connect(self._on_sync_now)
         btn_row.addWidget(self._btn_sync)
 
+        self._btn_view_queue = QPushButton("VIEW QUEUE")
+        self._btn_view_queue.setObjectName("secondary")
+        self._btn_view_queue.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._btn_view_queue.clicked.connect(self._on_view_queue)
+        btn_row.addWidget(self._btn_view_queue)
+
         self._btn_flush = QPushButton("FLUSH QUEUE")
         self._btn_flush.setObjectName("danger")
         self._btn_flush.setCursor(Qt.CursorShape.PointingHandCursor)
@@ -393,6 +401,79 @@ class SettingsScreen(QWidget):
                 logger.error(f"Force sync failed: {e}")
         # Refresh after a short delay to show updated status
         QTimer.singleShot(2000, self._refresh_info)
+
+    def _on_view_queue(self):
+        """Show a dialog with details of all pending sync events."""
+        db = getattr(self.app, "db", None)
+        if not db:
+            return
+
+        try:
+            events = db.get_unsynced_events(limit=100)
+        except Exception as e:
+            events = []
+            logger.error(f"Failed to get unsynced events: {e}")
+
+        # Build summary text
+        if not events:
+            summary = "No pending events in sync queue."
+        else:
+            # Group by event_type
+            type_counts = {}
+            for ev in events:
+                et = ev.get("event_type", "unknown")
+                retries = ev.get("sync_retries", 0) or 0
+                if et not in type_counts:
+                    type_counts[et] = {"count": 0, "max_retries": 0}
+                type_counts[et]["count"] += 1
+                type_counts[et]["max_retries"] = max(type_counts[et]["max_retries"], retries)
+
+            lines = [f"PENDING EVENTS: {len(events)}\n"]
+            lines.append(f"{'TYPE':<30} {'COUNT':>5}  {'MAX RETRIES':>11}")
+            lines.append("-" * 50)
+            for et, info in sorted(type_counts.items(), key=lambda x: -x[1]["count"]):
+                lines.append(f"{et:<30} {info['count']:>5}  {info['max_retries']:>11}")
+
+            lines.append("\n\nLAST 10 EVENTS (newest first):")
+            lines.append("-" * 70)
+            import time as _time
+            for ev in reversed(events[-10:]):
+                ts = ev.get("timestamp", 0)
+                try:
+                    ts_str = _time.strftime("%Y-%m-%d %H:%M:%S", _time.localtime(ts))
+                except Exception:
+                    ts_str = str(ts)
+                et = ev.get("event_type", "?")
+                eid = ev.get("event_id", "?")[:12]
+                retries = ev.get("sync_retries", 0) or 0
+                tag = ev.get("tag_id", "") or ""
+                slot = ev.get("slot_id", "") or ""
+                lines.append(f"{ts_str}  {et:<25} retries={retries}  tag={tag}  slot={slot}")
+
+            summary = "\n".join(lines)
+
+        # Show in dialog
+        dlg = QDialog(self)
+        dlg.setWindowTitle("Sync Queue")
+        dlg.setMinimumSize(600, 400)
+        dlg.setStyleSheet(f"background-color: {C.BG}; color: {C.TEXT};")
+        layout = QVBoxLayout(dlg)
+
+        text = QTextEdit()
+        text.setReadOnly(True)
+        text.setFont(QFont("Courier", 10))
+        text.setStyleSheet(
+            f"background-color: {C.CARD_BG}; color: {C.TEXT}; "
+            f"border: 1px solid {C.BORDER}; padding: 8px;"
+        )
+        text.setPlainText(summary)
+        layout.addWidget(text)
+
+        btn_close = QPushButton("CLOSE")
+        btn_close.clicked.connect(dlg.accept)
+        layout.addWidget(btn_close)
+
+        dlg.exec()
 
     def _on_flush_queue(self):
         """Force-mark all pending events as synced to clear the queue."""
