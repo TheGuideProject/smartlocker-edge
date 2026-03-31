@@ -536,6 +536,14 @@ class SmartLockerWindow(QMainWindow):
                 },
             )
             self.event_bus.publish(event)
+
+            # Update local vessel_stock so inventory screen shows it immediately
+            self.db.update_vessel_stock_from_barcode(
+                product_info=product,
+                action=action,
+                weight_g=abs(weight_g),
+            )
+
             logger.info(
                 f"Inventory {action}: {product.get('product_name')} "
                 f"weight={weight_g:.0f}g (barcode, confirmed={result.get('weight_confirmed')})"

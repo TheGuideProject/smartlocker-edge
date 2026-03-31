@@ -202,8 +202,10 @@ class InventoryScreen(QWidget):
         layout.addLayout(top)
 
         # ── Quantity row ──
-        qty = float(item.get("quantity_liters", 0))
-        lbl_qty = QLabel(f"{qty:.1f} L")
+        qty = float(item.get("current_liters", 0) or item.get("quantity_liters", 0))
+        density = float(item.get("density_g_per_ml", 1.3) or 1.3)
+        weight_kg = qty * density  # liters * kg/L
+        lbl_qty = QLabel(f"{qty:.1f} L  ({weight_kg:.1f} kg)")
         lbl_qty.setStyleSheet(
             f"font-size: {F.BODY}px; font-weight: bold; color: {C.TEXT_SEC};"
         )

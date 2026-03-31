@@ -425,10 +425,10 @@ class SyncEngine:
                     )
                 logger.info(f"Barcodes synced from cloud: {len(barcodes)}")
 
-            # Save vessel inventory from cloud
+            # Save vessel inventory from cloud (upsert, don't clear —
+            # local barcode scans add to vessel_stock too)
             vessel_inv = config.get("vessel_inventory")
             if vessel_inv is not None:
-                self.db.clear_vessel_stock()
                 for item in vessel_inv:
                     self.db.upsert_vessel_stock(item)
                 logger.info(f"Vessel inventory synced: {len(vessel_inv)} products")

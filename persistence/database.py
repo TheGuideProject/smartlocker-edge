@@ -399,11 +399,67 @@ class Database:
         self.conn.commit()
 
     def get_vessel_stock(self) -> List[Dict[str, Any]]:
-        """Get all vessel stock entries (from cloud sync)."""
+        """Get all vessel stock entries (from cloud sync + local barcode scans)."""
         cursor = self.conn.execute(
             "SELECT * FROM vessel_stock ORDER BY product_name"
         )
         return [dict(row) for row in cursor.fetchall()]
+
+    def update_vessel_stock_from_barcode(self, product_info: dict,
+                                          action: str,
+                                          weight_g: float = 0.0) -> None:
+        """Update vessel_stock when a barcode scan adds/removes a product.
+
+        Args:
+            product_info: dict with product_id, product_name, ppg_code, etc.
+            action: 'load' or 'unload'
+            weight_g: weight in grams (absolute value of change)
+        """
+        product_id = product_info.get("product_id") or product_info.get("ppg_code", "")
+        product_name = product_info.get("product_name", "Unknown")
+        product_type = product_info.get("product_type", "base_paint")
+        density = float(product_info.get("density_g_per_ml", 1.3))
+
+        # Convert weight (grams) to liters: g / (density_g_ml * 1000)
+        liters_change = abs(weight_g) / (density * 1000) if density > 0 else 0.0
+
+        # Check if product already exists in vessel_stock
+        cursor = self.conn.execute(
+            "SELECT product_id, current_liters FROM vessel_stock WHERE product_id = ?",
+            (product_id,),
+        )
+        row = cursor.fetchone()
+
+        if row:
+            current = float(row[1] or 0)
+            if action == "load":
+                new_liters = current + liters_change
+            else:
+                new_liters = max(0, current - liters_change)
+            self.conn.execute(
+                """UPDATE vessel_stock
+                   SET current_liters = ?, updated_at = CURRENT_TIMESTAMP
+                   WHERE product_id = ?""",
+                (new_liters, product_id),
+            )
+        else:
+            # New product — insert it
+            initial = liters_change if action == "load" else 0.0
+            self.conn.execute(
+                """INSERT INTO vessel_stock
+                   (product_id, product_name, product_type,
+                    current_liters, initial_liters, density_g_per_ml,
+                    colors_json, updated_at)
+                   VALUES (?, ?, ?, ?, ?, ?, '[]', CURRENT_TIMESTAMP)""",
+                (product_id, product_name, product_type,
+                 initial, initial, density),
+            )
+
+        self.conn.commit()
+        logger.info(
+            f"Vessel stock updated: {action} {product_name} "
+            f"weight={weight_g:.0f}g liters_change={liters_change:.2f}L"
+        )
 
     def clear_vessel_stock(self) -> None:
         """Clear vessel stock table before full refresh."""

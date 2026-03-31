@@ -634,6 +634,15 @@ class InventoryEngine:
             f"({alarm.get('weight_diff_g', 0):.0f}g)"
         )
 
+        # Update local vessel_stock for immediate inventory visibility
+        if self._db:
+            inv_action = "unload" if action == "removed" else "load"
+            self._db.update_vessel_stock_from_barcode(
+                product_info=product_info,
+                action=inv_action,
+                weight_g=abs(alarm.get("weight_diff_g", 0)),
+            )
+
         # Clear alarm state
         self._clear_weight_alarm()
         self.buzzer.play(BuzzerPattern.CONFIRM)
