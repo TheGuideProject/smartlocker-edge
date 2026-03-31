@@ -185,14 +185,50 @@ class InventoryEngine:
                 self._reader_to_slot[slot.rfid_reader_id] = slot
         logger.info(f"Shelves rebuilt: {len(self._reader_to_slot)} slots configured")
 
+    # Max GPIO init retries before reboot
+    GPIO_MAX_RETRIES = 3
+    GPIO_RETRY_DELAY_S = 3
+
     def initialize(self) -> bool:
         """Initialize all hardware and set initial state.
+
         Each driver initializes independently — one failure does not block others.
+        If GPIO errors detected (busy/not allocated), retries with GPIO cleanup.
+        After GPIO_MAX_RETRIES failures, reboots the RPi automatically.
         """
-        rfid_ok = self.rfid.initialize()
-        weight_ok = self.weight.initialize()
-        led_ok = self.led.initialize()
-        buzzer_ok = self.buzzer.initialize()
+        gpio_failures = 0
+
+        for attempt in range(1, self.GPIO_MAX_RETRIES + 1):
+            rfid_ok = self.rfid.initialize()
+            weight_ok = self.weight.initialize()
+            led_ok = self.led.initialize()
+            buzzer_ok = self.buzzer.initialize()
+
+            ok = rfid_ok and weight_ok and led_ok and buzzer_ok
+
+            if ok:
+                break
+
+            # Check if this is a GPIO-related failure (worth retrying)
+            gpio_issue = not weight_ok or not buzzer_ok or not led_ok
+            if gpio_issue and attempt < self.GPIO_MAX_RETRIES:
+                logger.warning(
+                    f"InventoryEngine: GPIO init failed (attempt {attempt}/{self.GPIO_MAX_RETRIES}), "
+                    f"cleaning up and retrying in {self.GPIO_RETRY_DELAY_S}s..."
+                )
+                self._cleanup_gpio()
+                import time
+                time.sleep(self.GPIO_RETRY_DELAY_S)
+            elif gpio_issue and attempt == self.GPIO_MAX_RETRIES:
+                logger.error(
+                    f"InventoryEngine: GPIO init failed after {self.GPIO_MAX_RETRIES} attempts. "
+                    f"Auto-rebooting RPi to recover..."
+                )
+                self._auto_reboot()
+                # If reboot fails (e.g., on Windows dev), continue with partial drivers
+                break
+            else:
+                break  # Non-GPIO issue, don't retry
 
         if not rfid_ok:
             logger.warning("InventoryEngine: RFID init failed (continuing without)")
@@ -225,6 +261,27 @@ class InventoryEngine:
             logger.warning("InventoryEngine initialized with PARTIAL drivers")
 
         return ok
+
+    @staticmethod
+    def _cleanup_gpio():
+        """Try to release GPIO resources from a stuck previous process."""
+        try:
+            import RPi.GPIO as GPIO
+            GPIO.setwarnings(False)
+            GPIO.cleanup()
+            logger.info("InventoryEngine: GPIO cleanup completed")
+        except Exception as e:
+            logger.debug(f"GPIO cleanup skipped: {e}")
+
+    @staticmethod
+    def _auto_reboot():
+        """Reboot the RPi to recover from stuck GPIO state."""
+        import subprocess
+        logger.warning("InventoryEngine: REBOOTING RPi in 5 seconds...")
+        try:
+            subprocess.Popen(["sudo", "reboot"])
+        except Exception as e:
+            logger.error(f"Auto-reboot failed: {e}")
 
     def poll(self) -> None:
         """

@@ -556,7 +556,7 @@ class Database:
             product_id = ppg_code or product_name
 
         # Convert weight (grams) to liters: g / (density_g_ml * 1000)
-        liters_change = abs(weight_g) / (density * 1000) if density > 0 else 0.0
+        liters_change = round(abs(weight_g) / (density * 1000), 3) if density > 0 else 0.0
 
         # Check if product already exists in vessel_stock
         cursor = self.conn.execute(

@@ -478,6 +478,13 @@ class SyncEngine:
 
             logger.info(f"Config synced: {len(products)} products, {len(recipes)} recipes")
 
+            # Refresh vessel_stock colors from product catalog
+            # (fixes missing colors when vessel_stock was created before colors were synced)
+            try:
+                self._refresh_vessel_stock_colors(products)
+            except Exception as e:
+                logger.debug(f"Vessel stock color refresh error: {e}")
+
             # Process pending commands delivered via HTTP config
             pending_cmds = config.get("pending_commands", [])
             for cmd in pending_cmds:
@@ -849,6 +856,56 @@ class SyncEngine:
                 subprocess.run(["sudo", "systemctl", "reboot"], check=True)
             except Exception as e2:
                 logger.error(f"Reboot fallback also failed: {e2}")
+
+    # ============================================================
+    # VESSEL STOCK HELPERS
+    # ============================================================
+
+    def _refresh_vessel_stock_colors(self, products: list) -> None:
+        """Update colors_json in vessel_stock from the latest product catalog.
+
+        Fixes cases where vessel_stock was created before colors were synced.
+        """
+        import json
+        stock = self.db.get_vessel_stock()
+        if not stock:
+            return
+
+        # Build product lookup by ID
+        products_by_id = {}
+        for p in products:
+            pid = p.get("id", "")
+            products_by_id[pid] = p
+
+        updated = 0
+        for item in stock:
+            product_id = item.get("product_id", "")
+            current_colors = item.get("colors_json", "[]")
+
+            # Skip if already has colors
+            if current_colors and current_colors not in ("[]", "null", ""):
+                continue
+
+            # Look up in product catalog
+            p = products_by_id.get(product_id)
+            if not p:
+                continue
+
+            colors = p.get("colors_json", [])
+            if not colors:
+                continue
+
+            colors_str = json.dumps(colors) if isinstance(colors, list) else str(colors)
+            if colors_str and colors_str != "[]":
+                self.db.conn.execute(
+                    "UPDATE vessel_stock SET colors_json = ? WHERE product_id = ?",
+                    (colors_str, product_id),
+                )
+                updated += 1
+
+        if updated > 0:
+            self.db.conn.commit()
+            logger.info(f"Refreshed colors for {updated} vessel_stock entries")
 
     # ============================================================
     # STATUS
