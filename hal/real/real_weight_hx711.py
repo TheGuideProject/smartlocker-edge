@@ -127,6 +127,15 @@ class HX711Channel:
             grams = (raw - self.offset) / self.scale if self.scale != 0 else 0.0
         grams = max(0.0, grams)
 
+        # Spike filter: reject readings that jump more than 500g from last
+        if self._last_grams > 0 and abs(grams - self._last_grams) > 500:
+            self._spike_count = getattr(self, '_spike_count', 0) + 1
+            if self._spike_count < 3:
+                # Probably a spike — keep last good value
+                return self._last_grams
+            # 3 consecutive "spikes" = real weight change, accept it
+        self._spike_count = 0
+
         # Check stability
         self._readings_buffer.append(grams)
         if len(self._readings_buffer) > 10:
