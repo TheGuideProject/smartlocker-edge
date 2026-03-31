@@ -53,13 +53,22 @@ class SystemMonitor:
 
     def _monitor_loop(self):
         """Background loop that runs health checks periodically."""
-        time.sleep(10)  # Initial delay to let system settle
+        time.sleep(2)  # Short delay to let system settle
         while self._running:
             try:
                 self.check_all()
             except Exception as e:
                 logger.error(f"Monitor check error: {e}")
             time.sleep(self._interval)
+
+    def force_check(self) -> Optional[Dict[str, Any]]:
+        """Run an immediate health check (called from UI thread).
+        Safe to call — individual checks handle their own exceptions."""
+        try:
+            return self.check_all()
+        except Exception as e:
+            logger.error(f"Force check error: {e}")
+            return None
 
     def check_all(self) -> Dict[str, Any]:
         """Run all health checks. Returns status dict."""

@@ -817,6 +817,13 @@ class SystemHealthScreen(QWidget):
     # ══════════════════════════════════════════════════════════
 
     def on_enter(self):
+        # Force an immediate health check if no data yet
+        monitor = getattr(self.app, "system_monitor", None)
+        if monitor and not monitor.get_metrics():
+            try:
+                monitor.force_check()
+            except Exception:
+                pass
         self._refresh()
         self._timer.start(2000)
 
