@@ -351,6 +351,11 @@ class TagWriterScreen(QWidget):
 
     def on_leave(self):
         self._scan_timer.stop()
+        # Ensure RFID polling resumes if we leave during a write
+        if self._writing:
+            self._writing = False
+        if hasattr(self.app, 'inventory_engine'):
+            self.app.inventory_engine.rfid_paused = False
 
     # ══════════════════════════════════════════════════════
     # PRODUCT LOADING
@@ -536,6 +541,18 @@ class TagWriterScreen(QWidget):
         )
         QApplication.processEvents()
 
+        # Pause RFID polling to avoid PN532 serial contention during write
+        if hasattr(self.app, 'inventory_engine'):
+            self.app.inventory_engine.rfid_paused = True
+
+        # Safety timeout: if write hangs > 8s, force-reset UI
+        self._write_timeout_timer = QTimer()
+        self._write_timeout_timer.setSingleShot(True)
+        self._write_timeout_timer.timeout.connect(
+            lambda: self._on_write_timeout(product, write_string)
+        )
+        self._write_timeout_timer.start(8000)
+
         # Write in a thread to avoid blocking UI
         def do_write():
             try:
@@ -551,9 +568,24 @@ class TagWriterScreen(QWidget):
 
         threading.Thread(target=do_write, daemon=True).start()
 
+    def _on_write_timeout(self, product: dict, write_string: str):
+        """Safety: force-reset if write hangs more than 8 seconds."""
+        if not self._writing:
+            return  # Already completed normally
+        logger.warning("Tag write TIMEOUT (8s) — force-resetting UI")
+        self._on_write_complete(False, product, write_string, timed_out=True)
+
     def _on_write_complete(self, success: bool, product: dict,
-                           write_string: str):
+                           write_string: str, timed_out: bool = False):
         """Handle write result on main thread."""
+        # Cancel timeout timer
+        if hasattr(self, '_write_timeout_timer'):
+            self._write_timeout_timer.stop()
+
+        # Resume RFID polling
+        if hasattr(self.app, 'inventory_engine'):
+            self.app.inventory_engine.rfid_paused = False
+
         self._writing = False
         self._btn_write.setText(f"{Icon.SAVE}  WRITE TAG")
         self._btn_write.setEnabled(True)
@@ -617,9 +649,14 @@ class TagWriterScreen(QWidget):
             except Exception:
                 pass
         else:
-            self._show_result(
-                f"{Icon.ERROR} WRITE FAILED -- try again", False
-            )
+            if timed_out:
+                self._show_result(
+                    f"{Icon.ERROR} WRITE TIMEOUT -- keep tag steady & retry", False
+                )
+            else:
+                self._show_result(
+                    f"{Icon.ERROR} WRITE FAILED -- try again", False
+                )
 
             # Update result card accent
             self._result_card.setStyleSheet(

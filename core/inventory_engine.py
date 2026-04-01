@@ -100,6 +100,9 @@ class InventoryEngine:
         # Callback for UI alarm popup (set by app.py)
         self.on_weight_alarm = None  # Callable: on_weight_alarm(alarm_data)
 
+        # RFID pause flag — set by Tag Writer to avoid PN532 contention during writes
+        self.rfid_paused = False
+
     def set_database(self, db: 'Database') -> None:
         """Set the database reference for product lookups and slot state persistence."""
         self._db = db
@@ -357,8 +360,8 @@ class InventoryEngine:
             except Exception:
                 self._rfid_healthy = False
 
-        # 1. Poll RFID tags (only if healthy AND interval elapsed)
-        if do_rfid and self._rfid_healthy:
+        # 1. Poll RFID tags (only if healthy AND interval elapsed AND not paused)
+        if do_rfid and self._rfid_healthy and not self.rfid_paused:
             current_readings = self.rfid.poll_tags()
             current_tag_ids = {r.tag_id for r in current_readings}
 
