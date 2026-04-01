@@ -196,39 +196,34 @@ class InventoryEngine:
         If GPIO errors detected (busy/not allocated), retries with GPIO cleanup.
         After GPIO_MAX_RETRIES failures, reboots the RPi automatically.
         """
-        gpio_failures = 0
+        # Initialize each driver independently
+        rfid_ok = self.rfid.initialize()
+        weight_ok = self.weight.initialize()
+        led_ok = self.led.initialize()
+        buzzer_ok = False
 
+        # Only buzzer uses GPIO directly — retry with cleanup if it fails
         for attempt in range(1, self.GPIO_MAX_RETRIES + 1):
-            rfid_ok = self.rfid.initialize()
-            weight_ok = self.weight.initialize()
-            led_ok = self.led.initialize()
             buzzer_ok = self.buzzer.initialize()
-
-            ok = rfid_ok and weight_ok and led_ok and buzzer_ok
-
-            if ok:
+            if buzzer_ok:
                 break
-
-            # Check if this is a GPIO-related failure (worth retrying)
-            gpio_issue = not weight_ok or not buzzer_ok or not led_ok
-            if gpio_issue and attempt < self.GPIO_MAX_RETRIES:
+            if attempt < self.GPIO_MAX_RETRIES:
                 logger.warning(
-                    f"InventoryEngine: GPIO init failed (attempt {attempt}/{self.GPIO_MAX_RETRIES}), "
+                    f"InventoryEngine: Buzzer GPIO init failed (attempt {attempt}/{self.GPIO_MAX_RETRIES}), "
                     f"cleaning up and retrying in {self.GPIO_RETRY_DELAY_S}s..."
                 )
                 self._cleanup_gpio()
                 import time
                 time.sleep(self.GPIO_RETRY_DELAY_S)
-            elif gpio_issue and attempt == self.GPIO_MAX_RETRIES:
+            else:
                 logger.error(
-                    f"InventoryEngine: GPIO init failed after {self.GPIO_MAX_RETRIES} attempts. "
+                    f"InventoryEngine: Buzzer GPIO failed after {self.GPIO_MAX_RETRIES} attempts. "
                     f"Auto-rebooting RPi to recover..."
                 )
                 self._auto_reboot()
-                # If reboot fails (e.g., on Windows dev), continue with partial drivers
                 break
-            else:
-                break  # Non-GPIO issue, don't retry
+
+        ok = rfid_ok and weight_ok and led_ok and buzzer_ok
 
         if not rfid_ok:
             logger.warning("InventoryEngine: RFID init failed (continuing without)")
