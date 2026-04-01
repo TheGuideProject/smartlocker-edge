@@ -59,6 +59,7 @@ class RealRFIDDriverPN532USB(RFIDDriverInterface):
         self._pn532: Optional["PN532_UART"] = None
         self._initialized = False
         self._lock = threading.Lock()
+        self._skip_ports: set = set()  # Ports to skip (e.g. Arduino already claimed)
         self._reader_ids = [
             "shelf1_slot1", "shelf1_slot2",
             "shelf1_slot3", "shelf1_slot4",
@@ -78,29 +79,34 @@ class RealRFIDDriverPN532USB(RFIDDriverInterface):
         if self._port:
             return self._port
 
-        # Get ports claimed by Arduino
-        claimed_ports = set()
-        try:
-            from config.settings import WEIGHT_MODE
-            if WEIGHT_MODE == "arduino_serial":
-                import os
-                for check_port in ["/dev/ttyUSB0", "/dev/ttyUSB1", "/dev/ttyUSB2", "/dev/ttyUSB3"]:
-                    if os.path.exists(check_port):
-                        try:
-                            test = serial.Serial(check_port, 115200, timeout=0.5)
-                            time.sleep(0.3)
-                            test.reset_input_buffer()
-                            test.write(b'{"cmd":"ping"}\n')
-                            time.sleep(0.5)
-                            resp = test.readline().decode("utf-8", errors="ignore").strip()
-                            test.close()
-                            if "fw" in resp or "status" in resp or "boot" in resp:
-                                claimed_ports.add(check_port)
-                                logger.info(f"[PN532 USB] Skipping {check_port} (Arduino)")
-                        except Exception:
-                            pass
-        except Exception:
-            pass
+        # Ports to skip: explicitly set (daemon mode) + auto-detected Arduino
+        claimed_ports = set(self._skip_ports)
+        if claimed_ports:
+            logger.info(f"[PN532 USB] Pre-skipping ports: {claimed_ports}")
+
+        # Only probe for Arduino if no ports pre-skipped
+        if not claimed_ports:
+            try:
+                from config.settings import WEIGHT_MODE
+                if WEIGHT_MODE == "arduino_serial":
+                    import os
+                    for check_port in ["/dev/ttyUSB0", "/dev/ttyUSB1", "/dev/ttyUSB2", "/dev/ttyUSB3"]:
+                        if os.path.exists(check_port):
+                            try:
+                                test = serial.Serial(check_port, 115200, timeout=0.5)
+                                time.sleep(0.3)
+                                test.reset_input_buffer()
+                                test.write(b'{"cmd":"ping"}\n')
+                                time.sleep(0.5)
+                                resp = test.readline().decode("utf-8", errors="ignore").strip()
+                                test.close()
+                                if "fw" in resp or "status" in resp or "boot" in resp:
+                                    claimed_ports.add(check_port)
+                                    logger.info(f"[PN532 USB] Skipping {check_port} (Arduino)")
+                            except Exception:
+                                pass
+            except Exception:
+                pass
 
         try:
             for p in serial.tools.list_ports.comports():

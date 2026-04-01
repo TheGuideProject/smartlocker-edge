@@ -269,8 +269,25 @@ class HardwareDaemon:
 
         Order matters: Weight FIRST so Arduino claims its serial port,
         then RFID can skip it and find the PN532 on the remaining port.
+        We explicitly tell the RFID driver which port to avoid so it
+        doesn't probe (and disrupt) the Arduino's open connection.
         """
         weight_ok = self.weight.initialize()
+
+        # Tell RFID which port Arduino claimed — avoid probing it
+        arduino_port = getattr(self.weight, '_port', None)
+        if arduino_port and hasattr(self.rfid, '_skip_ports'):
+            self.rfid._skip_ports = {arduino_port}
+            logger.info(f"RFID will skip Arduino port: {arduino_port}")
+        elif arduino_port:
+            # Fallback: set RFID to use the OTHER USB port directly
+            import os
+            for candidate in ["/dev/ttyUSB0", "/dev/ttyUSB1", "/dev/ttyUSB2"]:
+                if candidate != arduino_port and os.path.exists(candidate):
+                    self.rfid._port = candidate
+                    logger.info(f"RFID port set to {candidate} (Arduino on {arduino_port})")
+                    break
+
         rfid_ok = self.rfid.initialize()
         led_ok = self.led.initialize()
         buzzer_ok = self.buzzer.initialize()
