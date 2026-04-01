@@ -389,6 +389,13 @@ class SensorTestScreen(QWidget):
             f"background-color: {C.SUCCESS if r_ok else C.DANGER};"
             f"border-radius: 6px; border: none;"
         )
+        # Update reader count label if multi-reader
+        try:
+            if hasattr(self.app.rfid, 'get_healthy_count'):
+                h, t = self.app.rfid.get_healthy_count()
+                self._rfid_health_lbl.setText(f"PN532 Multi ({h}/{t} readers)")
+        except Exception:
+            pass
 
     def _update_weight(self):
         self._update_health_indicators()
@@ -466,7 +473,17 @@ class SensorTestScreen(QWidget):
         drv_row.addWidget(drv_badge)
         self._rfid_health_dot = status_dot(False, size=12)
         drv_row.addWidget(self._rfid_health_dot)
-        self._rfid_health_lbl = QLabel("PN532 USB NFC")
+        # Show reader count if multi-reader driver
+        rfid_label = "PN532 USB NFC"
+        try:
+            ids = self.app.rfid.get_reader_ids()
+            if len(ids) > 1:
+                rfid_label = f"PN532 Multi ({len(ids)} readers)"
+            elif len(ids) == 1:
+                rfid_label = f"PN532 USB NFC ({ids[0]})"
+        except Exception:
+            pass
+        self._rfid_health_lbl = QLabel(rfid_label)
         self._rfid_health_lbl.setStyleSheet(
             f"font-size: {F.SMALL}px; font-weight: bold; color: {C.TEXT};"
         )
@@ -568,6 +585,7 @@ class SensorTestScreen(QWidget):
         try:
             tags = self.app.rfid.poll_tags()
             if tags:
+                # Show first tag in the detail card
                 t = tags[0]
                 self._rfid_uid.setText(t.tag_id)
                 self._rfid_signal.setText(f"{t.signal_strength}%")
@@ -575,8 +593,13 @@ class SensorTestScreen(QWidget):
                 self._rfid_batch.setText(t.batch_number or "---")
                 self._rfid_product.setText(t.product_name or "---")
                 self._rfid_color.setText(t.color or "---")
+                # Add ALL tags to history (multi-reader support)
                 ts = time.strftime("%H:%M:%S")
-                self._rfid_history.appendleft(f"{ts} | {t.tag_id} | {t.ppg_code or '?'}")
+                for tag in tags:
+                    reader = tag.reader_id or "?"
+                    self._rfid_history.appendleft(
+                        f"{ts} | {reader} | {tag.tag_id} | {tag.ppg_code or '?'}"
+                    )
                 self._rebuild_rfid_history()
             else:
                 self._rfid_uid.setText("No tag found")
@@ -589,7 +612,8 @@ class SensorTestScreen(QWidget):
             self._rfid_uid.setText("ERROR")
             self._rfid_signal.setText(str(e)[:30])
 
-        self._rfid_scan_btn.setText(f"{Icon.TAG}  SCAN NOW")
+        tag_count = f" ({len(tags)} tags)" if 'tags' in dir() and tags and len(tags) > 1 else ""
+        self._rfid_scan_btn.setText(f"{Icon.TAG}  SCAN NOW{tag_count}")
         self._rfid_scan_btn.setEnabled(True)
 
     def _rebuild_rfid_history(self):

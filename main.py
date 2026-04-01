@@ -6,6 +6,7 @@ Supports multiple modes including hardware daemon separation.
 
 Usage:
     python main.py                      # Qt UI (default, direct hardware access)
+    python main.py --no-daemon          # Same as above (explicit direct mode)
     python main.py --daemon             # Start hardware daemon only (no UI)
     python main.py --daemon-client      # Qt UI connecting to daemon via socket
     python main.py --cli                # Terminal-only mode (no GUI)

@@ -151,9 +151,12 @@ class RealWeightDriver(WeightDriverInterface):
                 if self._serial.in_waiting:
                     boot_data = self._serial.read(self._serial.in_waiting)
 
+                if boot_data:
+                    logger.info(f"[ARDUINO WEIGHT] Boot data on {port}: {boot_data[:80]!r}")
+
                 # Fast reject: if we got binary data with 0x00 bytes, it's likely PN532
                 if boot_data and b'\x00\x55' in boot_data:
-                    logger.debug(f"[ARDUINO WEIGHT] Skipping {port} (PN532 binary detected)")
+                    logger.info(f"[ARDUINO WEIGHT] Skipping {port} (PN532 binary detected)")
                     self._serial.close()
                     self._serial = None
                     continue

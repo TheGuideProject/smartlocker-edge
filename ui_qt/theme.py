@@ -237,7 +237,7 @@ QProgressBar {{
     min-height: 8px;
     max-height: 8px;
     text-align: center;
-    font-size: 0px;
+    font-size: 1px;
 }}
 
 QProgressBar::chunk {{

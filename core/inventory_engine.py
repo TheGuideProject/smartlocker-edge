@@ -226,7 +226,33 @@ class InventoryEngine:
         for shelf in shelves:
             for slot in shelf.slots:
                 self._reader_to_slot[slot.rfid_reader_id] = slot
+
+        # Ensure shelf/slot rows exist in DB (required by slot_state FK)
+        if self._db:
+            self._ensure_db_slots(shelves)
+
         logger.info(f"Shelves rebuilt: {len(self._reader_to_slot)} slots configured")
+
+    def _ensure_db_slots(self, shelves: List[Shelf]) -> None:
+        """Create shelf/slot rows in DB so slot_state FK constraints pass."""
+        try:
+            conn = self._db.conn
+            for shelf in shelves:
+                conn.execute(
+                    "INSERT OR IGNORE INTO shelf (shelf_id, position, weight_channel) "
+                    "VALUES (?, ?, ?)",
+                    (shelf.shelf_id, shelf.position, shelf.weight_channel),
+                )
+                for slot in shelf.slots:
+                    conn.execute(
+                        "INSERT OR IGNORE INTO slot (slot_id, shelf_id, position, "
+                        "rfid_reader_id, led_index) VALUES (?, ?, ?, ?, ?)",
+                        (slot.slot_id, slot.shelf_id, slot.position,
+                         slot.rfid_reader_id, slot.led_index),
+                    )
+            conn.commit()
+        except Exception as e:
+            logger.warning(f"Failed to ensure DB slot rows: {e}")
 
     # Max GPIO init retries before reboot
     GPIO_MAX_RETRIES = 3
