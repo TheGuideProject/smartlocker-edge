@@ -134,10 +134,12 @@ class SmartLockerWindow(QMainWindow):
             self.go_screen("home")  # Home for now, can switch to pairing
             logger.info("Cloud: NOT PAIRED")
 
-        # Sensor polling timer
-        self._poll_timer = QTimer()
-        self._poll_timer.timeout.connect(self._poll_sensors)
-        self._poll_timer.start(500)
+        # Hardware worker thread (polls sensors in background, never blocks UI)
+        from core.hardware_worker import HardwareWorker
+        self._hw_worker = HardwareWorker(self.inventory_engine, poll_interval_ms=500)
+        self._hw_worker.weight_alarm.connect(self._on_weight_alarm)
+        self._hw_worker.start()
+        logger.info("Hardware worker thread started")
 
         # Global click sound: buzzer TICK on every button press
         self._click_filter = ClickSoundFilter(self)
@@ -648,16 +650,13 @@ class SmartLockerWindow(QMainWindow):
                 f"weight={weight_g:.0f}g (barcode, confirmed={result.get('weight_confirmed')})"
             )
 
-    def _poll_sensors(self):
-        """Periodic sensor polling (every 500ms)."""
-        try:
-            self.inventory_engine.poll()
-        except Exception as e:
-            logger.debug(f"Poll error: {e}")
-
     def closeEvent(self, event):
         """Clean shutdown."""
-        self._poll_timer.stop()
+        # Stop hardware worker thread
+        try:
+            self._hw_worker.stop()
+        except Exception:
+            pass
         try:
             self.system_monitor.stop()
         except Exception:
