@@ -260,18 +260,31 @@ class InventoryEngine:
 
     def poll(self) -> None:
         """
-        Main polling cycle. Call this repeatedly (every RFID_POLL_INTERVAL_MS).
+        Main polling cycle. Called every 500ms from UI timer.
 
-        Reads all sensors, detects changes, publishes events.
+        RFID is polled at RFID_POLL_INTERVAL_MS (2s) to avoid
+        overwhelming the CH340 USB bridge. Weight is polled every cycle.
         """
-        # 0. Check RFID health periodically
-        try:
-            self._rfid_healthy = self.rfid.is_healthy()
-        except Exception:
-            self._rfid_healthy = False
+        # 0. RFID polling throttle — only poll every RFID_POLL_INTERVAL_MS
+        now = time.time()
+        rfid_interval_s = getattr(self, '_rfid_interval_s', None)
+        if rfid_interval_s is None:
+            from config.settings import RFID_POLL_INTERVAL_MS
+            self._rfid_interval_s = RFID_POLL_INTERVAL_MS / 1000.0
+            self._last_rfid_poll = 0.0
+            rfid_interval_s = self._rfid_interval_s
 
-        # 1. Poll RFID tags (only if healthy)
-        if self._rfid_healthy:
+        do_rfid = (now - self._last_rfid_poll) >= rfid_interval_s
+
+        if do_rfid:
+            self._last_rfid_poll = now
+            try:
+                self._rfid_healthy = self.rfid.is_healthy()
+            except Exception:
+                self._rfid_healthy = False
+
+        # 1. Poll RFID tags (only if healthy AND interval elapsed)
+        if do_rfid and self._rfid_healthy:
             current_readings = self.rfid.poll_tags()
             current_tag_ids = {r.tag_id for r in current_readings}
 

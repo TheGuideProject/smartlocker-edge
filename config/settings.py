@@ -49,7 +49,7 @@ VESSEL_IMO = "0000000"
 # ============================================================
 # SENSOR POLLING RATES
 # ============================================================
-RFID_POLL_INTERVAL_MS = 500       # How often to check RFID readers (milliseconds)
+RFID_POLL_INTERVAL_MS = 2000      # How often to check RFID readers (2s — CH340 bridge needs slower polling)
 WEIGHT_POLL_INTERVAL_MS = 200     # How often to read weight sensors
 WEIGHT_STABLE_WINDOW_S = 3.0     # Seconds of stable readings before considering weight "settled"
 WEIGHT_STABLE_TOLERANCE_G = 10   # Grams tolerance for "stable" weight
