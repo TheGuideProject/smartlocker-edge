@@ -71,7 +71,20 @@ def main_cli():
     print(f"  Mode: {mode.upper()}")
     print("=" * 60)
 
-    # ---- RFID Driver ----
+    # ---- Weight Driver (FIRST — Arduino must claim serial port before RFID) ----
+    if drv_weight == "real":
+        from config.settings import WEIGHT_MODE
+        if WEIGHT_MODE == "hx711_direct":
+            from hal.real.real_weight_hx711 import RealWeightDriverHX711
+            weight = RealWeightDriverHX711()
+        else:
+            from hal.real.real_weight import RealWeightDriver
+            weight = RealWeightDriver()
+    else:
+        from hal.fake.fake_weight import FakeWeightDriver
+        weight = FakeWeightDriver()
+
+    # ---- RFID Driver (after weight — so Arduino already claimed its port) ----
     if drv_rfid == "real":
         from config.settings import RFID_MODULE
         if RFID_MODULE == "pn532_usb":
@@ -86,19 +99,6 @@ def main_cli():
     else:
         from hal.fake.fake_rfid import FakeRFIDDriver
         rfid = FakeRFIDDriver()
-
-    # ---- Weight Driver ----
-    if drv_weight == "real":
-        from config.settings import WEIGHT_MODE
-        if WEIGHT_MODE == "hx711_direct":
-            from hal.real.real_weight_hx711 import RealWeightDriverHX711
-            weight = RealWeightDriverHX711()
-        else:
-            from hal.real.real_weight import RealWeightDriver
-            weight = RealWeightDriver()
-    else:
-        from hal.fake.fake_weight import FakeWeightDriver
-        weight = FakeWeightDriver()
 
     # ---- LED Driver ----
     if drv_led == "real":

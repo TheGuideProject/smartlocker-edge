@@ -223,7 +223,21 @@ class SmartLockerWindow(QMainWindow):
         else:
             self.mode = "test"
 
-        # ── RFID ──
+        # ── Weight (FIRST — Arduino must claim serial port before RFID) ──
+        if drv_weight == "real":
+            from config.settings import WEIGHT_MODE
+            if WEIGHT_MODE == "hx711_direct":
+                from hal.real.real_weight_hx711 import RealWeightDriverHX711
+                self.weight = RealWeightDriverHX711()
+            else:
+                # Arduino serial bridge (also provides LED control)
+                from hal.real.real_weight import RealWeightDriver
+                self.weight = RealWeightDriver()
+        else:
+            from hal.fake.fake_weight import FakeWeightDriver
+            self.weight = FakeWeightDriver(channels=["shelf1", "mixing_scale"])
+
+        # ── RFID (after weight — so Arduino already claimed its port) ──
         if drv_rfid == "real":
             from config.settings import RFID_MODULE
             if RFID_MODULE == "pn532_usb":
@@ -238,20 +252,6 @@ class SmartLockerWindow(QMainWindow):
         else:
             from hal.fake.fake_rfid import FakeRFIDDriver
             self.rfid = FakeRFIDDriver()
-
-        # ── Weight ──
-        if drv_weight == "real":
-            from config.settings import WEIGHT_MODE
-            if WEIGHT_MODE == "hx711_direct":
-                from hal.real.real_weight_hx711 import RealWeightDriverHX711
-                self.weight = RealWeightDriverHX711()
-            else:
-                # Arduino serial bridge (also provides LED control)
-                from hal.real.real_weight import RealWeightDriver
-                self.weight = RealWeightDriver()
-        else:
-            from hal.fake.fake_weight import FakeWeightDriver
-            self.weight = FakeWeightDriver(channels=["shelf1", "mixing_scale"])
 
         # ── LED ──
         if drv_led == "real":
