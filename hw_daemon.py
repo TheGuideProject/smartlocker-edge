@@ -209,40 +209,42 @@ class HardwareDaemon:
         self._status_poll_s = 5.0
 
     async def start(self):
-        """Start the daemon: init hardware, start server, start polling."""
-        logger.info("Initializing hardware drivers...")
-
-        # Initialize all drivers
-        rfid_ok = self.rfid.initialize()
-        weight_ok = self.weight.initialize()
-        led_ok = self.led.initialize()
-        buzzer_ok = self.buzzer.initialize()
-
-        status = {
-            "rfid": rfid_ok, "weight": weight_ok,
-            "led": led_ok, "buzzer": buzzer_ok,
-        }
-        logger.info(f"Driver init: {status}")
-
-        if led_ok:
-            self.led.clear_all()
-
+        """Start the daemon: open TCP server first, then init hardware."""
         self._running = True
 
-        # Start TCP server
+        # Start TCP server FIRST so clients can connect while hardware inits
         server = await asyncio.start_server(
             self._handle_client, "127.0.0.1", self.port,
         )
         addr = server.sockets[0].getsockname()
         logger.info(f"Hardware daemon listening on {addr[0]}:{addr[1]}")
 
-        # Broadcast init message to all future clients
+        # Set a preliminary init message (hardware still initializing)
+        self._init_msg = json.dumps({
+            "type": "initialized",
+            "mode": self.mode,
+            "drivers": self.driver_status,
+            "init_status": {"rfid": False, "weight": False, "led": False, "buzzer": False},
+            "hw_ready": False,
+        })
+
+        # Initialize hardware in a thread (serial init can block 10+ seconds)
+        logger.info("Initializing hardware drivers (background)...")
+        loop = asyncio.get_running_loop()
+        status = await loop.run_in_executor(None, self._init_hardware_sync)
+        logger.info(f"Driver init: {status}")
+
+        # Update init message with actual hardware status
         self._init_msg = json.dumps({
             "type": "initialized",
             "mode": self.mode,
             "drivers": self.driver_status,
             "init_status": status,
+            "hw_ready": True,
         })
+
+        # Broadcast hw_ready to already-connected clients
+        await self._broadcast({"type": "hw_ready", "init_status": status})
 
         # Start polling tasks
         rfid_task = asyncio.create_task(self._poll_rfid_loop())
@@ -258,6 +260,24 @@ class HardwareDaemon:
             weight_task.cancel()
             status_task.cancel()
             self._shutdown_hardware()
+
+    def _init_hardware_sync(self) -> dict:
+        """Initialize all hardware drivers (runs in thread pool)."""
+        rfid_ok = self.rfid.initialize()
+        weight_ok = self.weight.initialize()
+        led_ok = self.led.initialize()
+        buzzer_ok = self.buzzer.initialize()
+
+        if led_ok:
+            try:
+                self.led.clear_all()
+            except Exception:
+                pass
+
+        return {
+            "rfid": rfid_ok, "weight": weight_ok,
+            "led": led_ok, "buzzer": buzzer_ok,
+        }
 
     def _shutdown_hardware(self):
         """Clean shutdown of all drivers."""

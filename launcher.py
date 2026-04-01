@@ -19,7 +19,7 @@ import socket
 
 # ── Configuration ──
 DAEMON_PORT = 9800
-DAEMON_STARTUP_TIMEOUT = 5  # seconds to wait for daemon
+DAEMON_STARTUP_TIMEOUT = 15  # seconds to wait for daemon (Arduino serial can be slow)
 PYTHON = sys.executable
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 
@@ -84,8 +84,6 @@ def main():
 
             daemon_proc = subprocess.Popen(
                 daemon_cmd,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.STDOUT,
                 creationflags=creation_flags,
             )
             print(f"[LAUNCHER] Daemon PID: {daemon_proc.pid}")

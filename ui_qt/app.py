@@ -338,6 +338,13 @@ class SmartLockerWindow(QMainWindow):
                 print(f"  WARNING: Daemon connection failed — falling back to fake drivers")
                 self._daemon_port = 0  # Fall through to direct init
                 self._daemon_conn = None
+                # Force fake drivers — don't fight daemon for serial ports
+                drv_rfid = drv_weight = drv_led = drv_buzzer = "fake"
+                self.mode = "test"
+                self.driver_status = {
+                    "rfid": "fake", "weight": "fake",
+                    "led": "fake", "buzzer": "fake",
+                }
 
         # ── DIRECT MODE: initialize drivers locally ──
         if not self._daemon_port:
