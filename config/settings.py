@@ -35,6 +35,7 @@ MODE = "auto"
 # ============================================================
 DRIVER_RFID = "real"       # "fake" or "real"
 RFID_MODULE = "pn532_usb"  # "pn532_usb" (USB serial) or "rc522" (SPI) or "pn532" (I2C)
+RFID_USB_PORT = "/dev/ttyUSB0"  # PN532 pinned to ttyUSB0
 DRIVER_WEIGHT = "real"     # "fake" or "real" - Arduino serial bridge
 DRIVER_LED = "real"        # "fake" or "real" - Bar graph + shelf LEDs via Arduino
 DRIVER_BUZZER = "real"     # "fake" or "real" - GPIO PWM buzzer on GPIO 13
@@ -124,9 +125,9 @@ HX711_SCK_PIN = HX711_SHELF_SCK
 
 # Weight - Arduino Nano via Serial (HX711 bridge, for multi-channel setups)
 # Protocol: Arduino sends JSON lines: {"channel":"shelf1","grams":1234.5,"stable":true}
-WEIGHT_SERIAL_PORT = "/dev/ttyUSB0"   # Arduino serial port
+WEIGHT_SERIAL_PORT = "/dev/ttyUSB1"   # Arduino pinned to ttyUSB1
 WEIGHT_SERIAL_BAUD = 115200           # Baud rate
-ARDUINO_SERIAL_PORT = "/dev/ttyUSB0"  # Legacy alias (backward compat)
+ARDUINO_SERIAL_PORT = "/dev/ttyUSB1"  # Legacy alias (backward compat)
 ARDUINO_BAUD_RATE = 115200            # Legacy alias (backward compat)
 
 # LED Strip - WS2812B via SPI/PWM
