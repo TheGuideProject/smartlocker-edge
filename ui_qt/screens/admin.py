@@ -1,7 +1,6 @@
 """
 Admin Screen — Sensor driver toggles and system configuration.
-
-No password required during development.
+Compact layout for 800x480 touch display with scroll support.
 """
 import json
 import logging
@@ -9,6 +8,7 @@ import logging
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
     QFrame, QComboBox, QGroupBox, QGridLayout, QMessageBox,
+    QScrollArea,
 )
 from PyQt6.QtCore import Qt
 from PyQt6.QtGui import QFont
@@ -26,146 +26,121 @@ class AdminScreen(QWidget):
         self._build_ui()
 
     def _build_ui(self):
-        layout = QVBoxLayout(self)
-        layout.setContentsMargins(20, 15, 20, 15)
-        layout.setSpacing(12)
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(0, 0, 0, 0)
+        outer.setSpacing(0)
 
-        # Header
+        # Header (fixed, not scrollable)
         header = QHBoxLayout()
+        header.setContentsMargins(15, 8, 15, 8)
         btn_back = QPushButton("< Back")
-        btn_back.setFixedSize(100, 40)
+        btn_back.setFixedSize(90, 36)
         btn_back.clicked.connect(self.app.go_back)
         header.addWidget(btn_back)
 
-        title = QLabel("ADMIN SETTINGS")
-        title.setFont(QFont("Sans", 20, QFont.Weight.Bold))
+        title = QLabel("ADMIN")
+        title.setFont(QFont("Sans", 18, QFont.Weight.Bold))
         title.setAlignment(Qt.AlignmentFlag.AlignCenter)
         header.addWidget(title, 1)
+        header.addSpacing(90)
+        outer.addLayout(header)
 
-        # Spacer to balance back button
-        header.addSpacing(100)
-        layout.addLayout(header)
+        # Scroll area for content
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.Shape.NoFrame)
 
-        # Separator
-        sep = QFrame()
-        sep.setFrameShape(QFrame.Shape.HLine)
-        layout.addWidget(sep)
+        content = QWidget()
+        layout = QVBoxLayout(content)
+        layout.setContentsMargins(15, 5, 15, 10)
+        layout.setSpacing(6)
 
-        # ── SENSOR DRIVERS ──
-        group = QGroupBox("Sensor Drivers")
-        group.setFont(QFont("Sans", 14, QFont.Weight.Bold))
-        grid = QGridLayout()
-        grid.setSpacing(10)
+        # ── SENSOR DRIVERS (compact grid) ──
+        lbl = QLabel("Sensor Drivers")
+        lbl.setFont(QFont("Sans", 13, QFont.Weight.Bold))
+        layout.addWidget(lbl)
 
         drivers = [
-            ("rfid", "RFID Reader", "PN532 NFC tag reader"),
-            ("weight", "Weight Sensors", "HX711 load cells (Arduino bridge)"),
-            ("led", "LED Indicators", "Bar graph + shelf LEDs (Arduino)"),
-            ("buzzer", "Buzzer", "GPIO PWM audio feedback"),
+            ("rfid", "RFID Reader"),
+            ("weight", "Weight (HX711)"),
+            ("led", "LED Indicators"),
+            ("buzzer", "Buzzer"),
         ]
 
-        for row, (key, label_text, desc) in enumerate(drivers):
-            label = QLabel(f"{label_text}")
-            label.setFont(QFont("Sans", 13, QFont.Weight.Bold))
-            grid.addWidget(label, row * 2, 0)
-
-            desc_label = QLabel(desc)
-            desc_label.setFont(QFont("Sans", 10))
-            desc_label.setStyleSheet(f"color: {C.TEXT_MUTED};")
-            grid.addWidget(desc_label, row * 2 + 1, 0)
+        grid = QGridLayout()
+        grid.setSpacing(4)
+        for row, (key, label_text) in enumerate(drivers):
+            label = QLabel(label_text)
+            label.setFont(QFont("Sans", 12))
+            grid.addWidget(label, row, 0)
 
             combo = QComboBox()
             combo.addItems(["real", "fake"])
-            combo.setFixedSize(120, 36)
-            combo.setFont(QFont("Sans", 12))
+            combo.setFixedSize(100, 32)
             self._combos[key] = combo
-            grid.addWidget(combo, row * 2, 1, 2, 1, Qt.AlignmentFlag.AlignRight)
+            grid.addWidget(combo, row, 1, Qt.AlignmentFlag.AlignRight)
 
-        group.setLayout(grid)
-        layout.addWidget(group)
+        layout.addLayout(grid)
 
         # ── WEIGHT MODE ──
-        weight_group = QGroupBox("Weight Mode")
-        weight_group.setFont(QFont("Sans", 14, QFont.Weight.Bold))
-        wl = QHBoxLayout()
-
-        wl.addWidget(QLabel("Mode:"))
+        wrow = QHBoxLayout()
+        wrow.addWidget(QLabel("Weight Mode:"))
         self._weight_mode_combo = QComboBox()
         self._weight_mode_combo.addItems(["arduino_serial", "hx711_direct"])
-        self._weight_mode_combo.setFixedSize(180, 36)
-        self._weight_mode_combo.setFont(QFont("Sans", 12))
-        wl.addWidget(self._weight_mode_combo)
-        wl.addStretch()
+        self._weight_mode_combo.setFixedSize(160, 32)
+        wrow.addWidget(self._weight_mode_combo)
+        wrow.addStretch()
+        layout.addLayout(wrow)
 
-        weight_group.setLayout(wl)
-        layout.addWidget(weight_group)
+        layout.addSpacing(8)
 
-        # ── SAVE / RESET ──
-        btn_row = QHBoxLayout()
-
-        btn_save = QPushButton("SAVE & RESTART APP")
-        btn_save.setFixedHeight(50)
-        btn_save.setFont(QFont("Sans", 14, QFont.Weight.Bold))
+        # ── BUTTONS ──
+        btn_save = QPushButton("SAVE & RESTART")
+        btn_save.setFixedHeight(44)
+        btn_save.setFont(QFont("Sans", 13, QFont.Weight.Bold))
         btn_save.setStyleSheet(f"""
             QPushButton {{
                 background-color: {C.ACCENT};
                 color: white;
-                border-radius: 8px;
-            }}
-            QPushButton:pressed {{
-                background-color: {C.PRIMARY_DIM};
+                border-radius: 6px;
             }}
         """)
-        btn_save.clicked.connect(self._save_settings)
-        btn_row.addWidget(btn_save, 2)
+        btn_save.clicked.connect(self._save_and_restart)
+        layout.addWidget(btn_save)
 
         btn_reset = QPushButton("RESET TO DEFAULTS")
-        btn_reset.setFixedHeight(50)
-        btn_reset.setFont(QFont("Sans", 12))
+        btn_reset.setFixedHeight(40)
         btn_reset.setStyleSheet(f"""
             QPushButton {{
                 background-color: {C.DANGER};
                 color: white;
-                border-radius: 8px;
+                border-radius: 6px;
             }}
         """)
         btn_reset.clicked.connect(self._reset_defaults)
-        btn_row.addWidget(btn_reset, 1)
+        layout.addWidget(btn_reset)
 
-        layout.addLayout(btn_row)
-        layout.addStretch()
-
-        # ── CLOSE APP ──
         btn_close = QPushButton("CLOSE APP")
-        btn_close.setFixedHeight(50)
-        btn_close.setFont(QFont("Sans", 14, QFont.Weight.Bold))
+        btn_close.setFixedHeight(40)
         btn_close.setStyleSheet(f"""
             QPushButton {{
                 background-color: #333;
                 color: white;
                 border: 2px solid {C.DANGER};
-                border-radius: 8px;
-            }}
-            QPushButton:pressed {{
-                background-color: {C.DANGER};
+                border-radius: 6px;
             }}
         """)
         btn_close.clicked.connect(self._close_app)
         layout.addWidget(btn_close)
 
-        # ── INFO ──
-        info = QLabel("Changes require app restart to take effect.")
-        info.setFont(QFont("Sans", 10))
-        info.setStyleSheet(f"color: {C.TEXT_MUTED};")
-        info.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        layout.addWidget(info)
+        layout.addStretch()
+        scroll.setWidget(content)
+        outer.addWidget(scroll)
 
     def on_enter(self):
-        """Load current driver settings."""
-        # Load from admin DB overrides first, then fall back to settings.py
         admin_cfg = self.app.db.get_admin_config()
-
         from config import settings
+
         current = {
             "rfid": admin_cfg.get("driver_rfid", settings.DRIVER_RFID),
             "weight": admin_cfg.get("driver_weight", settings.DRIVER_WEIGHT),
@@ -174,8 +149,7 @@ class AdminScreen(QWidget):
         }
 
         for key, combo in self._combos.items():
-            val = current.get(key, "fake")
-            idx = combo.findText(val)
+            idx = combo.findText(current.get(key, "fake"))
             if idx >= 0:
                 combo.setCurrentIndex(idx)
 
@@ -184,10 +158,8 @@ class AdminScreen(QWidget):
         if idx >= 0:
             self._weight_mode_combo.setCurrentIndex(idx)
 
-    def _save_settings(self):
-        """Save driver selections to DB and suggest restart."""
+    def _save_and_restart(self):
         admin_cfg = self.app.db.get_admin_config()
-
         admin_cfg["driver_rfid"] = self._combos["rfid"].currentText()
         admin_cfg["driver_weight"] = self._combos["weight"].currentText()
         admin_cfg["driver_led"] = self._combos["led"].currentText()
@@ -200,32 +172,28 @@ class AdminScreen(QWidget):
             (json.dumps(admin_cfg),),
         )
         self.app.db.conn.commit()
-
         logger.info(f"Admin settings saved: {admin_cfg}")
 
-        QMessageBox.information(
-            self, "Settings Saved",
-            "Driver settings saved.\n\nRestart the app for changes to take effect.",
-        )
+        # Restart: launch new process then quit current
+        import sys
+        import os
+        import subprocess
+        python = sys.executable
+        script = os.path.abspath(sys.argv[0])
+        args = sys.argv[1:]
+        subprocess.Popen([python, script] + args)
+
+        from PyQt6.QtWidgets import QApplication
+        QApplication.instance().quit()
 
     def _reset_defaults(self):
-        """Remove admin overrides — use settings.py defaults."""
         self.app.db.conn.execute(
             "DELETE FROM config WHERE key = 'admin_settings'"
         )
         self.app.db.conn.commit()
-
         logger.info("Admin settings reset to defaults")
-
-        QMessageBox.information(
-            self, "Reset",
-            "Admin overrides removed.\nApp will use settings.py defaults on next restart.",
-        )
-
-        # Refresh UI
         self.on_enter()
 
     def _close_app(self):
-        """Close the application."""
         from PyQt6.QtWidgets import QApplication
         QApplication.instance().quit()
