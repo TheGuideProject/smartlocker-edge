@@ -135,6 +135,24 @@ class AdminScreen(QWidget):
         layout.addLayout(btn_row)
         layout.addStretch()
 
+        # ── CLOSE APP ──
+        btn_close = QPushButton("CLOSE APP")
+        btn_close.setFixedHeight(50)
+        btn_close.setFont(QFont("Sans", 14, QFont.Weight.Bold))
+        btn_close.setStyleSheet(f"""
+            QPushButton {{
+                background-color: #333;
+                color: white;
+                border: 2px solid {C.DANGER};
+                border-radius: 8px;
+            }}
+            QPushButton:pressed {{
+                background-color: {C.DANGER};
+            }}
+        """)
+        btn_close.clicked.connect(self._close_app)
+        layout.addWidget(btn_close)
+
         # ── INFO ──
         info = QLabel("Changes require app restart to take effect.")
         info.setFont(QFont("Sans", 10))
@@ -206,3 +224,8 @@ class AdminScreen(QWidget):
 
         # Refresh UI
         self.on_enter()
+
+    def _close_app(self):
+        """Close the application."""
+        from PyQt6.QtWidgets import QApplication
+        QApplication.instance().quit()
