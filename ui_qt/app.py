@@ -12,7 +12,7 @@ import logging
 
 from PyQt6.QtWidgets import (
     QApplication, QMainWindow, QStackedWidget, QWidget,
-    QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QFrame,
+    QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QFrame, QComboBox,
 )
 from PyQt6.QtCore import Qt, QTimer, QEvent, QObject
 from PyQt6.QtGui import QFont
