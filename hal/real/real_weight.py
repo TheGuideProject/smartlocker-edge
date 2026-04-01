@@ -134,6 +134,7 @@ class RealWeightDriver(WeightDriverInterface):
             pass
 
         for port in ports_to_try:
+            is_primary = (port == self._port)  # Configured port gets longer boot time
             try:
                 self._serial = serial.Serial(
                     port=port,
@@ -141,9 +142,11 @@ class RealWeightDriver(WeightDriverInterface):
                     timeout=1.0,
                 )
 
-                # Quick pre-check: read any boot data (Arduino sends JSON on connect,
-                # PN532 modules send nothing or binary garbage)
-                time.sleep(2.0)
+                # Arduino resets on serial connect — clone Nanos need 3.5s to boot.
+                # PN532 modules don't need boot time, so use shorter wait for non-primary.
+                boot_wait = 3.5 if is_primary else 1.5
+                time.sleep(boot_wait)
+
                 boot_data = b""
                 if self._serial.in_waiting:
                     boot_data = self._serial.read(self._serial.in_waiting)
@@ -157,9 +160,17 @@ class RealWeightDriver(WeightDriverInterface):
 
                 self._serial.reset_input_buffer()
 
-                # Ping to verify — short timeout for non-Arduino devices
+                # Ping to verify — retry once if first attempt fails (boot timing)
                 self._send({"cmd": "ping"})
                 response = self._recv(timeout=2.0)
+
+                if not response and is_primary:
+                    # Retry: Arduino may need a bit more time
+                    logger.info(f"[ARDUINO WEIGHT] Retrying ping on {port}...")
+                    time.sleep(1.0)
+                    self._serial.reset_input_buffer()
+                    self._send({"cmd": "ping"})
+                    response = self._recv(timeout=2.0)
 
                 if response and response.get("status") == "ok":
                     fw = response.get("fw", "?")
