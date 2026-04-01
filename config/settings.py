@@ -35,8 +35,8 @@ MODE = "auto"
 # ============================================================
 DRIVER_RFID = "real"       # "fake" or "real"
 RFID_MODULE = "pn532_usb"  # "pn532_usb" (USB serial) or "rc522" (SPI) or "pn532" (I2C)
-DRIVER_WEIGHT = "real"     # "fake" or "real" - HX711 direct GPIO (calibrated 2026-03-25)
-DRIVER_LED = "fake"        # "fake" or "real" - WS2812B LED strip via SPI
+DRIVER_WEIGHT = "real"     # "fake" or "real" - Arduino serial bridge
+DRIVER_LED = "real"        # "fake" or "real" - Bar graph + shelf LEDs via Arduino
 DRIVER_BUZZER = "real"     # "fake" or "real" - GPIO PWM buzzer on GPIO 13
 
 # ============================================================
@@ -110,7 +110,7 @@ RFID_I2C_ADDRESS = 0x24          # Default PN532 I2C address
 RFID_I2C_ADDRESSES = [0x24]     # List for multi-reader setups
 
 # Weight - HX711 Direct GPIO (2 channels, no Arduino needed)
-WEIGHT_MODE = "hx711_direct"          # "hx711_direct" or "arduino_serial"
+WEIGHT_MODE = "arduino_serial"        # "hx711_direct" or "arduino_serial"
 HX711_SHELF_DT = 5                    # Shelf scale: GPIO pin for HX711 DOUT
 HX711_SHELF_SCK = 6                   # Shelf scale: GPIO pin for HX711 SCK
 HX711_MIX_DT = 23                     # Mixing scale: GPIO pin for HX711 DOUT
