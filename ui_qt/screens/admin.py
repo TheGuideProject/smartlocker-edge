@@ -174,14 +174,16 @@ class AdminScreen(QWidget):
         self.app.db.conn.commit()
         logger.info(f"Admin settings saved: {admin_cfg}")
 
-        # Restart: launch new process then quit current
+        # Restart: launch new process after a delay so serial port is released
         import sys
         import os
         import subprocess
         python = sys.executable
         script = os.path.abspath(sys.argv[0])
         args = sys.argv[1:]
-        subprocess.Popen([python, script] + args)
+        # Use bash to delay 3s before restarting (gives serial port time to release)
+        restart_cmd = f"sleep 3 && {python} {script} {' '.join(args)}"
+        subprocess.Popen(["bash", "-c", restart_cmd])
 
         from PyQt6.QtWidgets import QApplication
         QApplication.instance().quit()

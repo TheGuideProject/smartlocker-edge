@@ -69,28 +69,19 @@ class RealRFIDDriverPN532USB(RFIDDriverInterface):
         try:
             from config.settings import WEIGHT_MODE
             if WEIGHT_MODE == "arduino_serial":
-                # Check if weight driver already has a port open
                 from config.settings import WEIGHT_SERIAL_PORT
                 claimed_ports.add(WEIGHT_SERIAL_PORT)
-                # Also check all ttyUSB ports that respond to Arduino ping
-                # The simplest approach: skip ports that are already open
+                # Also skip any port that's already open (can't open exclusively)
                 import os
                 for check_port in ["/dev/ttyUSB0", "/dev/ttyUSB1", "/dev/ttyUSB2"]:
                     if os.path.exists(check_port):
                         try:
-                            # Try to open exclusively — if it fails, it's already claimed
-                            test = serial.Serial(check_port, 115200, timeout=0.5)
-                            test.write(b'{"cmd":"ping"}\n')
-                            import time
-                            time.sleep(0.3)
-                            resp = test.readline().decode("utf-8", errors="ignore").strip()
+                            test = serial.Serial(check_port, 115200, timeout=0.1)
                             test.close()
-                            if "fw" in resp or "status" in resp:
-                                claimed_ports.add(check_port)
-                                logger.info(f"[PN532 USB] Skipping {check_port} (Arduino detected)")
                         except Exception:
-                            # Port already open by another process = claimed
+                            # Port already open = claimed by Arduino
                             claimed_ports.add(check_port)
+                            logger.info(f"[PN532 USB] Skipping {check_port} (already in use)")
         except Exception:
             pass
 

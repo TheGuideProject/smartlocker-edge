@@ -142,7 +142,8 @@ class RealWeightDriver(WeightDriverInterface):
                 )
 
                 # Wait for Arduino to boot (resets on serial connect)
-                time.sleep(2.5)
+                # Clone Nanos with old bootloader need extra time
+                time.sleep(3.5)
                 self._serial.reset_input_buffer()
 
                 # Ping to verify
