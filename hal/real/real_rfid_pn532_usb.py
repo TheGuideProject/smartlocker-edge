@@ -64,6 +64,8 @@ class RealRFIDDriverPN532USB(RFIDDriverInterface):
             "shelf1_slot3", "shelf1_slot4",
         ]
         self._last_error_time = 0.0
+        # Tag data cache: {uid_str: {"product_data": ..., "parsed": ..., "time": ...}}
+        self._tag_cache = {}
         self._last_reconnect_attempt = 0.0
         self._reconnect_backoff_s = 3.0
 
@@ -281,18 +283,31 @@ class RealRFIDDriverPN532USB(RFIDDriverInterface):
 
                 tag_id = ":".join(f"{b:02X}" for b in uid)
 
-                # Try to read product data from tag
-                product_data = self._read_product_data()
-                parsed = {}
-                if product_data:
-                    parts = product_data.split(PRODUCT_SEPARATOR)
-                    if len(parts) >= 4:
-                        parsed = {
-                            "ppg_code": parts[0],
-                            "batch_number": parts[1],
-                            "product_name": parts[2],
-                            "color": parts[3],
-                        }
+                # Check cache — only read NTAG pages once per tag
+                cached = self._tag_cache.get(tag_id)
+                if cached:
+                    product_data = cached["product_data"]
+                    parsed = cached["parsed"]
+                else:
+                    # First time seeing this tag — read product data (slow)
+                    product_data = self._read_product_data()
+                    parsed = {}
+                    if product_data:
+                        parts = product_data.split(PRODUCT_SEPARATOR)
+                        if len(parts) >= 4:
+                            parsed = {
+                                "ppg_code": parts[0],
+                                "batch_number": parts[1],
+                                "product_name": parts[2],
+                                "color": parts[3],
+                            }
+                    # Cache for next polls
+                    self._tag_cache[tag_id] = {
+                        "product_data": product_data,
+                        "parsed": parsed,
+                        "time": time.time(),
+                    }
+                    logger.info(f"[PN532 USB] Tag {tag_id} cached: {product_data or 'no data'}")
 
                 return [TagReading(
                     tag_id=tag_id,
