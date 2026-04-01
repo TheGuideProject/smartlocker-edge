@@ -210,10 +210,15 @@ class SmartLockerWindow(QMainWindow):
             drv_weight = admin_cfg.get("driver_weight", drv_weight)
             drv_led = admin_cfg.get("driver_led", drv_led)
             drv_buzzer = admin_cfg.get("driver_buzzer", drv_buzzer)
-            # Also override weight mode if set
+            # Override hardware settings from admin DB
+            import config.settings as _s
             if "weight_mode" in admin_cfg:
-                import config.settings as _s
                 _s.WEIGHT_MODE = admin_cfg["weight_mode"]
+            if "weight_serial_port" in admin_cfg:
+                _s.WEIGHT_SERIAL_PORT = admin_cfg["weight_serial_port"]
+                _s.ARDUINO_SERIAL_PORT = admin_cfg["weight_serial_port"]
+            if "rfid_usb_port" in admin_cfg:
+                _s.RFID_USB_PORT = admin_cfg["rfid_usb_port"]
             print("  Admin overrides applied from DB")
 
         self.driver_status = {
@@ -246,10 +251,10 @@ class SmartLockerWindow(QMainWindow):
 
         # ── RFID (after weight — so Arduino already claimed its port) ──
         if drv_rfid == "real":
-            from config.settings import RFID_MODULE
+            from config.settings import RFID_MODULE, RFID_USB_PORT
             if RFID_MODULE == "pn532_usb":
                 from hal.real.real_rfid_pn532_usb import RealRFIDDriverPN532USB
-                self.rfid = RealRFIDDriverPN532USB()
+                self.rfid = RealRFIDDriverPN532USB(port=RFID_USB_PORT)
             elif RFID_MODULE == "rc522":
                 from hal.real.real_rfid_rc522 import RealRFIDDriverRC522
                 self.rfid = RealRFIDDriverRC522()
