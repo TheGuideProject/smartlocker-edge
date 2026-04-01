@@ -245,7 +245,7 @@ void initHX711() {
 // COMMAND PROCESSOR
 // ============================================================
 void processCommand(const char* json) {
-    StaticJsonDocument<192> doc;
+    JsonDocument doc;
     DeserializationError err = deserializeJson(doc, json);
 
     if (err) {

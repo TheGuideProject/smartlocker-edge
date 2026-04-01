@@ -57,11 +57,47 @@ class RealRFIDDriverPN532USB(RFIDDriverInterface):
     # ----------------------------------------------------------
 
     def _find_port(self) -> Optional[str]:
-        """Auto-detect PN532 USB port (CH340/CP2102)."""
+        """Auto-detect PN532 USB port (CH340/CP2102).
+
+        Skips ports already claimed by the Arduino weight driver.
+        """
         if self._port:
             return self._port
+
+        # Get port claimed by Arduino weight driver (if any)
+        claimed_ports = set()
+        try:
+            from config.settings import WEIGHT_MODE
+            if WEIGHT_MODE == "arduino_serial":
+                # Check if weight driver already has a port open
+                from config.settings import WEIGHT_SERIAL_PORT
+                claimed_ports.add(WEIGHT_SERIAL_PORT)
+                # Also check all ttyUSB ports that respond to Arduino ping
+                # The simplest approach: skip ports that are already open
+                import os
+                for check_port in ["/dev/ttyUSB0", "/dev/ttyUSB1", "/dev/ttyUSB2"]:
+                    if os.path.exists(check_port):
+                        try:
+                            # Try to open exclusively — if it fails, it's already claimed
+                            test = serial.Serial(check_port, 115200, timeout=0.5)
+                            test.write(b'{"cmd":"ping"}\n')
+                            import time
+                            time.sleep(0.3)
+                            resp = test.readline().decode("utf-8", errors="ignore").strip()
+                            test.close()
+                            if "fw" in resp or "status" in resp:
+                                claimed_ports.add(check_port)
+                                logger.info(f"[PN532 USB] Skipping {check_port} (Arduino detected)")
+                        except Exception:
+                            # Port already open by another process = claimed
+                            claimed_ports.add(check_port)
+        except Exception:
+            pass
+
         try:
             for p in serial.tools.list_ports.comports():
+                if p.device in claimed_ports:
+                    continue
                 desc = (p.description or "").lower()
                 vid_pid = f"{p.vid:04X}:{p.pid:04X}" if p.vid else ""
                 # CH340 = 1A86:7523, CP2102 = 10C4:EA60
@@ -71,10 +107,10 @@ class RealRFIDDriverPN532USB(RFIDDriverInterface):
                 if vid_pid in ("1A86:7523", "10C4:EA60"):
                     logger.info(f"[PN532 USB] Auto-detected port by VID:PID: {p.device}")
                     return p.device
-            # Fallback: try common paths
+            # Fallback: try common paths (skip claimed)
             import os
-            for fallback in ["/dev/ttyUSB0", "/dev/ttyUSB1", "/dev/ttyACM0"]:
-                if os.path.exists(fallback):
+            for fallback in ["/dev/ttyUSB0", "/dev/ttyUSB1", "/dev/ttyUSB2", "/dev/ttyACM0"]:
+                if os.path.exists(fallback) and fallback not in claimed_ports:
                     return fallback
         except Exception as e:
             logger.debug(f"[PN532 USB] Port scan error: {e}")
