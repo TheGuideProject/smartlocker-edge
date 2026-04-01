@@ -492,7 +492,18 @@ class SmartLockerApp(App):
         # ---- RFID Driver ----
         if drv_rfid == "real":
             from config.settings import RFID_MODULE, RFID_USB_PORT
-            if RFID_MODULE == "pn532_usb":
+            if RFID_MODULE == "pn532_multi_usb":
+                from config.settings import RFID_READER_MAP
+                from hal.real.real_rfid_multi_pn532 import RealRFIDMultiPN532USB
+                skip = set()
+                arduino_port = getattr(self.weight, '_port', None) if hasattr(self, 'weight') else None
+                if arduino_port:
+                    skip.add(arduino_port)
+                self.rfid = RealRFIDMultiPN532USB(
+                    reader_configs=RFID_READER_MAP or None,
+                    skip_ports=skip,
+                )
+            elif RFID_MODULE == "pn532_usb":
                 from hal.real.real_rfid_pn532_usb import RealRFIDDriverPN532USB
                 self.rfid = RealRFIDDriverPN532USB(port=RFID_USB_PORT)
             elif RFID_MODULE == "rc522":

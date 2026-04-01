@@ -29,12 +29,7 @@ import os
 import signal
 import logging
 
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s [FAN] %(message)s",
-    datefmt="%H:%M:%S",
-)
-log = logging.getLogger("fan")
+log = logging.getLogger("smartlocker.fan")
 
 # ── Configuration ──────────────────────────────────────
 POLL_INTERVAL_S = 3       # Check temperature every 3 seconds
@@ -146,8 +141,11 @@ def set_fan_speed_pwm(path: str, speed_pct: int):
         log.error(f"Failed to write PWM: {e}")
 
 
+_gpio_fan_error_logged = False
+
 def set_fan_speed_gpio(speed_pct: int):
     """Set fan speed via GPIO PWM (fallback for HAT fans)."""
+    global _gpio_fan_error_logged
     try:
         import lgpio
         FAN_GPIO = 14  # Common fan control pin
@@ -158,10 +156,13 @@ def set_fan_speed_gpio(speed_pct: int):
             freq = 25000  # 25kHz PWM for fan
             duty = max(0, min(100, speed_pct))
             lgpio.tx_pwm(h, FAN_GPIO, freq, duty)
+        _gpio_fan_error_logged = False  # Reset on success
     except ImportError:
         pass
     except Exception as e:
-        log.warning(f"GPIO fan control failed: {e}")
+        if not _gpio_fan_error_logged:
+            log.warning(f"GPIO fan control failed: {e} (suppressing further)")
+            _gpio_fan_error_logged = True
 
 
 def calculate_fan_speed(temp: float, current_speed: int) -> int:
