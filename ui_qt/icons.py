@@ -164,7 +164,7 @@ def screen_header(app, title: str, glyph: str = "",
         f"  background: qlineargradient(x1:0, y1:0, x2:1, y2:0,"
         f"    stop:0 {C.BG_STATUS}, stop:1 {C.BG_CARD});"
         f"  border-bottom: 2px solid {accent};"
-        f"  min-height: 48px; max-height: 48px;"
+        f"  min-height: 40px; max-height: 40px;"
         f"}}"
     )
 

@@ -52,13 +52,13 @@ class C:
 
 class F:
     """Font size constants (px) — optimized for 4.3" 800x480 touch."""
-    HERO   = 52
-    H1     = 32
-    H2     = 26
-    H3     = 22
-    BODY   = 18
-    SMALL  = 16
-    TINY   = 14
+    HERO   = 36
+    H1     = 28
+    H2     = 22
+    H3     = 18
+    BODY   = 16
+    SMALL  = 14
+    TINY   = 12
 
 
 # ══════════════════════════════════════════════════════════
@@ -67,13 +67,13 @@ class F:
 
 class S:
     """Spacing constants (px) — optimized for 4.3" touch with gloves."""
-    PAD       = 12
-    PAD_CARD  = 10
-    GAP       = 8
-    RADIUS    = 10
-    BTN_H     = 56
-    BTN_H_LG  = 68
-    STATUS_H  = 50
+    PAD       = 10
+    PAD_CARD  = 8
+    GAP       = 6
+    RADIUS    = 8
+    BTN_H     = 44
+    BTN_H_LG  = 52
+    STATUS_H  = 44
 
 
 # ══════════════════════════════════════════════════════════
@@ -106,11 +106,11 @@ QPushButton {{
     background-color: {C.BG_CARD};
     color: {C.TEXT};
     border: 1px solid {C.BORDER};
-    border-radius: 8px;
-    padding: 10px 20px;
+    border-radius: 6px;
+    padding: 6px 14px;
     font-size: {F.BODY}px;
     font-weight: bold;
-    min-height: 40px;
+    min-height: 32px;
 }}
 
 QPushButton:hover {{
@@ -169,9 +169,9 @@ QPushButton#nav_tile {{
     background-color: {C.BG_CARD};
     border: 1px solid {C.BORDER};
     border-radius: {S.RADIUS}px;
-    min-height: 90px;
+    min-height: 70px;
     font-size: {F.BODY}px;
-    padding: 8px;
+    padding: 6px;
 }}
 
 QPushButton#nav_tile:hover {{
