@@ -197,9 +197,10 @@ class InventoryEngine:
         After GPIO_MAX_RETRIES failures, reboots the RPi automatically.
         """
         # Initialize each driver independently
-        rfid_ok = self.rfid.initialize()
+        # Weight FIRST — Arduino must claim serial port before RFID auto-detect
         weight_ok = self.weight.initialize()
         led_ok = self.led.initialize()
+        rfid_ok = self.rfid.initialize()
         buzzer_ok = False
 
         # Only buzzer uses GPIO directly — retry with cleanup if it fails
