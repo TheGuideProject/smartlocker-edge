@@ -39,7 +39,7 @@
  * Libraries required (install via Arduino IDE Library Manager):
  *   - HX711 by Bogdan Necula (or Rob Tillaart)
  *   - Adafruit NeoPixel
- *   - ArduinoJson v7
+ *   - ArduinoJson v6 by Benoit Blanchon (6.x works, 7.x also works)
  */
 
 #include <HX711.h>
@@ -169,7 +169,7 @@ void loop() {
 // COMMAND PROCESSOR
 // ============================================================
 void processCommand(const char* json) {
-    JsonDocument doc;
+    StaticJsonDocument<256> doc;
     DeserializationError err = deserializeJson(doc, json);
 
     if (err) {
