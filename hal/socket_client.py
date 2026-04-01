@@ -226,6 +226,18 @@ class DaemonConnection:
             tag_id = msg.get("tag_id", "")
             self._current_tags.pop(tag_id, None)
 
+        elif msg_type == "hw_ready":
+            init_status = msg.get("init_status", {})
+            self.daemon_init_status = init_status
+            # Update sensor status from hardware init results
+            self._sensor_status = {
+                "rfid": init_status.get("rfid", False),
+                "weight": init_status.get("weight", False),
+                "led": init_status.get("led", True),
+                "buzzer": init_status.get("buzzer", True),
+            }
+            logger.info(f"Daemon hardware ready: {init_status}")
+
         elif msg_type == "sensor_status":
             self._sensor_status = {
                 "rfid": msg.get("rfid", False),

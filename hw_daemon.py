@@ -202,6 +202,7 @@ class HardwareDaemon:
         self._previous_tags: Set[str] = set()
         self._rfid_healthy = True
         self._running = False
+        self._hw_ready = False  # True after hardware init completes
 
         # Polling intervals (seconds)
         self._rfid_poll_s = 2.0
@@ -242,6 +243,8 @@ class HardwareDaemon:
             "init_status": status,
             "hw_ready": True,
         })
+
+        self._hw_ready = True
 
         # Broadcast hw_ready to already-connected clients
         await self._broadcast({"type": "hw_ready", "init_status": status})
@@ -348,6 +351,13 @@ class HardwareDaemon:
 
         if cmd == "ping":
             await self._send_json(writer, {"type": "pong", "ts": time.time()})
+
+        elif not self._hw_ready:
+            # Hardware still initializing — reject commands gracefully
+            await self._send_json(writer, {
+                "type": "error", "msg": "hardware still initializing",
+                "cmd": cmd,
+            })
 
         elif cmd == "led_set":
             from hal.interfaces import LEDColor, LEDPattern
