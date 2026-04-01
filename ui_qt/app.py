@@ -436,6 +436,14 @@ class SmartLockerWindow(QMainWindow):
             logger.info(f"Weight alarm resolved via barcode: {product_info.get('product_name')}")
             return
 
+        # PRIORITY 1.5: Shelf map slot assignment
+        shelf_map = self._screens.get("shelf_map")
+        if (shelf_map and self.stack.currentWidget() == shelf_map
+                and getattr(shelf_map, '_selected_slot', None) is not None):
+            shelf_map.on_barcode_for_slot(product_info)
+            logger.info(f"Barcode assigned to shelf slot: {product_info.get('product_name')}")
+            return
+
         # PRIORITY 2: Mixing session active
         mixing_active = (
             hasattr(self, 'mixing_engine')

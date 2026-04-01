@@ -95,6 +95,19 @@ class Database:
             )
         ''')
 
+        # Slot assignments table (manual barcode → slot mapping, RFID backup)
+        self._conn.execute('''
+            CREATE TABLE IF NOT EXISTS slot_assignments (
+                slot_index INTEGER PRIMARY KEY,
+                product_id TEXT,
+                product_name TEXT,
+                ppg_code TEXT,
+                color TEXT,
+                colors_json TEXT DEFAULT '[]',
+                assigned_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        ''')
+
         # Migration: add colors_json column to product if missing
         try:
             self._conn.execute("ALTER TABLE product ADD COLUMN colors_json TEXT DEFAULT '[]'")
@@ -662,6 +675,50 @@ class Database:
     def clear_vessel_stock(self) -> None:
         """Clear vessel stock table before full refresh."""
         self.conn.execute("DELETE FROM vessel_stock")
+        self.conn.commit()
+
+    # ============================================================
+    # SLOT ASSIGNMENTS (barcode → slot mapping, RFID backup)
+    # ============================================================
+
+    def get_slot_assignments(self) -> Dict[int, Dict]:
+        """Get all slot assignments as {slot_index: product_info}."""
+        cursor = self.conn.execute("SELECT * FROM slot_assignments")
+        result = {}
+        for row in cursor.fetchall():
+            cols = [d[0] for d in cursor.description]
+            d = dict(zip(cols, row))
+            result[d["slot_index"]] = d
+        return result
+
+    def set_slot_assignment(self, slot_index: int, product_info: dict) -> None:
+        """Assign a product to a shelf slot."""
+        self.conn.execute(
+            """INSERT OR REPLACE INTO slot_assignments
+               (slot_index, product_id, product_name, ppg_code, color, colors_json, assigned_at)
+               VALUES (?, ?, ?, ?, ?, ?, datetime('now'))""",
+            (
+                slot_index,
+                product_info.get("product_id", ""),
+                product_info.get("product_name", ""),
+                product_info.get("ppg_code", ""),
+                product_info.get("color", ""),
+                product_info.get("colors_json", "[]"),
+            ),
+        )
+        self.conn.commit()
+
+    def clear_slot_assignment(self, slot_index: int) -> None:
+        """Remove a product from a shelf slot."""
+        self.conn.execute(
+            "DELETE FROM slot_assignments WHERE slot_index = ?",
+            (slot_index,),
+        )
+        self.conn.commit()
+
+    def clear_all_slot_assignments(self) -> None:
+        """Remove all slot assignments."""
+        self.conn.execute("DELETE FROM slot_assignments")
         self.conn.commit()
 
     # ============================================================
