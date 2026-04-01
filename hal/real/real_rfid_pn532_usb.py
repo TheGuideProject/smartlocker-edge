@@ -266,7 +266,7 @@ class RealRFIDDriverPN532USB(RFIDDriverInterface):
 
         with self._lock:
             try:
-                uid = self._pn532.read_passive_target(timeout=0.3)
+                uid = self._pn532.read_passive_target(timeout=0.05)
                 if uid is None:
                     return []
 
@@ -315,16 +315,8 @@ class RealRFIDDriverPN532USB(RFIDDriverInterface):
         return list(self._reader_ids)
 
     def is_healthy(self) -> bool:
-        if not self._initialized or not self._pn532:
-            self._try_reconnect()
-            return False
-        try:
-            with self._lock:
-                ic, ver, rev, support = self._pn532.firmware_version
-                return ver > 0
-        except Exception:
-            self._try_reconnect()
-            return False
+        """Check if PN532 is connected. Non-blocking — just checks state."""
+        return self._initialized and self._pn532 is not None and self._ser is not None
 
     def shutdown(self) -> None:
         with self._lock:
