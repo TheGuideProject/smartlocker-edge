@@ -38,7 +38,7 @@ class AdminScreen(QWidget):
         header.addWidget(btn_back)
 
         title = QLabel("ADMIN SETTINGS")
-        title.setFont(QFont(F.FAMILY, 20, QFont.Weight.Bold))
+        title.setFont(QFont("Sans", 20, QFont.Weight.Bold))
         title.setAlignment(Qt.AlignmentFlag.AlignCenter)
         header.addWidget(title, 1)
 
@@ -53,7 +53,7 @@ class AdminScreen(QWidget):
 
         # ── SENSOR DRIVERS ──
         group = QGroupBox("Sensor Drivers")
-        group.setFont(QFont(F.FAMILY, 14, QFont.Weight.Bold))
+        group.setFont(QFont("Sans", 14, QFont.Weight.Bold))
         grid = QGridLayout()
         grid.setSpacing(10)
 
@@ -66,18 +66,18 @@ class AdminScreen(QWidget):
 
         for row, (key, label_text, desc) in enumerate(drivers):
             label = QLabel(f"{label_text}")
-            label.setFont(QFont(F.FAMILY, 13, QFont.Weight.Bold))
+            label.setFont(QFont("Sans", 13, QFont.Weight.Bold))
             grid.addWidget(label, row * 2, 0)
 
             desc_label = QLabel(desc)
-            desc_label.setFont(QFont(F.FAMILY, 10))
-            desc_label.setStyleSheet(f"color: {C.TEXT_DIM};")
+            desc_label.setFont(QFont("Sans", 10))
+            desc_label.setStyleSheet(f"color: {C.TEXT_MUTED};")
             grid.addWidget(desc_label, row * 2 + 1, 0)
 
             combo = QComboBox()
             combo.addItems(["real", "fake"])
             combo.setFixedSize(120, 36)
-            combo.setFont(QFont(F.FAMILY, 12))
+            combo.setFont(QFont("Sans", 12))
             self._combos[key] = combo
             grid.addWidget(combo, row * 2, 1, 2, 1, Qt.AlignmentFlag.AlignRight)
 
@@ -86,14 +86,14 @@ class AdminScreen(QWidget):
 
         # ── WEIGHT MODE ──
         weight_group = QGroupBox("Weight Mode")
-        weight_group.setFont(QFont(F.FAMILY, 14, QFont.Weight.Bold))
+        weight_group.setFont(QFont("Sans", 14, QFont.Weight.Bold))
         wl = QHBoxLayout()
 
         wl.addWidget(QLabel("Mode:"))
         self._weight_mode_combo = QComboBox()
         self._weight_mode_combo.addItems(["arduino_serial", "hx711_direct"])
         self._weight_mode_combo.setFixedSize(180, 36)
-        self._weight_mode_combo.setFont(QFont(F.FAMILY, 12))
+        self._weight_mode_combo.setFont(QFont("Sans", 12))
         wl.addWidget(self._weight_mode_combo)
         wl.addStretch()
 
@@ -105,7 +105,7 @@ class AdminScreen(QWidget):
 
         btn_save = QPushButton("SAVE & RESTART APP")
         btn_save.setFixedHeight(50)
-        btn_save.setFont(QFont(F.FAMILY, 14, QFont.Weight.Bold))
+        btn_save.setFont(QFont("Sans", 14, QFont.Weight.Bold))
         btn_save.setStyleSheet(f"""
             QPushButton {{
                 background-color: {C.ACCENT};
@@ -113,7 +113,7 @@ class AdminScreen(QWidget):
                 border-radius: 8px;
             }}
             QPushButton:pressed {{
-                background-color: {C.ACCENT_HOVER};
+                background-color: {C.PRIMARY_DIM};
             }}
         """)
         btn_save.clicked.connect(self._save_settings)
@@ -121,7 +121,7 @@ class AdminScreen(QWidget):
 
         btn_reset = QPushButton("RESET TO DEFAULTS")
         btn_reset.setFixedHeight(50)
-        btn_reset.setFont(QFont(F.FAMILY, 12))
+        btn_reset.setFont(QFont("Sans", 12))
         btn_reset.setStyleSheet(f"""
             QPushButton {{
                 background-color: {C.DANGER};
@@ -137,8 +137,8 @@ class AdminScreen(QWidget):
 
         # ── INFO ──
         info = QLabel("Changes require app restart to take effect.")
-        info.setFont(QFont(F.FAMILY, 10))
-        info.setStyleSheet(f"color: {C.TEXT_DIM};")
+        info.setFont(QFont("Sans", 10))
+        info.setStyleSheet(f"color: {C.TEXT_MUTED};")
         info.setAlignment(Qt.AlignmentFlag.AlignCenter)
         layout.addWidget(info)
 
