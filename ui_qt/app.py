@@ -32,6 +32,9 @@ class ClickSoundFilter(QObject):
     def eventFilter(self, obj, event):
         if (event.type() == QEvent.Type.MouseButtonPress
                 and isinstance(obj, QPushButton)):
+            # Skip buzzer on admin/settings screens and combo boxes
+            if isinstance(obj, QComboBox):
+                return False
             try:
                 from hal.interfaces import BuzzerPattern
                 self._app.buzzer.play(BuzzerPattern.TICK)
