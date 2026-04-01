@@ -1,9 +1,10 @@
 /*
- * SmartLocker Nano Firmware v1.0
+ * SmartLocker Nano Firmware v1.1
  * ==============================
  * Arduino Nano as bridge for:
  *   - 2x HX711 load cell amplifiers (shelf + mixing scale)
- *   - WS2812B addressable LEDs (slot indicators + balance bar)
+ *   - 1x KYX-B10BGYR-4 LED bar graph (10 segments: green/yellow/red)
+ *   - 4x Red indicator LEDs (panel mount, one per shelf slot)
  *
  * Serial protocol (115200 baud, JSON lines):
  *
@@ -14,75 +15,78 @@
  *     {"cmd":"tare","ch":"shelf"}
  *     {"cmd":"tare","ch":"mix"}
  *     {"cmd":"tare","ch":"all"}
- *     {"cmd":"led","idx":0,"r":0,"g":255,"b":0}        // single LED
- *     {"cmd":"led_range","from":0,"to":4,"r":255,"g":0,"b":0}  // range
- *     {"cmd":"led_off"}                                  // all off
- *     {"cmd":"led_bar","pct":75,"r":0,"g":255,"b":0}   // balance bar fill %
- *     {"cmd":"cal","ch":"shelf","scale":9.81}           // set calibration
- *     {"cmd":"status"}                                   // health check
+ *     {"cmd":"bar","pct":75}                // fill bar to 75%
+ *     {"cmd":"bar","seg":7}                 // light first 7 segments
+ *     {"cmd":"bar_off"}                     // bar all off
+ *     {"cmd":"slot","idx":0,"on":1}         // shelf LED 0 on
+ *     {"cmd":"slot","idx":2,"on":0}         // shelf LED 2 off
+ *     {"cmd":"slot_all","on":0}             // all shelf LEDs off
+ *     {"cmd":"led_off"}                     // everything off
+ *     {"cmd":"cal","ch":"shelf","scale":9.81}
+ *     {"cmd":"status"}
  *
  *   Arduino -> RPi (responses):
- *     {"status":"ok","fw":"1.0"}                         // ping response
+ *     {"status":"ok","fw":"1.1"}
  *     {"ch":"shelf","g":1234.5,"raw":8388607,"stable":true}
- *     {"ch":"mix","g":567.8,"raw":4194303,"stable":false}
- *     {"ok":"tare","ch":"shelf"}
- *     {"ok":"led"}
- *     {"ok":"cal","ch":"shelf","scale":9.81}
+ *     {"ok":"bar","seg":7}
+ *     {"ok":"slot","idx":0}
  *     {"err":"unknown command"}
- *     {"status":"ok","shelf_ok":true,"mix_ok":true,"leds":16}
  *
  * Hardware wiring:
  *   HX711 Shelf:  DT=D2, SCK=D3
  *   HX711 Mix:    DT=D4, SCK=D5
- *   WS2812B:      DIN=D6
+ *   Bar graph:    seg0=D6 .. seg7=D13, seg8=A0, seg9=A1
+ *                 (each through 220ohm resistor)
+ *   Shelf LEDs:   slot0=A2, slot1=A3, slot2=A4, slot3=A5
+ *                 (each through appropriate resistor)
  *
- * Libraries required (install via Arduino IDE Library Manager):
+ * Bar graph segment colors (KYX-B10BGYR-4):
+ *   seg 0-3  = GREEN  (0-40%)
+ *   seg 4-6  = YELLOW (40-70%)
+ *   seg 7-9  = RED    (70-100%)
+ *
+ * Libraries required:
  *   - HX711 by Bogdan Necula (or Rob Tillaart)
- *   - Adafruit NeoPixel
- *   - ArduinoJson v6 by Benoit Blanchon (6.x works, 7.x also works)
+ *   - ArduinoJson v7 by Benoit Blanchon
  */
 
 #include <HX711.h>
-#include <Adafruit_NeoPixel.h>
 #include <ArduinoJson.h>
 
 // ============================================================
 // PIN DEFINITIONS
 // ============================================================
+
+// HX711 load cells
 #define SHELF_DT   2
 #define SHELF_SCK  3
 #define MIX_DT     4
 #define MIX_SCK    5
-#define LED_PIN    6
 
-// ============================================================
-// LED CONFIGURATION
-// ============================================================
-// Total LEDs = slot LEDs + balance bar LEDs
-// Adjust these for your physical setup
-#define NUM_SLOT_LEDS    4    // 1 per shelf slot (under cans)
-#define NUM_BAR_LEDS     8    // balance indicator bar
-#define NUM_LEDS_TOTAL   (NUM_SLOT_LEDS + NUM_BAR_LEDS)
+// LED bar graph (10 segments) - KYX-B10BGYR-4
+// Segment 0 = bottom (green), segment 9 = top (red)
+const int BAR_PINS[10] = {6, 7, 8, 9, 10, 11, 12, 13, A0, A1};
+#define NUM_BAR_SEGS 10
 
-// Balance bar starts after slot LEDs in the chain
-#define BAR_START_IDX    NUM_SLOT_LEDS
+// Shelf indicator LEDs (red, panel mount)
+const int SLOT_PINS[4] = {A2, A3, A4, A5};
+#define NUM_SLOTS 4
 
 // ============================================================
 // HX711 CONFIGURATION
 // ============================================================
-#define SAMPLES_NORMAL    5     // readings to average for normal read
-#define SAMPLES_TARE      15    // readings to average for tare
-#define STABILITY_WINDOW  3     // consecutive reads within threshold = stable
-#define STABILITY_THRESH  15.0  // grams — stable if spread < this
+#define SAMPLES_NORMAL    5
+#define SAMPLES_TARE      15
+#define STABILITY_WINDOW  3
+#define STABILITY_THRESH  15.0  // grams
 
 // ============================================================
 // GLOBALS
 // ============================================================
 HX711 scaleShelf;
 HX711 scaleMix;
-Adafruit_NeoPixel leds(NUM_LEDS_TOTAL, LED_PIN, NEO_GRB + NEO_KHZ800);
 
-// Calibration (defaults — overridden by "cal" command or tare)
+// Calibration
 float shelfScale  = 9.81;
 float mixScale    = 20.69;
 long  shelfOffset = 0;
@@ -100,57 +104,47 @@ bool  mixStable    = false;
 char serialBuf[256];
 int  serialPos = 0;
 
+// Bar graph current state
+int barSegments = 0;  // how many segments are lit (0-10)
+
+// HX711 lazy init flag
+bool hx711_initialized = false;
+
 // ============================================================
 // SETUP
 // ============================================================
 void setup() {
     Serial.begin(115200);
-    while (!Serial) { ; }  // Wait for serial (Nano: instant)
+    delay(500);
+    Serial.println("{\"boot\":\"starting\"}");
 
-    // Initialize HX711 channels
-    scaleShelf.begin(SHELF_DT, SHELF_SCK);
-    scaleMix.begin(MIX_DT, MIX_SCK);
-
-    // Set gain to 128 (channel A) — default
-    scaleShelf.set_gain(128);
-    scaleMix.set_gain(128);
-
-    // Auto-tare on startup
-    if (scaleShelf.is_ready()) {
-        shelfOffset = scaleShelf.read_average(SAMPLES_TARE);
+    // Initialize bar graph pins
+    for (int i = 0; i < NUM_BAR_SEGS; i++) {
+        pinMode(BAR_PINS[i], OUTPUT);
+        digitalWrite(BAR_PINS[i], LOW);
     }
-    if (scaleMix.is_ready()) {
-        mixOffset = scaleMix.read_average(SAMPLES_TARE);
-    }
+    Serial.println("{\"boot\":\"bar_ok\"}");
 
-    // Initialize LED strip
-    leds.begin();
-    leds.setBrightness(50);  // 0-255, start conservative
-    leds.clear();
-    leds.show();
-
-    // Startup animation: quick green sweep
-    for (int i = 0; i < NUM_LEDS_TOTAL; i++) {
-        leds.setPixelColor(i, leds.Color(0, 80, 0));
-        leds.show();
-        delay(50);
+    // Initialize shelf LED pins
+    for (int i = 0; i < NUM_SLOTS; i++) {
+        pinMode(SLOT_PINS[i], OUTPUT);
+        digitalWrite(SLOT_PINS[i], LOW);
     }
-    delay(200);
-    leds.clear();
-    leds.show();
+    Serial.println("{\"boot\":\"slots_ok\"}");
 
     // Init stability history
     for (int i = 0; i < STABILITY_WINDOW; i++) {
         shelfHistory[i] = 0;
         mixHistory[i] = 0;
     }
+
+    Serial.println("{\"boot\":\"ready\"}");
 }
 
 // ============================================================
 // MAIN LOOP
 // ============================================================
 void loop() {
-    // Read serial commands (non-blocking)
     while (Serial.available()) {
         char c = Serial.read();
         if (c == '\n' || c == '\r') {
@@ -169,7 +163,7 @@ void loop() {
 // COMMAND PROCESSOR
 // ============================================================
 void processCommand(const char* json) {
-    StaticJsonDocument<256> doc;
+    JsonDocument doc;
     DeserializationError err = deserializeJson(doc, json);
 
     if (err) {
@@ -181,11 +175,17 @@ void processCommand(const char* json) {
 
     // ---- PING ----
     if (strcmp(cmd, "ping") == 0) {
-        Serial.println("{\"status\":\"ok\",\"fw\":\"1.0\"}");
+        Serial.println("{\"status\":\"ok\",\"fw\":\"1.1\"}");
+    }
+
+    // ---- INIT HX711 (manual trigger) ----
+    else if (strcmp(cmd, "init_hx") == 0) {
+        initHX711();
     }
 
     // ---- READ WEIGHT ----
     else if (strcmp(cmd, "read") == 0) {
+        if (!hx711_initialized) initHX711();
         const char* ch = doc["ch"] | "";
         if (strcmp(ch, "shelf") == 0 || strcmp(ch, "shelf1") == 0) {
             readAndSend(&scaleShelf, "shelf", shelfScale, shelfOffset,
@@ -202,22 +202,22 @@ void processCommand(const char* json) {
 
     // ---- TARE ----
     else if (strcmp(cmd, "tare") == 0) {
+        if (!hx711_initialized) initHX711();
         const char* ch = doc["ch"] | "";
         bool ok = false;
         if (strcmp(ch, "shelf") == 0 || strcmp(ch, "shelf1") == 0 || strcmp(ch, "all") == 0) {
-            if (scaleShelf.is_ready()) {
+            if (scaleShelf.wait_ready_timeout(1000)) {
                 shelfOffset = scaleShelf.read_average(SAMPLES_TARE);
                 ok = true;
             }
         }
         if (strcmp(ch, "mix") == 0 || strcmp(ch, "mixing_scale") == 0 || strcmp(ch, "all") == 0) {
-            if (scaleMix.is_ready()) {
+            if (scaleMix.wait_ready_timeout(1000)) {
                 mixOffset = scaleMix.read_average(SAMPLES_TARE);
                 ok = true;
             }
         }
         if (ok) {
-            // Build response
             char resp[64];
             snprintf(resp, sizeof(resp), "{\"ok\":\"tare\",\"ch\":\"%s\"}", ch);
             Serial.println(resp);
@@ -226,68 +226,68 @@ void processCommand(const char* json) {
         }
     }
 
-    // ---- SINGLE LED ----
-    else if (strcmp(cmd, "led") == 0) {
+    // ---- BAR GRAPH (percentage or segment count) ----
+    else if (strcmp(cmd, "bar") == 0) {
+        int seg = -1;
+
+        if (doc.containsKey("pct")) {
+            int pct = doc["pct"] | 0;
+            if (pct < 0) pct = 0;
+            if (pct > 100) pct = 100;
+            seg = (pct * NUM_BAR_SEGS + 50) / 100;  // round
+        }
+        else if (doc.containsKey("seg")) {
+            seg = doc["seg"] | 0;
+        }
+
+        if (seg >= 0 && seg <= NUM_BAR_SEGS) {
+            setBar(seg);
+            char resp[48];
+            snprintf(resp, sizeof(resp), "{\"ok\":\"bar\",\"seg\":%d}", seg);
+            Serial.println(resp);
+        } else {
+            Serial.println("{\"err\":\"bar_range\"}");
+        }
+    }
+
+    // ---- BAR OFF ----
+    else if (strcmp(cmd, "bar_off") == 0) {
+        setBar(0);
+        Serial.println("{\"ok\":\"bar_off\"}");
+    }
+
+    // ---- SINGLE SHELF LED ----
+    else if (strcmp(cmd, "slot") == 0) {
         int idx = doc["idx"] | -1;
-        int r = doc["r"] | 0;
-        int g = doc["g"] | 0;
-        int b = doc["b"] | 0;
-        if (idx >= 0 && idx < NUM_LEDS_TOTAL) {
-            leds.setPixelColor(idx, leds.Color(r, g, b));
-            leds.show();
-            Serial.println("{\"ok\":\"led\"}");
+        int on = doc["on"] | 0;
+        if (idx >= 0 && idx < NUM_SLOTS) {
+            digitalWrite(SLOT_PINS[idx], on ? HIGH : LOW);
+            char resp[48];
+            snprintf(resp, sizeof(resp), "{\"ok\":\"slot\",\"idx\":%d,\"on\":%d}", idx, on);
+            Serial.println(resp);
         } else {
-            Serial.println("{\"err\":\"led_idx\"}");
+            Serial.println("{\"err\":\"slot_idx\"}");
         }
     }
 
-    // ---- LED RANGE ----
-    else if (strcmp(cmd, "led_range") == 0) {
-        int from = doc["from"] | 0;
-        int to = doc["to"] | 0;
-        int r = doc["r"] | 0;
-        int g = doc["g"] | 0;
-        int b = doc["b"] | 0;
-        if (from >= 0 && to <= NUM_LEDS_TOTAL && from <= to) {
-            for (int i = from; i < to; i++) {
-                leds.setPixelColor(i, leds.Color(r, g, b));
-            }
-            leds.show();
-            Serial.println("{\"ok\":\"led_range\"}");
-        } else {
-            Serial.println("{\"err\":\"led_range\"}");
+    // ---- ALL SHELF LEDs ----
+    else if (strcmp(cmd, "slot_all") == 0) {
+        int on = doc["on"] | 0;
+        for (int i = 0; i < NUM_SLOTS; i++) {
+            digitalWrite(SLOT_PINS[i], on ? HIGH : LOW);
         }
+        char resp[48];
+        snprintf(resp, sizeof(resp), "{\"ok\":\"slot_all\",\"on\":%d}", on);
+        Serial.println(resp);
     }
 
-    // ---- LED ALL OFF ----
+    // ---- EVERYTHING OFF ----
     else if (strcmp(cmd, "led_off") == 0) {
-        leds.clear();
-        leds.show();
-        Serial.println("{\"ok\":\"led_off\"}");
-    }
-
-    // ---- BALANCE BAR (fill percentage) ----
-    else if (strcmp(cmd, "led_bar") == 0) {
-        int pct = doc["pct"] | 0;
-        int r = doc["r"] | 0;
-        int g = doc["g"] | 0;
-        int b = doc["b"] | 0;
-
-        // Fill balance bar LEDs based on percentage
-        int fillCount = (pct * NUM_BAR_LEDS + 50) / 100;  // round
-        if (fillCount > NUM_BAR_LEDS) fillCount = NUM_BAR_LEDS;
-        if (fillCount < 0) fillCount = 0;
-
-        for (int i = 0; i < NUM_BAR_LEDS; i++) {
-            int ledIdx = BAR_START_IDX + i;
-            if (i < fillCount) {
-                leds.setPixelColor(ledIdx, leds.Color(r, g, b));
-            } else {
-                leds.setPixelColor(ledIdx, 0);
-            }
+        setBar(0);
+        for (int i = 0; i < NUM_SLOTS; i++) {
+            digitalWrite(SLOT_PINS[i], LOW);
         }
-        leds.show();
-        Serial.println("{\"ok\":\"led_bar\"}");
+        Serial.println("{\"ok\":\"led_off\"}");
     }
 
     // ---- SET CALIBRATION ----
@@ -314,28 +314,54 @@ void processCommand(const char* json) {
         bool mix_ok = scaleMix.is_ready();
         char resp[128];
         snprintf(resp, sizeof(resp),
-            "{\"status\":\"ok\",\"shelf_ok\":%s,\"mix_ok\":%s,\"leds\":%d,\"fw\":\"1.0\"}",
+            "{\"status\":\"ok\",\"shelf_ok\":%s,\"mix_ok\":%s,\"bar\":%d,\"slots\":%d,\"fw\":\"1.1\"}",
             shelf_ok ? "true" : "false",
             mix_ok ? "true" : "false",
-            NUM_LEDS_TOTAL);
+            NUM_BAR_SEGS, NUM_SLOTS);
         Serial.println(resp);
-    }
-
-    // ---- LED BRIGHTNESS ----
-    else if (strcmp(cmd, "led_bright") == 0) {
-        int val = doc["val"] | -1;
-        if (val >= 0 && val <= 255) {
-            leds.setBrightness(val);
-            leds.show();
-            Serial.println("{\"ok\":\"led_bright\"}");
-        } else {
-            Serial.println("{\"err\":\"brightness 0-255\"}");
-        }
     }
 
     // ---- UNKNOWN ----
     else {
         Serial.println("{\"err\":\"unknown command\"}");
+    }
+}
+
+// ============================================================
+// HX711 LAZY INIT
+// ============================================================
+void initHX711() {
+    if (hx711_initialized) return;
+
+    Serial.println("{\"info\":\"hx711_init_start\"}");
+
+    scaleShelf.begin(SHELF_DT, SHELF_SCK);
+    scaleMix.begin(MIX_DT, MIX_SCK);
+
+    // Tare if ready (with timeout)
+    if (scaleShelf.wait_ready_timeout(2000)) {
+        shelfOffset = scaleShelf.read_average(SAMPLES_TARE);
+        Serial.println("{\"info\":\"shelf_tared\"}");
+    }
+    if (scaleMix.wait_ready_timeout(2000)) {
+        mixOffset = scaleMix.read_average(SAMPLES_TARE);
+        Serial.println("{\"info\":\"mix_tared\"}");
+    }
+
+    hx711_initialized = true;
+    Serial.println("{\"info\":\"hx711_init_done\"}");
+}
+
+// ============================================================
+// BAR GRAPH HELPER
+// ============================================================
+void setBar(int segments) {
+    if (segments < 0) segments = 0;
+    if (segments > NUM_BAR_SEGS) segments = NUM_BAR_SEGS;
+
+    barSegments = segments;
+    for (int i = 0; i < NUM_BAR_SEGS; i++) {
+        digitalWrite(BAR_PINS[i], (i < segments) ? HIGH : LOW);
     }
 }
 
@@ -346,7 +372,7 @@ void readAndSend(HX711* scale, const char* chName,
                  float calScale, long calOffset,
                  float* history, int* histIdx, bool* stable) {
 
-    if (!scale->is_ready()) {
+    if (!scale->wait_ready_timeout(500)) {
         char resp[64];
         snprintf(resp, sizeof(resp), "{\"ch\":\"%s\",\"err\":\"not_ready\"}", chName);
         Serial.println(resp);
@@ -372,7 +398,6 @@ void readAndSend(HX711* scale, const char* chName,
     *stable = (maxVal - minVal) < STABILITY_THRESH;
 
     // Send JSON response
-    // Using dtostrf for float formatting on AVR
     char gramsStr[16];
     dtostrf(grams, 1, 1, gramsStr);
 
