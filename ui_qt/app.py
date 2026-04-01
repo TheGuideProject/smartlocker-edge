@@ -246,6 +246,7 @@ class SmartLockerWindow(QMainWindow):
                 from hal.real.real_weight_hx711 import RealWeightDriverHX711
                 self.weight = RealWeightDriverHX711()
             else:
+                # Arduino serial bridge (also provides LED control)
                 from hal.real.real_weight import RealWeightDriver
                 self.weight = RealWeightDriver()
         else:
@@ -254,8 +255,15 @@ class SmartLockerWindow(QMainWindow):
 
         # ── LED ──
         if drv_led == "real":
-            from hal.real.real_led import RealLEDDriver
-            self.led = RealLEDDriver()
+            from config.settings import WEIGHT_MODE
+            if WEIGHT_MODE == "arduino_serial":
+                # Arduino drives both HX711 and WS2812B LEDs on same serial
+                from hal.real.real_led_arduino import RealLEDDriverArduino
+                self.led = RealLEDDriverArduino()
+                self.led.set_weight_driver(self.weight)
+            else:
+                from hal.real.real_led import RealLEDDriver
+                self.led = RealLEDDriver()
         else:
             from hal.fake.fake_led import FakeLEDDriver
             self.led = FakeLEDDriver()

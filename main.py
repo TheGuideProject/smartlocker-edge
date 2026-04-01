@@ -102,8 +102,14 @@ def main_cli():
 
     # ---- LED Driver ----
     if drv_led == "real":
-        from hal.real.real_led import RealLEDDriver
-        led = RealLEDDriver()
+        from config.settings import WEIGHT_MODE as _wm
+        if _wm == "arduino_serial":
+            from hal.real.real_led_arduino import RealLEDDriverArduino
+            led = RealLEDDriverArduino()
+            led.set_weight_driver(weight)
+        else:
+            from hal.real.real_led import RealLEDDriver
+            led = RealLEDDriver()
     else:
         from hal.fake.fake_led import FakeLEDDriver
         led = FakeLEDDriver()
