@@ -22,6 +22,45 @@ from ui_qt.theme import STYLESHEET, C, F, S
 logger = logging.getLogger("smartlocker.qt_app")
 
 
+class BuzzerModeWrapper:
+    """Wraps a real buzzer driver to filter sounds based on mode.
+
+    Modes:
+      "all"          - all sounds play (no wrapper needed)
+      "alarms_only"  - only alarm/error/warning patterns play
+      "mute"         - all sounds suppressed
+    """
+
+    # Patterns that always play in "alarms_only" mode
+    ALARM_PATTERNS = {"alarm", "error", "warning", "target", "pour_target"}
+
+    def __init__(self, real_buzzer, mode: str):
+        self._buzzer = real_buzzer
+        self._mode = mode
+
+    def initialize(self) -> bool:
+        return self._buzzer.initialize()
+
+    def play(self, pattern) -> None:
+        if self._mode == "mute":
+            return
+        if self._mode == "alarms_only":
+            pat_name = pattern.value if hasattr(pattern, "value") else str(pattern)
+            if pat_name not in self.ALARM_PATTERNS:
+                return
+        self._buzzer.play(pattern)
+
+    def stop(self) -> None:
+        self._buzzer.stop()
+
+    def shutdown(self) -> None:
+        self._buzzer.shutdown()
+
+    # Proxy any other attributes to the real buzzer
+    def __getattr__(self, name):
+        return getattr(self._buzzer, name)
+
+
 class ClickSoundFilter(QObject):
     """Global event filter: plays buzzer TICK on every button press."""
 
@@ -293,6 +332,12 @@ class SmartLockerWindow(QMainWindow):
         else:
             from hal.fake.fake_buzzer import FakeBuzzerDriver
             self.buzzer = FakeBuzzerDriver()
+
+        # Apply buzzer mode filter (mute / alarms_only / all)
+        buzzer_mode = admin_cfg.get("buzzer_mode", "all") if admin_cfg else "all"
+        if buzzer_mode != "all":
+            self.buzzer = BuzzerModeWrapper(self.buzzer, buzzer_mode)
+            logger.info(f"Buzzer mode: {buzzer_mode}")
 
         # Event bus
         self.event_bus = EventBus()

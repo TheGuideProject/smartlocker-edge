@@ -92,6 +92,16 @@ class AdminScreen(QWidget):
         wrow.addStretch()
         layout.addLayout(wrow)
 
+        # ── BUZZER MODE ──
+        brow = QHBoxLayout()
+        brow.addWidget(QLabel("Buzzer Mode:"))
+        self._buzzer_mode_combo = QComboBox()
+        self._buzzer_mode_combo.addItems(["all", "alarms_only", "mute"])
+        self._buzzer_mode_combo.setFixedSize(160, 32)
+        brow.addWidget(self._buzzer_mode_combo)
+        brow.addStretch()
+        layout.addLayout(brow)
+
         layout.addSpacing(8)
 
         # ── BUTTONS ──
@@ -158,6 +168,11 @@ class AdminScreen(QWidget):
         if idx >= 0:
             self._weight_mode_combo.setCurrentIndex(idx)
 
+        buzzer_mode = admin_cfg.get("buzzer_mode", "all")
+        idx = self._buzzer_mode_combo.findText(buzzer_mode)
+        if idx >= 0:
+            self._buzzer_mode_combo.setCurrentIndex(idx)
+
     def _save_and_restart(self):
         admin_cfg = self.app.db.get_admin_config()
         admin_cfg["driver_rfid"] = self._combos["rfid"].currentText()
@@ -165,6 +180,7 @@ class AdminScreen(QWidget):
         admin_cfg["driver_led"] = self._combos["led"].currentText()
         admin_cfg["driver_buzzer"] = self._combos["buzzer"].currentText()
         admin_cfg["weight_mode"] = self._weight_mode_combo.currentText()
+        admin_cfg["buzzer_mode"] = self._buzzer_mode_combo.currentText()
 
         self.app.db.conn.execute(
             """INSERT OR REPLACE INTO config (key, value, updated_at)
