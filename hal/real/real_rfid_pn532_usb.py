@@ -135,7 +135,11 @@ class RealRFIDDriverPN532USB(RFIDDriverInterface):
 
         try:
             self._ser = serial.Serial(port, self._baudrate, timeout=1)
-            time.sleep(1)  # Wait for CH340 + PN532 to stabilize
+            # Wait for CH340 bridge to stabilize after port open
+            time.sleep(2)
+            # Flush any boot/garbage data from the PN532
+            self._ser.reset_input_buffer()
+            self._ser.reset_output_buffer()
 
             self._pn532 = PN532_UART(self._ser, debug=False)
 
@@ -251,13 +255,18 @@ class RealRFIDDriverPN532USB(RFIDDriverInterface):
             logger.warning("[PN532 USB] adafruit_pn532 not available")
             return False
 
+        # Try up to 3 times (CH340 sometimes needs multiple attempts)
         with self._lock:
-            if not self._connect():
-                return False
+            for attempt in range(1, 4):
+                if self._connect():
+                    self._initialized = True
+                    logger.info(f"[PN532 USB] Initialized on {self._port}")
+                    return True
+                logger.warning(f"[PN532 USB] Init attempt {attempt}/3 failed, retrying...")
+                self._disconnect()
+                time.sleep(2)
 
-        self._initialized = True
-        logger.info(f"[PN532 USB] Initialized on {self._port}")
-        return True
+        return False
 
     def poll_tags(self) -> List[TagReading]:
         if not self._initialized or not self._pn532:
