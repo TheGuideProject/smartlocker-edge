@@ -125,6 +125,7 @@ class DaemonConnection:
             "poll_tags": "tags_response",
             "get_channels": "channels",
             "get_reader_ids": "reader_ids",
+            "write_tag": "write_tag_result",
         }
         expected = response_type_map.get(cmd_name, "ack")
 
@@ -134,8 +135,11 @@ class DaemonConnection:
 
         self._send_raw(cmd)
 
-        # Wait for response (up to 3 seconds)
-        if self._response_event.wait(timeout=3.0):
+        # Longer timeout for slow operations (NFC write, tare)
+        slow_cmds = {"write_tag", "tare"}
+        timeout = 10.0 if cmd_name in slow_cmds else 3.0
+
+        if self._response_event.wait(timeout=timeout):
             return self._response_data
         else:
             logger.warning(f"Timeout waiting for {expected} response to {cmd_name}")
@@ -287,6 +291,16 @@ class SocketRFIDDriver(RFIDDriverInterface):
         if resp:
             return resp.get("ids", [])
         return []
+
+    def write_product_data(self, product_string: str) -> bool:
+        """Write product data to NFC tag via daemon."""
+        resp = self._conn.send_command({
+            "cmd": "write_tag",
+            "data": product_string,
+        })
+        if resp:
+            return resp.get("ok", False)
+        return False
 
     def is_healthy(self) -> bool:
         return self._conn._sensor_status.get("rfid", False)

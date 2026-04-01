@@ -461,6 +461,25 @@ class HardwareDaemon:
             )
             await self._send_json(writer, {"type": "reader_ids", "ids": ids})
 
+        elif cmd == "write_tag":
+            data = msg.get("data", "")
+            loop = asyncio.get_running_loop()
+            try:
+                ok = await loop.run_in_executor(
+                    None, self.rfid.write_product_data, data
+                )
+                # Clear tag cache so next read gets fresh data
+                if ok and hasattr(self.rfid, '_tag_cache'):
+                    self.rfid._tag_cache.clear()
+                await self._send_json(writer, {
+                    "type": "write_tag_result", "ok": ok,
+                })
+            except Exception as e:
+                logger.error(f"Tag write failed: {e}")
+                await self._send_json(writer, {
+                    "type": "write_tag_result", "ok": False, "error": str(e),
+                })
+
         elif cmd == "shutdown":
             logger.info(f"Shutdown requested by {cid}")
             await self._send_json(writer, {"type": "ack", "cmd": "shutdown"})
