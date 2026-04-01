@@ -207,6 +207,10 @@ class SmartLockerWindow(QMainWindow):
             drv_weight = admin_cfg.get("driver_weight", drv_weight)
             drv_led = admin_cfg.get("driver_led", drv_led)
             drv_buzzer = admin_cfg.get("driver_buzzer", drv_buzzer)
+            # Also override weight mode if set
+            if "weight_mode" in admin_cfg:
+                import config.settings as _s
+                _s.WEIGHT_MODE = admin_cfg["weight_mode"]
             print("  Admin overrides applied from DB")
 
         self.driver_status = {

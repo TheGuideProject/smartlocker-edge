@@ -259,17 +259,42 @@ class RealWeightDriver(WeightDriverInterface):
             return self._tare_result
         return False
 
-    def set_calibration(self, channel: str, scale: float) -> bool:
-        """Send calibration scale factor to Arduino."""
+    def set_calibration(self, channel: str, offset: int, scale: float) -> bool:
+        """Send calibration to Arduino and persist to DB.
+
+        Args:
+            channel: "shelf1" or "mixing_scale"
+            offset: raw ADC offset (tare value) — sent to Arduino
+            scale: raw units per gram — sent to Arduino
+        """
         if not self._initialized:
             return False
         arduino_ch = _to_arduino_ch(channel)
+
+        # Send scale to Arduino
         with self._lock:
             self._send({"cmd": "cal", "ch": arduino_ch, "scale": round(scale, 4)})
             resp = self._recv(timeout=2.0)
         ok = resp is not None and "ok" in resp
+
         if ok:
-            logger.info(f"[ARDUINO WEIGHT] Calibration set for {channel}: scale={scale:.4f}")
+            logger.info(f"[ARDUINO WEIGHT] Calibration set for {channel}: offset={offset}, scale={scale:.4f}")
+
+            # Persist to DB (same as HX711 direct driver)
+            try:
+                import json as _json
+                from persistence.database import Database
+                db = Database()
+                db.connect()
+                db.set_config(f"hx711_cal_{channel}", _json.dumps({
+                    "offset": offset,
+                    "scale": scale,
+                }))
+                db.close()
+                logger.info(f"[ARDUINO WEIGHT] Calibration saved to DB for {channel}")
+            except Exception as e:
+                logger.warning(f"[ARDUINO WEIGHT] Could not save calibration to DB: {e}")
+
         return ok
 
     def get_channels(self) -> List[str]:
