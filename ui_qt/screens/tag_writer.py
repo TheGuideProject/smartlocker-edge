@@ -3,7 +3,7 @@ SmartLocker Tag Writer Screen
 
 Select a product from the local database, enter batch info,
 then write the data to an NFC tag via PN532 USB.
-Also registers the tag→product mapping in the local DB.
+Also registers the tag->product mapping in the local DB.
 """
 
 import logging
@@ -16,16 +16,78 @@ from PyQt6.QtWidgets import (
 from PyQt6.QtCore import Qt, QTimer
 
 from ui_qt.theme import C, F, S
+from ui_qt.icons import (
+    Icon, icon_badge, icon_label, status_dot, type_badge, section_header,
+    screen_header,
+)
 
 logger = logging.getLogger("smartlocker.ui.tag_writer")
 
-# Compact sizes for 800x480
-_PAD = 8
-_GAP = 6
-_F_BIG = 24
-_F_MED = 14
-_F_SM = 12
 
+# ─────────────────────────────────────────────────────────
+# Helpers
+# ─────────────────────────────────────────────────────────
+
+def _card_frame(accent: str = C.PRIMARY) -> QFrame:
+    """Return a styled QFrame card with left-border accent."""
+    card = QFrame()
+    card.setObjectName("card")
+    card.setStyleSheet(
+        f"QFrame#card {{"
+        f"  background-color: {C.BG_CARD};"
+        f"  border: 1px solid {C.BORDER};"
+        f"  border-left: 4px solid {accent};"
+        f"  border-radius: {S.RADIUS}px;"
+        f"}}"
+    )
+    return card
+
+
+def _styled_combo() -> QComboBox:
+    """Return a consistently styled QComboBox."""
+    combo = QComboBox()
+    combo.setStyleSheet(
+        f"QComboBox {{"
+        f"  background-color: {C.BG_INPUT}; color: {C.TEXT};"
+        f"  border: 1px solid {C.BORDER}; border-radius: 8px;"
+        f"  padding: 8px 12px; font-size: {F.BODY}px; min-height: 40px;"
+        f"}}"
+        f"QComboBox::drop-down {{ border: none; width: 28px; }}"
+        f"QComboBox QAbstractItemView {{"
+        f"  background-color: {C.BG_CARD}; color: {C.TEXT};"
+        f"  border: 1px solid {C.BORDER};"
+        f"  selection-background-color: {C.PRIMARY_BG};"
+        f"  font-size: {F.BODY}px;"
+        f"}}"
+    )
+    return combo
+
+
+def _styled_input(placeholder: str = "", font_size: int = F.BODY) -> QLineEdit:
+    """Return a consistently styled QLineEdit."""
+    inp = QLineEdit()
+    inp.setPlaceholderText(placeholder)
+    inp.setStyleSheet(
+        f"background-color: {C.BG_INPUT}; color: {C.TEXT};"
+        f"border: 1px solid {C.BORDER}; border-radius: 8px;"
+        f"padding: 8px 12px; font-size: {font_size}px; min-height: 40px;"
+    )
+    return inp
+
+
+def _label_above(text: str) -> QLabel:
+    """Small label styled for placement above an input field."""
+    lbl = QLabel(text)
+    lbl.setStyleSheet(
+        f"font-size: {F.SMALL}px; font-weight: bold;"
+        f"color: {C.SECONDARY}; letter-spacing: 1px;"
+    )
+    return lbl
+
+
+# ═════════════════════════════════════════════════════════
+# TAG WRITER SCREEN
+# ═════════════════════════════════════════════════════════
 
 class TagWriterScreen(QWidget):
     """Write product data to NFC tags from the product database."""
@@ -33,9 +95,10 @@ class TagWriterScreen(QWidget):
     def __init__(self, app):
         super().__init__()
         self.app = app
-        self._products = []       # cached product list
-        self._last_uid = None     # UID of last detected tag
+        self._products = []
+        self._last_uid = None
         self._writing = False
+        self._tags_written = 0
         self._build_ui()
 
     # ══════════════════════════════════════════════════════
@@ -48,182 +111,152 @@ class TagWriterScreen(QWidget):
         root.setSpacing(0)
 
         # ── Header ──
-        header = QFrame()
-        header.setStyleSheet(
-            f"background-color: {C.BG_STATUS};"
-            f"border-bottom: 1px solid {C.BORDER};"
+        header, h_layout = screen_header(
+            self.app, "TAG WRITER", Icon.TAG, C.ACCENT
         )
-        h_lay = QHBoxLayout(header)
-        h_lay.setContentsMargins(_PAD, 4, _PAD, 4)
-        h_lay.setSpacing(_GAP)
 
-        btn_back = QPushButton("< BACK")
-        btn_back.setObjectName("ghost")
-        btn_back.setCursor(Qt.CursorShape.PointingHandCursor)
-        btn_back.clicked.connect(self.app.go_back)
-        h_lay.addWidget(btn_back)
-
-        title = QLabel("TAG WRITER")
-        title.setStyleSheet(
-            f"font-size: {F.H3}px; font-weight: bold; color: {C.TEXT};"
-        )
-        h_lay.addWidget(title)
-        h_lay.addStretch(1)
-
-        self._status_badge = QLabel("READY")
-        self._status_badge.setStyleSheet(
-            f"font-size: {_F_SM}px; color: {C.TEXT_MUTED};"
-        )
-        h_lay.addWidget(self._status_badge)
+        self._status_badge = type_badge("READY", "muted")
+        h_layout.addWidget(self._status_badge)
 
         root.addWidget(header)
 
-        # ── Body: horizontal layout (form LEFT, status RIGHT) ──
+        # ── Body: Two-column layout (50/50) ──
         body = QHBoxLayout()
-        body.setContentsMargins(_PAD, _PAD, _PAD, _PAD)
-        body.setSpacing(_PAD)
+        body.setContentsMargins(S.PAD, S.PAD, S.PAD, S.PAD)
+        body.setSpacing(S.PAD)
 
-        # LEFT: Product selection + inputs
-        left = QVBoxLayout()
-        left.setSpacing(_GAP)
+        # ────────────────────────────────────────────
+        # LEFT COLUMN: Write Data
+        # ────────────────────────────────────────────
+        left_frame = QFrame()
+        left_frame.setStyleSheet(
+            f"QFrame {{ background-color: transparent; }}"
+        )
+        left = QVBoxLayout(left_frame)
+        left.setContentsMargins(0, 0, 0, 0)
+        left.setSpacing(S.GAP)
+
+        # Section header
+        left_hdr = section_header(Icon.EDIT, "WRITE DATA", C.ACCENT)
+        left.addWidget(left_hdr)
 
         # Product dropdown
-        lbl_prod = QLabel("PRODUCT")
-        lbl_prod.setStyleSheet(
-            f"font-size: {_F_SM}px; font-weight: bold; color: {C.SECONDARY};"
+        left.addWidget(_label_above("PRODUCT"))
+        self._combo_product = _styled_combo()
+        self._combo_product.currentIndexChanged.connect(
+            self._on_product_changed
         )
-        left.addWidget(lbl_prod)
-
-        self._combo_product = QComboBox()
-        self._combo_product.setStyleSheet(
-            f"QComboBox {{"
-            f"  background-color: {C.BG_INPUT}; color: {C.TEXT};"
-            f"  border: 1px solid {C.BORDER}; border-radius: 6px;"
-            f"  padding: 6px 10px; font-size: {_F_MED}px; min-height: 32px;"
-            f"}}"
-            f"QComboBox::drop-down {{"
-            f"  border: none; width: 24px;"
-            f"}}"
-            f"QComboBox QAbstractItemView {{"
-            f"  background-color: {C.BG_CARD}; color: {C.TEXT};"
-            f"  border: 1px solid {C.BORDER}; selection-background-color: {C.PRIMARY_BG};"
-            f"  font-size: {_F_MED}px;"
-            f"}}"
-        )
-        self._combo_product.currentIndexChanged.connect(self._on_product_changed)
         left.addWidget(self._combo_product)
 
-        # Batch number input
-        lbl_batch = QLabel("BATCH NUMBER")
-        lbl_batch.setStyleSheet(
-            f"font-size: {_F_SM}px; font-weight: bold; color: {C.SECONDARY};"
-        )
-        left.addWidget(lbl_batch)
-
-        self._input_batch = QLineEdit()
-        self._input_batch.setPlaceholderText("e.g. 80008800")
-        self._input_batch.setStyleSheet(
-            f"background-color: {C.BG_INPUT}; color: {C.TEXT};"
-            f"border: 1px solid {C.BORDER}; border-radius: 6px;"
-            f"padding: 6px 10px; font-size: {_F_MED}px; min-height: 32px;"
-        )
+        # Batch number
+        left.addWidget(_label_above("BATCH NUMBER"))
+        self._input_batch = _styled_input("e.g. 80008800")
         left.addWidget(self._input_batch)
 
-        # Color input
-        lbl_color = QLabel("COLOR (optional)")
-        lbl_color.setStyleSheet(
-            f"font-size: {_F_SM}px; font-weight: bold; color: {C.SECONDARY};"
-        )
-        left.addWidget(lbl_color)
-
-        self._input_color = QLineEdit()
-        self._input_color.setPlaceholderText("e.g. WHITE, RED, YELLOWGREEN")
-        self._input_color.setStyleSheet(
-            f"background-color: {C.BG_INPUT}; color: {C.TEXT};"
-            f"border: 1px solid {C.BORDER}; border-radius: 6px;"
-            f"padding: 6px 10px; font-size: {_F_MED}px; min-height: 32px;"
-        )
+        # Color
+        left.addWidget(_label_above("COLOR (optional)"))
+        self._input_color = _styled_input("e.g. WHITE, RED, YELLOWGREEN")
         left.addWidget(self._input_color)
 
-        # Can size input
-        lbl_can = QLabel("CAN SIZE (ml)")
-        lbl_can.setStyleSheet(
-            f"font-size: {_F_SM}px; font-weight: bold; color: {C.SECONDARY};"
-        )
-        left.addWidget(lbl_can)
+        # Can size with presets
+        left.addWidget(_label_above("CAN SIZE (ml)"))
 
         can_row = QHBoxLayout()
-        can_row.setSpacing(_GAP)
-        self._input_can_size = QLineEdit()
-        self._input_can_size.setPlaceholderText("5000")
-        self._input_can_size.setStyleSheet(
-            f"background-color: {C.BG_INPUT}; color: {C.TEXT};"
-            f"border: 1px solid {C.BORDER}; border-radius: 6px;"
-            f"padding: 6px 10px; font-size: {_F_MED}px; min-height: 32px;"
-        )
+        can_row.setSpacing(S.GAP)
+
+        self._input_can_size = _styled_input("5000")
         can_row.addWidget(self._input_can_size, stretch=1)
 
-        # Quick presets
         for size in ["1000", "5000", "20000"]:
-            btn = QPushButton(f"{size}")
-            btn.setStyleSheet(
-                f"background-color: {C.BG_CARD}; color: {C.TEXT_SEC};"
-                f"border: 1px solid {C.BORDER}; border-radius: 4px;"
-                f"padding: 4px 8px; font-size: {_F_SM}px; min-height: 28px;"
-            )
+            btn = QPushButton(size)
             btn.setCursor(Qt.CursorShape.PointingHandCursor)
-            btn.clicked.connect(lambda checked, s=size: self._input_can_size.setText(s))
+            btn.setStyleSheet(
+                f"background-color: {C.BG_CARD_ALT}; color: {C.TEXT_SEC};"
+                f"border: 1px solid {C.BORDER}; border-radius: 6px;"
+                f"padding: 6px 10px; font-size: {F.SMALL}px;"
+                f"font-weight: bold; min-height: 36px;"
+            )
+            btn.clicked.connect(
+                lambda checked, s=size: self._input_can_size.setText(s)
+            )
             can_row.addWidget(btn)
-        left.addLayout(can_row)
+
+        can_wrapper = QWidget()
+        can_wrapper.setLayout(can_row)
+        left.addWidget(can_wrapper)
 
         left.addStretch(1)
 
-        # ── WRITE button ──
-        self._btn_write = QPushButton("WRITE TAG")
-        self._btn_write.setStyleSheet(
-            f"background-color: {C.PRIMARY}; color: {C.BG_DARK};"
-            f"border: none; border-radius: 8px;"
-            f"font-size: {_F_BIG}px; font-weight: bold;"
-            f"min-height: 48px; padding: 8px;"
-        )
+        # WRITE TAG button
+        self._btn_write = QPushButton(f"{Icon.SAVE}  WRITE TAG")
+        self._btn_write.setObjectName("primary")
         self._btn_write.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._btn_write.setMinimumHeight(S.BTN_H)
+        self._btn_write.setStyleSheet(
+            f"QPushButton {{"
+            f"  background: qlineargradient(x1:0,y1:0,x2:1,y2:0,"
+            f"    stop:0 {C.ACCENT}, stop:1 {C.PRIMARY});"
+            f"  color: {C.BG_DARK}; border: none;"
+            f"  border-radius: {S.RADIUS}px;"
+            f"  font-size: {F.H3}px; font-weight: bold;"
+            f"  min-height: {S.BTN_H}px; padding: 8px 16px;"
+            f"}}"
+            f"QPushButton:hover {{"
+            f"  background: qlineargradient(x1:0,y1:0,x2:1,y2:0,"
+            f"    stop:0 {C.PRIMARY_DIM}, stop:1 {C.ACCENT});"
+            f"}}"
+        )
         self._btn_write.clicked.connect(self._on_write_tag)
         left.addWidget(self._btn_write)
 
-        # RIGHT: Tag status + preview
-        right = QVBoxLayout()
-        right.setSpacing(_GAP)
+        body.addWidget(left_frame, stretch=1)
 
-        # Tag detection card
-        tag_card = QFrame()
-        tag_card.setObjectName("card")
-        tc_lay = QVBoxLayout(tag_card)
-        tc_lay.setContentsMargins(_PAD, _PAD, _PAD, _PAD)
-        tc_lay.setSpacing(_GAP)
-
-        lbl_tag_section = QLabel("NFC TAG")
-        lbl_tag_section.setStyleSheet(
-            f"font-size: {_F_SM}px; font-weight: bold; color: {C.SECONDARY};"
+        # ────────────────────────────────────────────
+        # RIGHT COLUMN: Tag Status
+        # ────────────────────────────────────────────
+        right_frame = QFrame()
+        right_frame.setStyleSheet(
+            f"QFrame {{ background-color: transparent; }}"
         )
-        tc_lay.addWidget(lbl_tag_section)
+        right = QVBoxLayout(right_frame)
+        right.setContentsMargins(0, 0, 0, 0)
+        right.setSpacing(S.GAP)
+
+        # Section header
+        right_hdr = section_header(Icon.TAG, "TAG STATUS", C.ACCENT)
+        right.addWidget(right_hdr)
+
+        # ── Tag detection card ──
+        tag_card = _card_frame(C.ACCENT)
+        tc_lay = QVBoxLayout(tag_card)
+        tc_lay.setContentsMargins(S.PAD, S.PAD, S.PAD, S.PAD)
+        tc_lay.setSpacing(S.GAP)
+
+        # Status row: dot + status text
+        tag_status_row = QHBoxLayout()
+        tag_status_row.setSpacing(S.GAP)
+
+        self._tag_dot = status_dot(active=False, size=12)
+        tag_status_row.addWidget(self._tag_dot)
 
         self._lbl_tag_status = QLabel("No tag detected")
         self._lbl_tag_status.setStyleSheet(
-            f"font-size: {_F_BIG}px; font-weight: bold; color: {C.TEXT_MUTED};"
+            f"font-size: {F.H3}px; font-weight: bold; color: {C.TEXT_MUTED};"
         )
-        self._lbl_tag_status.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        tc_lay.addWidget(self._lbl_tag_status)
+        tag_status_row.addWidget(self._lbl_tag_status, stretch=1)
+
+        tc_lay.addLayout(tag_status_row)
 
         self._lbl_tag_uid = QLabel("")
         self._lbl_tag_uid.setStyleSheet(
-            f"font-size: {_F_MED}px; color: {C.TEXT_SEC};"
+            f"font-size: {F.BODY}px; color: {C.TEXT_SEC};"
         )
         self._lbl_tag_uid.setAlignment(Qt.AlignmentFlag.AlignCenter)
         tc_lay.addWidget(self._lbl_tag_uid)
 
         self._lbl_tag_current = QLabel("")
         self._lbl_tag_current.setStyleSheet(
-            f"font-size: {_F_SM}px; color: {C.TEXT_MUTED};"
+            f"font-size: {F.SMALL}px; color: {C.TEXT_MUTED};"
         )
         self._lbl_tag_current.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self._lbl_tag_current.setWordWrap(True)
@@ -231,22 +264,28 @@ class TagWriterScreen(QWidget):
 
         right.addWidget(tag_card)
 
-        # Preview card: what will be written
-        preview_card = QFrame()
-        preview_card.setObjectName("card")
+        # ── Preview card: what will be written ──
+        preview_card = _card_frame(C.PRIMARY)
         pc_lay = QVBoxLayout(preview_card)
-        pc_lay.setContentsMargins(_PAD, _PAD, _PAD, _PAD)
-        pc_lay.setSpacing(_GAP)
+        pc_lay.setContentsMargins(S.PAD, S.PAD, S.PAD, S.PAD)
+        pc_lay.setSpacing(S.GAP)
 
-        lbl_preview = QLabel("WRITE PREVIEW")
-        lbl_preview.setStyleSheet(
-            f"font-size: {_F_SM}px; font-weight: bold; color: {C.SECONDARY};"
+        preview_hdr_row = QHBoxLayout()
+        preview_hdr_row.setSpacing(S.GAP)
+        preview_icon = icon_label(Icon.INFO, color=C.SECONDARY, size=14)
+        preview_hdr_row.addWidget(preview_icon)
+        preview_lbl = QLabel("WRITE PREVIEW")
+        preview_lbl.setStyleSheet(
+            f"font-size: {F.SMALL}px; font-weight: bold;"
+            f"color: {C.SECONDARY}; letter-spacing: 1px;"
         )
-        pc_lay.addWidget(lbl_preview)
+        preview_hdr_row.addWidget(preview_lbl)
+        preview_hdr_row.addStretch(1)
+        pc_lay.addLayout(preview_hdr_row)
 
         self._lbl_preview_data = QLabel("---")
         self._lbl_preview_data.setStyleSheet(
-            f"font-size: {_F_MED}px; color: {C.PRIMARY}; font-weight: bold;"
+            f"font-size: {F.BODY}px; color: {C.PRIMARY}; font-weight: bold;"
         )
         self._lbl_preview_data.setWordWrap(True)
         self._lbl_preview_data.setAlignment(Qt.AlignmentFlag.AlignCenter)
@@ -254,30 +293,38 @@ class TagWriterScreen(QWidget):
 
         right.addWidget(preview_card)
 
-        # Result card
-        result_card = QFrame()
-        result_card.setObjectName("card")
+        # ── Result card: success/failure ──
+        result_card = _card_frame(C.TEXT_MUTED)
+        self._result_card = result_card
         rc_lay = QVBoxLayout(result_card)
-        rc_lay.setContentsMargins(_PAD, _PAD, _PAD, _PAD)
-        rc_lay.setSpacing(_GAP)
+        rc_lay.setContentsMargins(S.PAD, S.PAD, S.PAD, S.PAD)
+        rc_lay.setSpacing(S.GAP)
 
-        lbl_result = QLabel("LAST RESULT")
-        lbl_result.setStyleSheet(
-            f"font-size: {_F_SM}px; font-weight: bold; color: {C.SECONDARY};"
+        result_hdr_row = QHBoxLayout()
+        result_hdr_row.setSpacing(S.GAP)
+        result_icon = icon_label(Icon.OK, color=C.TEXT_MUTED, size=14)
+        result_hdr_row.addWidget(result_icon)
+        result_lbl = QLabel("LAST RESULT")
+        result_lbl.setStyleSheet(
+            f"font-size: {F.SMALL}px; font-weight: bold;"
+            f"color: {C.SECONDARY}; letter-spacing: 1px;"
         )
-        rc_lay.addWidget(lbl_result)
+        result_hdr_row.addWidget(result_lbl)
+        result_hdr_row.addStretch(1)
+        rc_lay.addLayout(result_hdr_row)
 
         self._lbl_result = QLabel("--")
         self._lbl_result.setStyleSheet(
-            f"font-size: {_F_MED}px; color: {C.TEXT_MUTED};"
+            f"font-size: {F.BODY}px; color: {C.TEXT_MUTED};"
         )
         self._lbl_result.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self._lbl_result.setWordWrap(True)
         rc_lay.addWidget(self._lbl_result)
 
+        # Tags written counter
         self._lbl_tags_written = QLabel("Tags written: 0")
         self._lbl_tags_written.setStyleSheet(
-            f"font-size: {_F_SM}px; color: {C.TEXT_SEC};"
+            f"font-size: {F.SMALL}px; color: {C.TEXT_SEC};"
         )
         self._lbl_tags_written.setAlignment(Qt.AlignmentFlag.AlignCenter)
         rc_lay.addWidget(self._lbl_tags_written)
@@ -285,13 +332,11 @@ class TagWriterScreen(QWidget):
         right.addWidget(result_card)
         right.addStretch(1)
 
-        # Assemble body
-        body.addLayout(left, stretch=1)
-        body.addLayout(right, stretch=1)
+        body.addWidget(right_frame, stretch=1)
+
         root.addLayout(body, stretch=1)
 
-        # Internal state
-        self._tags_written = 0
+        # ── Internal state ──
         self._scan_timer = QTimer()
         self._scan_timer.timeout.connect(self._scan_for_tag)
 
@@ -323,7 +368,9 @@ class TagWriterScreen(QWidget):
         self._combo_product.clear()
 
         if not self._products:
-            self._combo_product.addItem("No products — sync with cloud first")
+            self._combo_product.addItem(
+                "No products -- sync with cloud first"
+            )
         else:
             for p in self._products:
                 name = p.get("name", "Unknown")
@@ -361,8 +408,16 @@ class TagWriterScreen(QWidget):
                 self._last_uid = uid
                 self._lbl_tag_status.setText("TAG DETECTED")
                 self._lbl_tag_status.setStyleSheet(
-                    f"font-size: {_F_BIG}px; font-weight: bold; color: {C.SUCCESS};"
+                    f"font-size: {F.H3}px; font-weight: bold;"
+                    f"color: {C.SUCCESS};"
                 )
+
+                # Update status dot to green
+                self._tag_dot.setStyleSheet(
+                    f"background-color: {C.SUCCESS};"
+                    f"border-radius: 6px; border: none;"
+                )
+
                 self._lbl_tag_uid.setText(f"UID: {uid}")
 
                 if product_data:
@@ -370,24 +425,39 @@ class TagWriterScreen(QWidget):
                 else:
                     self._lbl_tag_current.setText("Empty tag (no data)")
 
+                # Update header badge
                 self._status_badge.setText("TAG OK")
                 self._status_badge.setStyleSheet(
-                    f"background-color: {C.SUCCESS_BG}; color: {C.SUCCESS};"
+                    f"background-color: {C.SUCCESS_BG};"
+                    f"color: {C.SUCCESS};"
                     f"border: 1px solid {C.SUCCESS}; border-radius: 4px;"
-                    f"padding: 2px 8px; font-size: {_F_SM}px; font-weight: bold;"
+                    f"padding: 2px 8px; font-size: {F.TINY}px;"
+                    f"font-weight: bold;"
                 )
             else:
                 self._last_uid = None
                 self._lbl_tag_status.setText("Place tag on reader")
                 self._lbl_tag_status.setStyleSheet(
-                    f"font-size: {_F_BIG}px; font-weight: bold; color: {C.TEXT_MUTED};"
+                    f"font-size: {F.H3}px; font-weight: bold;"
+                    f"color: {C.TEXT_MUTED};"
                 )
+
+                # Update status dot to red
+                self._tag_dot.setStyleSheet(
+                    f"background-color: {C.DANGER};"
+                    f"border-radius: 6px; border: none;"
+                )
+
                 self._lbl_tag_uid.setText("")
                 self._lbl_tag_current.setText("")
 
                 self._status_badge.setText("WAITING")
                 self._status_badge.setStyleSheet(
-                    f"font-size: {_F_SM}px; color: {C.TEXT_MUTED};"
+                    f"background-color: {C.BG_CARD_ALT};"
+                    f"color: {C.TEXT_MUTED};"
+                    f"border: 1px solid {C.TEXT_MUTED}; border-radius: 4px;"
+                    f"padding: 2px 8px; font-size: {F.TINY}px;"
+                    f"font-weight: bold;"
                 )
         except Exception as e:
             logger.debug(f"Tag scan error: {e}")
@@ -402,12 +472,13 @@ class TagWriterScreen(QWidget):
         if data:
             self._lbl_preview_data.setText(data)
             self._lbl_preview_data.setStyleSheet(
-                f"font-size: {_F_MED}px; color: {C.PRIMARY}; font-weight: bold;"
+                f"font-size: {F.BODY}px; color: {C.PRIMARY};"
+                f"font-weight: bold;"
             )
         else:
             self._lbl_preview_data.setText("Select a product")
             self._lbl_preview_data.setStyleSheet(
-                f"font-size: {_F_MED}px; color: {C.TEXT_MUTED};"
+                f"font-size: {F.BODY}px; color: {C.TEXT_MUTED};"
             )
 
     def _build_write_string(self) -> str:
@@ -440,7 +511,9 @@ class TagWriterScreen(QWidget):
             return
 
         if not self._last_uid:
-            self._show_result("No tag on reader — place tag first", False)
+            self._show_result(
+                "No tag on reader -- place tag first", False
+            )
             return
 
         product = self._products[idx]
@@ -454,10 +527,12 @@ class TagWriterScreen(QWidget):
         self._btn_write.setText("WRITING...")
         self._btn_write.setEnabled(False)
         self._btn_write.setStyleSheet(
-            f"background-color: {C.PRIMARY_DIM}; color: {C.BG_DARK};"
-            f"border: none; border-radius: 8px;"
-            f"font-size: {_F_BIG}px; font-weight: bold;"
-            f"min-height: 48px; padding: 8px;"
+            f"QPushButton {{"
+            f"  background-color: {C.PRIMARY_DIM}; color: {C.BG_DARK};"
+            f"  border: none; border-radius: {S.RADIUS}px;"
+            f"  font-size: {F.H3}px; font-weight: bold;"
+            f"  min-height: {S.BTN_H}px; padding: 8px 16px;"
+            f"}}"
         )
         QApplication.processEvents()
 
@@ -465,7 +540,6 @@ class TagWriterScreen(QWidget):
         def do_write():
             try:
                 success = self.app.rfid.write_product_data(write_string)
-                # Schedule UI update on main thread
                 QTimer.singleShot(0, lambda: self._on_write_complete(
                     success, product, write_string
                 ))
@@ -477,26 +551,45 @@ class TagWriterScreen(QWidget):
 
         threading.Thread(target=do_write, daemon=True).start()
 
-    def _on_write_complete(self, success: bool, product: dict, write_string: str):
+    def _on_write_complete(self, success: bool, product: dict,
+                           write_string: str):
         """Handle write result on main thread."""
         self._writing = False
-        self._btn_write.setText("WRITE TAG")
+        self._btn_write.setText(f"{Icon.SAVE}  WRITE TAG")
         self._btn_write.setEnabled(True)
         self._btn_write.setStyleSheet(
-            f"background-color: {C.PRIMARY}; color: {C.BG_DARK};"
-            f"border: none; border-radius: 8px;"
-            f"font-size: {_F_BIG}px; font-weight: bold;"
-            f"min-height: 48px; padding: 8px;"
+            f"QPushButton {{"
+            f"  background: qlineargradient(x1:0,y1:0,x2:1,y2:0,"
+            f"    stop:0 {C.ACCENT}, stop:1 {C.PRIMARY});"
+            f"  color: {C.BG_DARK}; border: none;"
+            f"  border-radius: {S.RADIUS}px;"
+            f"  font-size: {F.H3}px; font-weight: bold;"
+            f"  min-height: {S.BTN_H}px; padding: 8px 16px;"
+            f"}}"
+            f"QPushButton:hover {{"
+            f"  background: qlineargradient(x1:0,y1:0,x2:1,y2:0,"
+            f"    stop:0 {C.PRIMARY_DIM}, stop:1 {C.ACCENT});"
+            f"}}"
         )
 
         if success:
             self._tags_written += 1
             product_name = product.get("name", "Unknown")
             self._show_result(
-                f"OK! Written: {product_name}\n{write_string}", True
+                f"{Icon.OK} Written: {product_name}\n{write_string}", True
             )
 
-            # Register tag → product mapping in DB
+            # Update result card accent
+            self._result_card.setStyleSheet(
+                f"QFrame#card {{"
+                f"  background-color: {C.BG_CARD};"
+                f"  border: 1px solid {C.BORDER};"
+                f"  border-left: 4px solid {C.SUCCESS};"
+                f"  border-radius: {S.RADIUS}px;"
+                f"}}"
+            )
+
+            # Register tag -> product mapping in DB
             try:
                 batch = self._input_batch.text().strip() or None
                 can_ml = None
@@ -524,20 +617,35 @@ class TagWriterScreen(QWidget):
             except Exception:
                 pass
         else:
-            self._show_result("WRITE FAILED — try again", False)
+            self._show_result(
+                f"{Icon.ERROR} WRITE FAILED -- try again", False
+            )
+
+            # Update result card accent
+            self._result_card.setStyleSheet(
+                f"QFrame#card {{"
+                f"  background-color: {C.BG_CARD};"
+                f"  border: 1px solid {C.BORDER};"
+                f"  border-left: 4px solid {C.DANGER};"
+                f"  border-radius: {S.RADIUS}px;"
+                f"}}"
+            )
+
             try:
                 self.app.buzzer.play_pattern("error")
             except Exception:
                 pass
 
-        self._lbl_tags_written.setText(f"Tags written: {self._tags_written}")
+        self._lbl_tags_written.setText(
+            f"Tags written: {self._tags_written}"
+        )
 
     def _show_result(self, text: str, success: bool):
         """Update the result label."""
         color = C.SUCCESS if success else C.DANGER
         self._lbl_result.setText(text)
         self._lbl_result.setStyleSheet(
-            f"font-size: {_F_MED}px; color: {color}; font-weight: bold;"
+            f"font-size: {F.BODY}px; color: {color}; font-weight: bold;"
         )
 
     # Connect preview updates to input changes

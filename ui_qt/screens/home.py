@@ -18,6 +18,10 @@ from PyQt6.QtGui import QFont
 
 from ui_qt.theme import C, F, S
 from ui_qt.animations import PulsingDot
+from ui_qt.icons import (
+    Icon, icon_badge, icon_label, status_dot, type_badge, section_header,
+    screen_header,
+)
 
 logger = logging.getLogger("smartlocker.ui.home")
 
@@ -94,8 +98,13 @@ class HomeScreen(QWidget):
         layout.setContentsMargins(S.PAD, 0, S.PAD, 0)
         layout.setSpacing(S.GAP)
 
-        # Brand name with accent
-        brand = QLabel("\u2693  PPG SMARTLOCKER")
+        # Lock icon badge
+        lock_icon = icon_badge(Icon.LOCK, bg_color=C.PRIMARY_BG,
+                               fg_color=C.PRIMARY, size=30)
+        layout.addWidget(lock_icon)
+
+        # Brand name
+        brand = QLabel("PPG SMARTLOCKER")
         brand.setStyleSheet(
             f"font-size: {F.H3}px; font-weight: bold; color: {C.PRIMARY};"
             f"letter-spacing: 2px;"
@@ -104,7 +113,7 @@ class HomeScreen(QWidget):
 
         layout.addStretch(1)
 
-        # Mode badge
+        # Mode badge (using type_badge style, but we create a QLabel to update)
         self._mode_badge = QLabel()
         layout.addWidget(self._mode_badge)
 
@@ -115,8 +124,11 @@ class HomeScreen(QWidget):
         layout.addWidget(self._cloud_badge)
 
         # Separator
-        sep = QLabel("|")
-        sep.setStyleSheet(f"color: {C.TEXT_MUTED}; font-size: {F.BODY}px;")
+        sep = QFrame()
+        sep.setFrameShape(QFrame.Shape.VLine)
+        sep.setStyleSheet(
+            f"color: {C.BORDER}; max-width: 1px; margin: 8px 2px;"
+        )
         layout.addWidget(sep)
 
         # Clock
@@ -148,12 +160,13 @@ class HomeScreen(QWidget):
 
         # Icon + Title row
         title_row = QHBoxLayout()
-        title_row.setSpacing(8)
+        title_row.setSpacing(S.GAP)
 
-        icon_lbl = QLabel("\U0001F3A8")  # paint palette emoji
-        icon_lbl.setStyleSheet(f"font-size: 36px;")
         title_row.addStretch(1)
-        title_row.addWidget(icon_lbl)
+
+        mixing_icon = icon_badge(Icon.MIXING, bg_color=C.PRIMARY_BG,
+                                 fg_color=C.PRIMARY, size=40)
+        title_row.addWidget(mixing_icon)
 
         title = QLabel("PAINT NOW!")
         title.setStyleSheet(
@@ -172,8 +185,8 @@ class HomeScreen(QWidget):
 
         layout.addSpacing(4)
 
-        # Big glowing action button
-        btn = QPushButton("\u25B6  START MIXING")
+        # Big gradient action button
+        btn = QPushButton(f"{Icon.PLAY}  START MIXING")
         btn.setCursor(Qt.CursorShape.PointingHandCursor)
         btn.setMinimumHeight(S.BTN_H_LG)
         btn.setStyleSheet(
@@ -214,52 +227,59 @@ class HomeScreen(QWidget):
         layout.setContentsMargins(12, 8, 8, 8)
         layout.setSpacing(3)
 
-        # Section header with live dot
-        header_row = QHBoxLayout()
-        self._status_dot = PulsingDot(color=C.SECONDARY, size=8)
-        self._status_dot.start()
-        header_row.addWidget(self._status_dot)
-        header = QLabel("  LIVE STATUS")
-        header.setStyleSheet(
-            f"font-size: {F.SMALL}px; font-weight: bold;"
-            f"color: {C.SECONDARY}; letter-spacing: 1px;"
-        )
-        header_row.addWidget(header)
-        header_row.addStretch(1)
-        layout.addLayout(header_row)
+        # Section header with icon
+        layout.addWidget(section_header(Icon.HEALTH, "LIVE STATUS", C.SECONDARY))
 
         # Slot count row
-        self._slot_label = self._status_row(layout, "Slots:", "--")
+        self._slot_dot = status_dot(active=True, size=8)
+        self._slot_label = self._status_row(layout, "Slots", "--",
+                                            self._slot_dot)
 
         # Cloud status row
-        self._cloud_status_label = self._status_row(layout, "Cloud:", "--")
+        self._cloud_panel_dot = status_dot(active=False, size=8)
+        self._cloud_status_label = self._status_row(layout, "Cloud", "--",
+                                                    self._cloud_panel_dot)
 
         # Last sync row
-        self._sync_label = self._status_row(layout, "Sync:", "--")
+        self._sync_dot = status_dot(active=True, size=8)
+        self._sync_label = self._status_row(layout, "Sync", "--",
+                                            self._sync_dot)
 
         # Driver status row
-        self._driver_label = self._status_row(layout, "Drivers:", "--")
+        self._driver_dot = status_dot(active=True, size=8)
+        self._driver_label = self._status_row(layout, "Drivers", "--",
+                                              self._driver_dot)
 
         # Pending events row
-        self._pending_label = self._status_row(layout, "Queue:", "--")
+        self._pending_dot = status_dot(active=True, size=8)
+        self._pending_label = self._status_row(layout, "Queue", "--",
+                                               self._pending_dot)
 
         layout.addStretch(1)
 
         return card
 
     def _status_row(self, parent_layout: QVBoxLayout, label_text: str,
-                    default_value: str) -> QLabel:
-        """Create a label: value row and return the value label for updates."""
+                    default_value: str,
+                    dot_widget: QLabel = None) -> QLabel:
+        """Create a dot + label: value row and return the value label."""
         row = QHBoxLayout()
         row.setSpacing(6)
 
+        if dot_widget is not None:
+            row.addWidget(dot_widget)
+
         key = QLabel(label_text)
-        key.setStyleSheet(f"color: {C.TEXT_SEC}; font-size: {F.BODY}px;")
+        key.setStyleSheet(
+            f"color: {C.TEXT_SEC}; font-size: {F.BODY}px;"
+        )
         key.setFixedWidth(60)
         row.addWidget(key)
 
         val = QLabel(default_value)
-        val.setStyleSheet(f"color: {C.TEXT}; font-size: {F.BODY}px; font-weight: bold;")
+        val.setStyleSheet(
+            f"color: {C.TEXT}; font-size: {F.BODY}px; font-weight: bold;"
+        )
         row.addWidget(val)
         row.addStretch(1)
 
@@ -275,30 +295,31 @@ class HomeScreen(QWidget):
         grid.setSpacing(S.GAP)
 
         tiles = [
-            ("\U0001F4CB  CHECK CHART", "Maintenance\n& paint specs",
+            (Icon.CHART, "CHECK CHART", "Maintenance\n& paint specs",
              C.SECONDARY, "chart_viewer"),
-            ("\U0001F4E6  INVENTORY", "Slot contents\n& stock levels",
+            (Icon.INVENTORY, "INVENTORY", "Slot contents\n& stock levels",
              C.SUCCESS, "inventory"),
-            ("\U0001F50C  SENSORS", "Test RFID, weight\nLED & buzzer",
+            (Icon.SENSORS, "SENSORS", "Test RFID, weight\nLED & buzzer",
              C.ACCENT, "sensor_test"),
-            ("\u2699\uFE0F  SETTINGS", "Config, pairing\n& system",
+            (Icon.SETTINGS, "SETTINGS", "Config, pairing\n& system",
              C.TEXT_MUTED, "settings"),
         ]
 
-        for col, (title, subtitle, accent, target) in enumerate(tiles):
-            tile = self._make_nav_tile(title, subtitle, accent, target)
+        for col, (icon, title, subtitle, accent, target) in enumerate(tiles):
+            tile = self._make_nav_tile(icon, title, subtitle, accent, target)
             grid.addWidget(tile, 0, col)
 
         return container
 
-    def _make_nav_tile(self, title: str, subtitle: str,
-                       accent_color: str, target_screen: str) -> QPushButton:
+    def _make_nav_tile(self, glyph: str, title: str, subtitle: str,
+                       accent_color: str,
+                       target_screen: str) -> QPushButton:
         btn = QPushButton()
         btn.setObjectName("nav_tile")
         btn.setCursor(Qt.CursorShape.PointingHandCursor)
         btn.setMinimumHeight(60)
 
-        # Use style with accent top border
+        # Accent top border
         btn.setStyleSheet(
             f"QPushButton#nav_tile {{ border-top: 3px solid {accent_color}; }}"
             f"QPushButton#nav_tile:hover {{ border-color: {accent_color}; }}"
@@ -306,46 +327,65 @@ class HomeScreen(QWidget):
 
         # Build internal layout via a child widget
         inner = QWidget(btn)
-        inner.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
+        inner.setAttribute(
+            Qt.WidgetAttribute.WA_TransparentForMouseEvents, True
+        )
         inner_layout = QVBoxLayout(inner)
         inner_layout.setContentsMargins(8, 6, 8, 6)
         inner_layout.setSpacing(4)
+
+        # Icon + title row
+        icon_row = QHBoxLayout()
+        icon_row.setSpacing(6)
+        badge = icon_badge(glyph, bg_color=C.BG_CARD_ALT,
+                           fg_color=accent_color, size=28)
+        badge.setAttribute(
+            Qt.WidgetAttribute.WA_TransparentForMouseEvents, True
+        )
+        icon_row.addWidget(badge)
 
         lbl_title = QLabel(title, inner)
         lbl_title.setStyleSheet(
             f"font-size: {F.H3}px; font-weight: bold; color: {C.TEXT};"
         )
-        lbl_title.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
-        inner_layout.addWidget(lbl_title)
+        lbl_title.setAttribute(
+            Qt.WidgetAttribute.WA_TransparentForMouseEvents, True
+        )
+        icon_row.addWidget(lbl_title)
+        icon_row.addStretch(1)
+        inner_layout.addLayout(icon_row)
 
         lbl_sub = QLabel(subtitle, inner)
         lbl_sub.setStyleSheet(
             f"font-size: {F.SMALL}px; color: {C.TEXT_SEC};"
         )
         lbl_sub.setWordWrap(True)
-        lbl_sub.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
+        lbl_sub.setAttribute(
+            Qt.WidgetAttribute.WA_TransparentForMouseEvents, True
+        )
         inner_layout.addWidget(lbl_sub)
 
         inner_layout.addStretch(1)
 
-        btn.clicked.connect(lambda checked=False, s=target_screen: self.app.go_screen(s))
+        btn.clicked.connect(
+            lambda checked=False, s=target_screen: self.app.go_screen(s)
+        )
         return btn
 
     # ── Alarm Bar ─────────────────────────────────────
 
     def _build_alarm_bar(self) -> QFrame:
         bar = QFrame()
-        bar.setObjectName("card")
+        bar.setObjectName("alarm_bar")
 
         layout = QHBoxLayout(bar)
         layout.setContentsMargins(S.PAD_CARD, 8, S.PAD_CARD, 8)
         layout.setSpacing(S.GAP)
 
-        self._alarm_icon = QLabel("[!]")
-        self._alarm_icon.setStyleSheet(
-            f"font-size: {F.H3}px; font-weight: bold; color: {C.DANGER};"
+        self._alarm_icon_badge = icon_badge(
+            Icon.ALARM, bg_color=C.DANGER_BG, fg_color=C.DANGER, size=28
         )
-        layout.addWidget(self._alarm_icon)
+        layout.addWidget(self._alarm_icon_badge)
 
         self._alarm_text = QLabel("No active alarms")
         self._alarm_text.setStyleSheet(
@@ -366,17 +406,16 @@ class HomeScreen(QWidget):
 
     def _build_mixing_bar(self) -> QFrame:
         bar = QFrame()
-        bar.setObjectName("card")
+        bar.setObjectName("mixing_bar")
 
         layout = QHBoxLayout(bar)
         layout.setContentsMargins(S.PAD_CARD, 8, S.PAD_CARD, 8)
         layout.setSpacing(S.GAP)
 
-        self._mix_icon = QLabel("[MIX]")
-        self._mix_icon.setStyleSheet(
-            f"font-size: {F.BODY}px; font-weight: bold; color: {C.PRIMARY};"
+        self._mix_icon_badge = icon_badge(
+            Icon.MIXING, bg_color=C.PRIMARY_BG, fg_color=C.PRIMARY, size=28
         )
-        layout.addWidget(self._mix_icon)
+        layout.addWidget(self._mix_icon_badge)
 
         self._mix_text = QLabel("Mixing in progress...")
         self._mix_text.setStyleSheet(
@@ -426,12 +465,18 @@ class HomeScreen(QWidget):
     def _update_mode_badge(self):
         mode = getattr(self.app, "mode", "test").upper()
         if mode == "LIVE":
-            bg, fg, border = C.SUCCESS_BG, C.SUCCESS, C.SUCCESS
+            variant = "success"
         elif mode == "HYBRID":
-            bg, fg, border = C.ACCENT_BG, C.ACCENT, C.ACCENT
+            variant = "accent"
         else:
-            bg, fg, border = C.BG_CARD_ALT, C.TEXT_MUTED, C.TEXT_MUTED
+            variant = "muted"
 
+        colors = {
+            "success": (C.SUCCESS_BG, C.SUCCESS, C.SUCCESS),
+            "accent": (C.ACCENT_BG, C.ACCENT, C.ACCENT),
+            "muted": (C.BG_CARD_ALT, C.TEXT_MUTED, C.TEXT_MUTED),
+        }
+        bg, fg, border = colors[variant]
         self._mode_badge.setText(mode)
         self._mode_badge.setStyleSheet(
             f"background-color: {bg}; color: {fg}; border: 1px solid {border};"
@@ -473,9 +518,17 @@ class HomeScreen(QWidget):
                 self._slot_label.setStyleSheet(
                     f"color: {C.WARNING}; font-size: {F.BODY}px; font-weight: bold;"
                 )
+                self._slot_dot.setStyleSheet(
+                    f"background-color: {C.WARNING};"
+                    f"border-radius: 4px; border: none;"
+                )
             else:
                 self._slot_label.setStyleSheet(
                     f"color: {C.TEXT}; font-size: {F.BODY}px; font-weight: bold;"
+                )
+                self._slot_dot.setStyleSheet(
+                    f"background-color: {C.SUCCESS};"
+                    f"border-radius: 4px; border: none;"
                 )
         except Exception:
             self._slot_label.setText("--/--")
@@ -483,14 +536,22 @@ class HomeScreen(QWidget):
         # Cloud status
         is_paired = getattr(self.app.cloud, "is_paired", False)
         if is_paired:
-            self._cloud_status_label.setText("(*) Connected")
+            self._cloud_status_label.setText("Connected")
             self._cloud_status_label.setStyleSheet(
                 f"color: {C.SUCCESS}; font-size: {F.BODY}px; font-weight: bold;"
             )
+            self._cloud_panel_dot.setStyleSheet(
+                f"background-color: {C.SUCCESS};"
+                f"border-radius: 4px; border: none;"
+            )
         else:
-            self._cloud_status_label.setText("(x) Disconnected")
+            self._cloud_status_label.setText("Disconnected")
             self._cloud_status_label.setStyleSheet(
                 f"color: {C.DANGER}; font-size: {F.BODY}px; font-weight: bold;"
+            )
+            self._cloud_panel_dot.setStyleSheet(
+                f"background-color: {C.DANGER};"
+                f"border-radius: 4px; border: none;"
             )
 
         # Last sync time
@@ -517,6 +578,21 @@ class HomeScreen(QWidget):
             real_count = sum(1 for v in ds.values() if v == "real")
             total_drv = len(ds)
             self._driver_label.setText(f"{real_count}/{total_drv} real")
+            if real_count == total_drv:
+                self._driver_dot.setStyleSheet(
+                    f"background-color: {C.SUCCESS};"
+                    f"border-radius: 4px; border: none;"
+                )
+            elif real_count > 0:
+                self._driver_dot.setStyleSheet(
+                    f"background-color: {C.ACCENT};"
+                    f"border-radius: 4px; border: none;"
+                )
+            else:
+                self._driver_dot.setStyleSheet(
+                    f"background-color: {C.TEXT_MUTED};"
+                    f"border-radius: 4px; border: none;"
+                )
         except Exception:
             self._driver_label.setText("--")
 
@@ -529,10 +605,18 @@ class HomeScreen(QWidget):
                 self._pending_label.setStyleSheet(
                     f"color: {C.ACCENT}; font-size: {F.BODY}px; font-weight: bold;"
                 )
+                self._pending_dot.setStyleSheet(
+                    f"background-color: {C.ACCENT};"
+                    f"border-radius: 4px; border: none;"
+                )
             else:
                 self._pending_label.setText("All synced")
                 self._pending_label.setStyleSheet(
                     f"color: {C.SUCCESS}; font-size: {F.BODY}px; font-weight: bold;"
+                )
+                self._pending_dot.setStyleSheet(
+                    f"background-color: {C.SUCCESS};"
+                    f"border-radius: 4px; border: none;"
                 )
         except Exception:
             self._pending_label.setText("--")
@@ -553,21 +637,24 @@ class HomeScreen(QWidget):
             if has_critical:
                 bg = C.DANGER_BG
                 border = C.DANGER
-                icon_color = C.DANGER
-                self._alarm_icon.setText("[!!]")
+                icon_fg = C.DANGER
             else:
                 bg = C.WARNING_BG
                 border = C.WARNING
-                icon_color = C.WARNING
-                self._alarm_icon.setText("[!]")
+                icon_fg = C.WARNING
 
             self._alarm_bar.setStyleSheet(
-                f"QFrame#card {{ background-color: {bg};"
+                f"QFrame#alarm_bar {{ background-color: {bg};"
                 f"border: 1px solid {border}; border-radius: {S.RADIUS}px;"
                 f"padding: {S.PAD_CARD}px; }}"
             )
-            self._alarm_icon.setStyleSheet(
-                f"font-size: {F.H3}px; font-weight: bold; color: {icon_color};"
+
+            # Update icon badge colors
+            self._alarm_icon_badge.setStyleSheet(
+                f"background-color: {bg}; color: {icon_fg};"
+                f"border-radius: 14px;"
+                f"font-size: 15px; font-weight: bold;"
+                f"border: 1px solid {icon_fg};"
             )
 
             if count == 1:
@@ -605,7 +692,7 @@ class HomeScreen(QWidget):
                 self._mix_text.setText(f"Mixing in progress -- {state_name}")
 
             self._mixing_bar.setStyleSheet(
-                f"QFrame#card {{ background-color: {C.PRIMARY_BG};"
+                f"QFrame#mixing_bar {{ background-color: {C.PRIMARY_BG};"
                 f"border: 1px solid {C.PRIMARY}; border-radius: {S.RADIUS}px;"
                 f"padding: {S.PAD_CARD}px; }}"
             )

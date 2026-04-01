@@ -3,6 +3,15 @@ SmartLocker Mixing Screen
 
 Full mixing workflow: select recipe -> weigh base -> weigh hardener -> confirm -> pot life.
 Optimized for 800x480 4.3" touch display.
+
+7-page wizard:
+  Page 0: Select Recipe
+  Page 1: Show Recipe / Enter Amount
+  Page 2: Weighing (base or hardener) -- CRITICAL
+  Page 3: Confirm Mix
+  Page 4: Thinner (application method)
+  Page 5: Pot Life Active
+  Page 6: Session Complete
 """
 
 import logging
@@ -12,249 +21,373 @@ import threading
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
     QFrame, QComboBox, QLineEdit, QProgressBar, QApplication,
-    QStackedWidget, QGridLayout,
+    QStackedWidget, QGridLayout, QSizePolicy,
 )
 from PyQt6.QtCore import Qt, QTimer
 
 from ui_qt.theme import C, F, S
 from ui_qt.animations import ProgressRing, PulsingDot
+from ui_qt.icons import (
+    Icon, icon_badge, icon_label, status_dot, type_badge, section_header,
+    screen_header,
+)
 from core.models import MixingState, ApplicationMethod
 from hal.interfaces import BuzzerPattern
 
 logger = logging.getLogger("smartlocker.ui.mixing")
 
-_PAD = 8
-_GAP = 6
-_F_BIG = 28
-_F_MED = 16
-_F_SM = 12
 
+# ─────────────────────────────────────────────────────────
+# Helpers
+# ─────────────────────────────────────────────────────────
+
+def _card_frame(accent: str = C.PRIMARY) -> QFrame:
+    """Return a styled QFrame card with left-border accent."""
+    card = QFrame()
+    card.setObjectName("card")
+    card.setStyleSheet(
+        f"QFrame#card {{"
+        f"  background-color: {C.BG_CARD};"
+        f"  border: 1px solid {C.BORDER};"
+        f"  border-left: 4px solid {accent};"
+        f"  border-radius: {S.RADIUS}px;"
+        f"}}"
+    )
+    return card
+
+
+def _styled_combo() -> QComboBox:
+    """Return a consistently styled QComboBox."""
+    combo = QComboBox()
+    combo.setStyleSheet(
+        f"QComboBox {{"
+        f"  background-color: {C.BG_INPUT}; color: {C.TEXT};"
+        f"  border: 1px solid {C.BORDER}; border-radius: 8px;"
+        f"  padding: 10px 14px; font-size: {F.BODY}px; min-height: 40px;"
+        f"}}"
+        f"QComboBox::drop-down {{ border: none; width: 28px; }}"
+        f"QComboBox QAbstractItemView {{"
+        f"  background-color: {C.BG_CARD}; color: {C.TEXT};"
+        f"  border: 1px solid {C.BORDER};"
+        f"  selection-background-color: {C.PRIMARY_BG};"
+        f"  font-size: {F.BODY}px;"
+        f"}}"
+    )
+    return combo
+
+
+def _styled_input(placeholder: str = "", font_size: int = F.BODY) -> QLineEdit:
+    """Return a consistently styled QLineEdit."""
+    inp = QLineEdit()
+    inp.setPlaceholderText(placeholder)
+    inp.setStyleSheet(
+        f"background-color: {C.BG_INPUT}; color: {C.TEXT};"
+        f"border: 1px solid {C.BORDER}; border-radius: 8px;"
+        f"padding: 8px 12px; font-size: {font_size}px; min-height: 40px;"
+    )
+    return inp
+
+
+def _gradient_btn(text: str, color1: str = C.PRIMARY,
+                  color2: str = C.SECONDARY, font_size: int = F.H3,
+                  min_h: int = S.BTN_H_LG) -> QPushButton:
+    """Return a gradient-styled primary action button."""
+    btn = QPushButton(text)
+    btn.setCursor(Qt.CursorShape.PointingHandCursor)
+    btn.setStyleSheet(
+        f"QPushButton {{"
+        f"  background: qlineargradient(x1:0,y1:0,x2:1,y2:0,"
+        f"    stop:0 {color1}, stop:1 {color2});"
+        f"  color: {C.BG_DARK}; border: none; border-radius: {S.RADIUS}px;"
+        f"  font-size: {font_size}px; font-weight: bold;"
+        f"  min-height: {min_h}px; padding: 8px 16px;"
+        f"}}"
+        f"QPushButton:hover {{"
+        f"  background: qlineargradient(x1:0,y1:0,x2:1,y2:0,"
+        f"    stop:0 {C.PRIMARY_DIM}, stop:1 {color2});"
+        f"}}"
+    )
+    return btn
+
+
+# ═════════════════════════════════════════════════════════
+# MIXING SCREEN
+# ═════════════════════════════════════════════════════════
 
 class MixingScreen(QWidget):
-    """Mixing workflow wizard."""
+    """Mixing workflow wizard -- 7-page stacked widget."""
 
     def __init__(self, app):
         super().__init__()
         self.app = app
+
+        # Timers
         self._weight_timer = QTimer()
         self._weight_timer.timeout.connect(self._update_weight)
         self._pot_life_timer = QTimer()
         self._pot_life_timer.timeout.connect(self._update_pot_life)
-        self._last_buzzer_zone = ""   # Track zone changes for buzzer
-        self._tick_counter = 0        # For periodic tick while pouring
+
+        # State
+        self._last_buzzer_zone = ""
+        self._tick_counter = 0
         self._barcode_verified_base = False
         self._barcode_verified_hardener = False
+        self._current_recipe = None
+        self._weighing_phase = "base"
+        self._weight_target = 0.0
+        self._recipes_list = []
+
         self._build_ui()
+
+    # ══════════════════════════════════════════════════════
+    # UI BUILD
+    # ══════════════════════════════════════════════════════
 
     def _build_ui(self):
         root = QVBoxLayout(self)
         root.setContentsMargins(0, 0, 0, 0)
         root.setSpacing(0)
 
-        # Header
-        header = QFrame()
-        header.setStyleSheet(
-            f"background-color: {C.BG_STATUS}; border-bottom: 1px solid {C.BORDER};"
+        # ── Header ──
+        header, h_layout = screen_header(
+            self.app, "MIXING", Icon.MIXING, C.PRIMARY
         )
-        h_lay = QHBoxLayout(header)
-        h_lay.setContentsMargins(_PAD, 4, _PAD, 4)
 
-        btn_back = QPushButton("< BACK")
-        btn_back.setObjectName("ghost")
-        btn_back.setCursor(Qt.CursorShape.PointingHandCursor)
-        btn_back.clicked.connect(self._on_back)
-        h_lay.addWidget(btn_back)
-
-        self._title = QLabel("MIXING")
-        self._title.setStyleSheet(f"font-size: {F.H3}px; font-weight: bold;")
-        h_lay.addWidget(self._title)
-        h_lay.addStretch(1)
-
-        self._state_badge = QLabel("IDLE")
-        self._state_badge.setStyleSheet(
-            f"font-size: {_F_SM}px; color: {C.TEXT_MUTED};"
-        )
-        h_lay.addWidget(self._state_badge)
+        self._state_badge = type_badge("IDLE", "muted")
+        h_layout.addWidget(self._state_badge)
 
         root.addWidget(header)
 
-        # Stacked pages
+        # ── Stacked pages ──
         self._stack = QStackedWidget()
         root.addWidget(self._stack, stretch=1)
 
-        # Page 0: Select Recipe
         self._page_select = self._build_select_page()
         self._stack.addWidget(self._page_select)
 
-        # Page 1: Show Recipe / Enter Amount
         self._page_recipe = self._build_recipe_page()
         self._stack.addWidget(self._page_recipe)
 
-        # Page 2: Weighing (base or hardener)
         self._page_weigh = self._build_weigh_page()
         self._stack.addWidget(self._page_weigh)
 
-        # Page 3: Confirm Mix
         self._page_confirm = self._build_confirm_page()
         self._stack.addWidget(self._page_confirm)
 
-        # Page 4: Thinner
         self._page_thinner = self._build_thinner_page()
         self._stack.addWidget(self._page_thinner)
 
-        # Page 5: Pot Life Active
         self._page_potlife = self._build_potlife_page()
         self._stack.addWidget(self._page_potlife)
 
-        # Page 6: Complete
         self._page_complete = self._build_complete_page()
         self._stack.addWidget(self._page_complete)
 
+    # ──────────────────────────────────────────────────────
+    # Helper to update the state badge text + variant
+    # ──────────────────────────────────────────────────────
+
+    def _set_state_badge(self, text: str, variant: str = "muted"):
+        colors = {
+            "primary": (C.PRIMARY_BG, C.PRIMARY, C.PRIMARY),
+            "secondary": (C.SECONDARY_BG, C.SECONDARY, C.SECONDARY),
+            "accent": (C.ACCENT_BG, C.ACCENT, C.ACCENT),
+            "success": (C.SUCCESS_BG, C.SUCCESS, C.SUCCESS),
+            "warning": (C.WARNING_BG, C.WARNING, C.WARNING),
+            "danger": (C.DANGER_BG, C.DANGER, C.DANGER),
+            "muted": (C.BG_CARD_ALT, C.TEXT_MUTED, C.TEXT_MUTED),
+        }
+        bg, fg, bd = colors.get(variant, colors["muted"])
+        self._state_badge.setText(text)
+        self._state_badge.setStyleSheet(
+            f"background-color: {bg}; color: {fg};"
+            f"border: 1px solid {bd}; border-radius: 4px;"
+            f"padding: 2px 8px; font-size: {F.TINY}px; font-weight: bold;"
+        )
+
     # ══════════════════════════════════════════════════════
-    # PAGE BUILDERS
+    # PAGE 0: SELECT RECIPE
     # ══════════════════════════════════════════════════════
 
     def _build_select_page(self) -> QWidget:
         page = QWidget()
         lay = QVBoxLayout(page)
-        lay.setContentsMargins(_PAD * 2, _PAD * 2, _PAD * 2, _PAD * 2)
-        lay.setSpacing(_PAD)
+        lay.setContentsMargins(S.PAD * 2, S.PAD * 2, S.PAD * 2, S.PAD * 2)
+        lay.setSpacing(S.PAD)
 
-        lbl = QLabel("SELECT RECIPE")
-        lbl.setStyleSheet(f"font-size: {_F_BIG}px; font-weight: bold; color: {C.PRIMARY};")
-        lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        lay.addWidget(lbl)
+        # Centered icon
+        badge = icon_badge(Icon.MIXING, bg_color=C.PRIMARY_BG,
+                           fg_color=C.PRIMARY, size=40)
+        lay.addWidget(badge, alignment=Qt.AlignmentFlag.AlignCenter)
 
-        self._combo_recipe = QComboBox()
-        self._combo_recipe.setStyleSheet(
-            f"QComboBox {{ background-color: {C.BG_INPUT}; color: {C.TEXT};"
-            f"border: 1px solid {C.BORDER}; border-radius: 6px;"
-            f"padding: 8px 12px; font-size: {_F_MED}px; min-height: 36px; }}"
-            f"QComboBox QAbstractItemView {{ background-color: {C.BG_CARD}; color: {C.TEXT};"
-            f"border: 1px solid {C.BORDER}; font-size: {_F_MED}px; }}"
+        # Title
+        title = QLabel("SELECT RECIPE")
+        title.setStyleSheet(
+            f"font-size: {F.H2}px; font-weight: bold; color: {C.PRIMARY};"
         )
+        title.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        lay.addWidget(title)
+
+        lay.addSpacing(4)
+
+        # Recipe dropdown
+        self._combo_recipe = _styled_combo()
         lay.addWidget(self._combo_recipe)
 
-        # User name
-        row = QHBoxLayout()
-        row.setSpacing(_GAP)
-        lbl_user = QLabel("OPERATOR:")
-        lbl_user.setStyleSheet(f"font-size: {_F_SM}px; color: {C.TEXT_SEC};")
-        row.addWidget(lbl_user)
-        self._input_user = QLineEdit()
-        self._input_user.setPlaceholderText("Name (optional)")
-        self._input_user.setStyleSheet(
-            f"background-color: {C.BG_INPUT}; color: {C.TEXT};"
-            f"border: 1px solid {C.BORDER}; border-radius: 6px;"
-            f"padding: 6px 10px; font-size: {_F_MED}px; min-height: 32px;"
+        # Operator row
+        op_row = QHBoxLayout()
+        op_row.setSpacing(S.GAP)
+
+        op_icon = icon_label(Icon.INFO, color=C.TEXT_SEC, size=16)
+        op_row.addWidget(op_icon)
+
+        op_lbl = QLabel("OPERATOR")
+        op_lbl.setStyleSheet(
+            f"font-size: {F.SMALL}px; font-weight: bold; color: {C.TEXT_SEC};"
         )
-        row.addWidget(self._input_user, stretch=1)
-        lay.addLayout(row)
+        op_row.addWidget(op_lbl)
+
+        self._input_user = _styled_input("Name (optional)")
+        op_row.addWidget(self._input_user, stretch=1)
+
+        lay.addLayout(op_row)
 
         lay.addStretch(1)
 
-        btn_start = QPushButton("START MIXING")
-        btn_start.setStyleSheet(
-            f"background-color: {C.PRIMARY}; color: {C.BG_DARK};"
-            f"border: none; border-radius: 8px; font-size: {F.H3}px;"
-            f"font-weight: bold; min-height: 56px;"
+        # Start button -- gradient
+        btn_start = _gradient_btn(
+            f"{Icon.PLAY}  START MIXING", C.PRIMARY, C.SECONDARY, F.H3
         )
-        btn_start.setCursor(Qt.CursorShape.PointingHandCursor)
         btn_start.clicked.connect(self._on_start)
         lay.addWidget(btn_start)
 
         return page
 
+    # ══════════════════════════════════════════════════════
+    # PAGE 1: SHOW RECIPE / ENTER AMOUNT
+    # ══════════════════════════════════════════════════════
+
     def _build_recipe_page(self) -> QWidget:
         page = QWidget()
         lay = QVBoxLayout(page)
-        lay.setContentsMargins(_PAD * 2, _PAD, _PAD * 2, _PAD)
-        lay.setSpacing(_PAD)
+        lay.setContentsMargins(S.PAD * 2, S.PAD, S.PAD * 2, S.PAD)
+        lay.setSpacing(S.PAD)
 
+        # Recipe name
         self._lbl_recipe_name = QLabel("Recipe")
         self._lbl_recipe_name.setStyleSheet(
-            f"font-size: {_F_BIG}px; font-weight: bold; color: {C.PRIMARY};"
+            f"font-size: {F.H2}px; font-weight: bold; color: {C.PRIMARY};"
         )
         self._lbl_recipe_name.setAlignment(Qt.AlignmentFlag.AlignCenter)
         lay.addWidget(self._lbl_recipe_name)
 
-        # Recipe info card
-        card = QFrame()
-        card.setObjectName("card")
-        card_lay = QGridLayout(card)
-        card_lay.setContentsMargins(_PAD, _PAD, _PAD, _PAD)
-        card_lay.setSpacing(_GAP)
+        # Recipe info card with left border
+        info_card = _card_frame(C.PRIMARY)
+        info_grid = QGridLayout(info_card)
+        info_grid.setContentsMargins(S.PAD, S.PAD, S.PAD, S.PAD)
+        info_grid.setSpacing(S.GAP)
 
-        self._lbl_ratio = QLabel("Ratio: --")
-        self._lbl_ratio.setStyleSheet(f"font-size: {_F_MED}px; color: {C.TEXT};")
-        card_lay.addWidget(self._lbl_ratio, 0, 0)
+        # Row 0
+        lbl_r = QLabel("RATIO")
+        lbl_r.setStyleSheet(
+            f"font-size: {F.TINY}px; color: {C.TEXT_MUTED}; font-weight: bold;"
+        )
+        info_grid.addWidget(lbl_r, 0, 0)
 
-        self._lbl_potlife_info = QLabel("Pot life: --")
-        self._lbl_potlife_info.setStyleSheet(f"font-size: {_F_MED}px; color: {C.TEXT};")
-        card_lay.addWidget(self._lbl_potlife_info, 0, 1)
+        lbl_p = QLabel("POT LIFE")
+        lbl_p.setStyleSheet(
+            f"font-size: {F.TINY}px; color: {C.TEXT_MUTED}; font-weight: bold;"
+        )
+        info_grid.addWidget(lbl_p, 0, 1)
 
-        self._lbl_tolerance = QLabel("Tolerance: --")
-        self._lbl_tolerance.setStyleSheet(f"font-size: {_F_MED}px; color: {C.TEXT_SEC};")
-        card_lay.addWidget(self._lbl_tolerance, 1, 0)
+        lbl_t = QLabel("TOLERANCE")
+        lbl_t.setStyleSheet(
+            f"font-size: {F.TINY}px; color: {C.TEXT_MUTED}; font-weight: bold;"
+        )
+        info_grid.addWidget(lbl_t, 0, 2)
 
-        lay.addWidget(card)
+        # Row 1: values
+        self._lbl_ratio = QLabel("--")
+        self._lbl_ratio.setStyleSheet(
+            f"font-size: {F.BODY}px; font-weight: bold; color: {C.TEXT};"
+        )
+        info_grid.addWidget(self._lbl_ratio, 1, 0)
 
-        # Amount input
-        lbl_amount = QLabel("BASE AMOUNT (kg)")
-        lbl_amount.setStyleSheet(f"font-size: {_F_SM}px; font-weight: bold; color: {C.SECONDARY};")
-        lay.addWidget(lbl_amount)
+        self._lbl_potlife_info = QLabel("--")
+        self._lbl_potlife_info.setStyleSheet(
+            f"font-size: {F.BODY}px; font-weight: bold; color: {C.TEXT};"
+        )
+        info_grid.addWidget(self._lbl_potlife_info, 1, 1)
+
+        self._lbl_tolerance = QLabel("--")
+        self._lbl_tolerance.setStyleSheet(
+            f"font-size: {F.BODY}px; font-weight: bold; color: {C.TEXT};"
+        )
+        info_grid.addWidget(self._lbl_tolerance, 1, 2)
+
+        lay.addWidget(info_card)
+
+        # Base amount section
+        amt_header = section_header(Icon.WEIGHT, "BASE AMOUNT (g)", C.SECONDARY)
+        lay.addWidget(amt_header)
 
         amount_row = QHBoxLayout()
-        amount_row.setSpacing(_GAP)
-        self._input_amount = QLineEdit()
-        self._input_amount.setPlaceholderText("e.g. 500")
-        self._input_amount.setStyleSheet(
-            f"background-color: {C.BG_INPUT}; color: {C.TEXT};"
-            f"border: 1px solid {C.BORDER}; border-radius: 6px;"
-            f"padding: 8px 12px; font-size: {_F_BIG}px; min-height: 40px;"
-        )
+        amount_row.setSpacing(S.GAP)
+
+        self._input_amount = _styled_input("e.g. 500", F.H3)
+        self._input_amount.setAlignment(Qt.AlignmentFlag.AlignCenter)
         amount_row.addWidget(self._input_amount, stretch=1)
 
         for preset in ["250", "500", "1000", "2000"]:
             btn = QPushButton(f"{preset}g")
-            btn.setStyleSheet(
-                f"background-color: {C.BG_CARD}; color: {C.TEXT_SEC};"
-                f"border: 1px solid {C.BORDER}; border-radius: 4px;"
-                f"padding: 4px 8px; font-size: {_F_SM}px; min-height: 32px;"
-            )
             btn.setCursor(Qt.CursorShape.PointingHandCursor)
+            btn.setStyleSheet(
+                f"background-color: {C.BG_CARD_ALT}; color: {C.TEXT_SEC};"
+                f"border: 1px solid {C.BORDER}; border-radius: 6px;"
+                f"padding: 6px 10px; font-size: {F.SMALL}px;"
+                f"font-weight: bold; min-height: 36px;"
+            )
             btn.clicked.connect(lambda _, v=preset: self._input_amount.setText(v))
             amount_row.addWidget(btn)
+
         lay.addLayout(amount_row)
 
-        # Calculated values
+        # Calculated targets card
+        calc_card = _card_frame(C.SECONDARY)
+        calc_lay = QHBoxLayout(calc_card)
+        calc_lay.setContentsMargins(S.PAD, S.PAD_CARD, S.PAD, S.PAD_CARD)
+        calc_lay.setSpacing(S.PAD)
+
         self._lbl_calc_base = QLabel("")
-        self._lbl_calc_base.setStyleSheet(f"font-size: {_F_MED}px; color: {C.TEXT};")
-        lay.addWidget(self._lbl_calc_base)
+        self._lbl_calc_base.setStyleSheet(
+            f"font-size: {F.BODY}px; font-weight: bold; color: {C.TEXT};"
+        )
+        calc_lay.addWidget(self._lbl_calc_base, stretch=1)
 
         self._lbl_calc_hardener = QLabel("")
-        self._lbl_calc_hardener.setStyleSheet(f"font-size: {_F_MED}px; color: {C.ACCENT};")
-        lay.addWidget(self._lbl_calc_hardener)
+        self._lbl_calc_hardener.setStyleSheet(
+            f"font-size: {F.BODY}px; font-weight: bold; color: {C.ACCENT};"
+        )
+        calc_lay.addWidget(self._lbl_calc_hardener, stretch=1)
+
+        lay.addWidget(calc_card)
 
         lay.addStretch(1)
 
+        # Button row
         btn_row = QHBoxLayout()
-        btn_row.setSpacing(_GAP)
+        btn_row.setSpacing(S.GAP)
 
-        btn_cancel = QPushButton("CANCEL")
+        btn_cancel = QPushButton(f"{Icon.CLOSE}  CANCEL")
         btn_cancel.setObjectName("danger")
         btn_cancel.setCursor(Qt.CursorShape.PointingHandCursor)
-        btn_cancel.setMinimumHeight(44)
+        btn_cancel.setMinimumHeight(48)
         btn_cancel.clicked.connect(self._on_abort)
         btn_row.addWidget(btn_cancel)
 
-        btn_next = QPushButton("TARE & START POURING")
-        btn_next.setStyleSheet(
-            f"background-color: {C.PRIMARY}; color: {C.BG_DARK};"
-            f"border: none; border-radius: 8px; font-size: {_F_MED}px;"
-            f"font-weight: bold; min-height: 44px;"
+        btn_next = _gradient_btn(
+            f"{Icon.PLAY}  TARE & START", C.PRIMARY, C.SECONDARY, F.BODY, 48
         )
-        btn_next.setCursor(Qt.CursorShape.PointingHandCursor)
         btn_next.clicked.connect(self._on_tare_and_pour)
         btn_row.addWidget(btn_next, stretch=1)
 
@@ -262,94 +395,124 @@ class MixingScreen(QWidget):
 
         return page
 
+    # ══════════════════════════════════════════════════════
+    # PAGE 2: WEIGHING (BASE / HARDENER) -- CRITICAL
+    # ══════════════════════════════════════════════════════
+
     def _build_weigh_page(self) -> QWidget:
         page = QWidget()
         lay = QVBoxLayout(page)
-        lay.setContentsMargins(_PAD * 2, _PAD, _PAD * 2, _PAD)
-        lay.setSpacing(_PAD)
+        lay.setContentsMargins(S.PAD * 2, S.PAD, S.PAD * 2, S.PAD)
+        lay.setSpacing(S.GAP)
 
+        # Pour title
         self._lbl_pour_title = QLabel("POUR BASE")
         self._lbl_pour_title.setStyleSheet(
-            f"font-size: {F.H3}px; font-weight: bold; color: {C.PRIMARY};"
+            f"font-size: {F.H2}px; font-weight: bold; color: {C.PRIMARY};"
         )
         self._lbl_pour_title.setAlignment(Qt.AlignmentFlag.AlignCenter)
         lay.addWidget(self._lbl_pour_title)
 
-        # Weight display - large
+        # Main weight card with gradient background
         weight_card = QFrame()
-        weight_card.setObjectName("card")
+        weight_card.setObjectName("weight_card")
+        weight_card.setStyleSheet(
+            f"QFrame#weight_card {{"
+            f"  background: qlineargradient(x1:0,y1:0,x2:1,y2:1,"
+            f"    stop:0 {C.BG_CARD}, stop:0.5 {C.BG_CARD_ALT},"
+            f"    stop:1 {C.BG_CARD});"
+            f"  border: 1px solid {C.BORDER};"
+            f"  border-left: 4px solid {C.PRIMARY};"
+            f"  border-radius: {S.RADIUS}px;"
+            f"}}"
+        )
         wc_lay = QVBoxLayout(weight_card)
-        wc_lay.setContentsMargins(_PAD, _PAD, _PAD, _PAD)
-        wc_lay.setSpacing(4)
+        wc_lay.setContentsMargins(S.PAD, S.PAD, S.PAD, S.PAD)
+        wc_lay.setSpacing(S.GAP)
 
-        # Weight display row: ring + text
+        # Weight row: ProgressRing LEFT + Weight text RIGHT
         weight_row = QHBoxLayout()
-        weight_row.setSpacing(16)
+        weight_row.setSpacing(S.PAD * 2)
 
-        # Circular progress ring
-        self._pour_ring = ProgressRing(size=90, thickness=6)
+        # Circular progress ring (left side)
+        self._pour_ring = ProgressRing(size=100, thickness=8)
         self._pour_ring.set_color(C.PRIMARY)
-        weight_row.addWidget(self._pour_ring, alignment=Qt.AlignmentFlag.AlignCenter)
+        weight_row.addWidget(
+            self._pour_ring,
+            alignment=Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft
+        )
 
-        # Weight text column
+        # Weight text column (right side)
         weight_text = QVBoxLayout()
         weight_text.setSpacing(2)
 
         self._lbl_weight_current = QLabel("0.00 kg")
         self._lbl_weight_current.setStyleSheet(
-            f"font-size: 48px; font-weight: bold; color: {C.PRIMARY};"
+            f"font-size: {F.HERO}px; font-weight: bold; color: {C.PRIMARY};"
         )
-        self._lbl_weight_current.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self._lbl_weight_current.setAlignment(
+            Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter
+        )
         weight_text.addWidget(self._lbl_weight_current)
 
         self._lbl_weight_target = QLabel("Target: --- kg")
         self._lbl_weight_target.setStyleSheet(
-            f"font-size: {_F_MED}px; color: {C.TEXT_SEC};"
+            f"font-size: {F.SMALL}px; color: {C.TEXT_MUTED};"
         )
-        self._lbl_weight_target.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self._lbl_weight_target.setAlignment(Qt.AlignmentFlag.AlignRight)
         weight_text.addWidget(self._lbl_weight_target)
+
+        # Zone label (dynamic color)
+        self._lbl_weight_zone = QLabel("Start pouring...")
+        self._lbl_weight_zone.setStyleSheet(
+            f"font-size: {F.BODY}px; font-weight: bold; color: {C.TEXT_MUTED};"
+        )
+        self._lbl_weight_zone.setAlignment(Qt.AlignmentFlag.AlignRight)
+        weight_text.addWidget(self._lbl_weight_zone)
 
         weight_row.addLayout(weight_text, stretch=1)
         wc_lay.addLayout(weight_row)
 
-        # Progress bar
+        # Linear progress bar (16px, rounded, dynamic color)
         self._progress_weight = QProgressBar()
         self._progress_weight.setRange(0, 100)
         self._progress_weight.setValue(0)
         self._progress_weight.setStyleSheet(
-            f"QProgressBar {{ background-color: {C.BG_INPUT}; border: none;"
-            f"border-radius: 6px; min-height: 16px; max-height: 16px; }}"
-            f"QProgressBar::chunk {{ background-color: {C.PRIMARY}; border-radius: 6px; }}"
+            f"QProgressBar {{"
+            f"  background-color: {C.BG_INPUT}; border: none;"
+            f"  border-radius: 8px; min-height: 16px; max-height: 16px;"
+            f"}}"
+            f"QProgressBar::chunk {{"
+            f"  background-color: {C.PRIMARY}; border-radius: 8px;"
+            f"}}"
         )
         wc_lay.addWidget(self._progress_weight)
-
-        self._lbl_weight_zone = QLabel("Start pouring...")
-        self._lbl_weight_zone.setStyleSheet(
-            f"font-size: {_F_SM}px; color: {C.TEXT_MUTED};"
-        )
-        self._lbl_weight_zone.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        wc_lay.addWidget(self._lbl_weight_zone)
 
         # Barcode verification banner (hidden until scan)
         self._barcode_banner = QFrame()
         self._barcode_banner.setVisible(False)
         bb_lay = QHBoxLayout(self._barcode_banner)
-        bb_lay.setContentsMargins(8, 6, 8, 6)
-        bb_lay.setSpacing(6)
+        bb_lay.setContentsMargins(S.PAD_CARD, 6, S.PAD_CARD, 6)
+        bb_lay.setSpacing(S.GAP)
+
         self._barcode_icon = QLabel()
-        self._barcode_icon.setFixedWidth(24)
+        self._barcode_icon.setFixedWidth(28)
         self._barcode_icon.setAlignment(Qt.AlignmentFlag.AlignCenter)
         bb_lay.addWidget(self._barcode_icon)
+
         self._barcode_msg = QLabel("")
-        self._barcode_msg.setStyleSheet(f"font-size: {_F_SM}px; font-weight: bold;")
+        self._barcode_msg.setStyleSheet(
+            f"font-size: {F.SMALL}px; font-weight: bold;"
+        )
         bb_lay.addWidget(self._barcode_msg, stretch=1)
         wc_lay.addWidget(self._barcode_banner)
 
-        # RFID hint when RFID is down
-        rfid_status = getattr(self, '_app_rfid_ok', True)
-        self._lbl_rfid_hint = QLabel("RFID unavailable — scan barcode to verify product")
+        # RFID hint (hidden unless RFID down)
+        self._lbl_rfid_hint = QLabel(
+            f"{Icon.WARN}  RFID unavailable -- scan barcode to verify product"
+        )
         self._lbl_rfid_hint.setStyleSheet(
-            f"font-size: {_F_SM}px; color: {C.WARNING}; font-style: italic;"
+            f"font-size: {F.SMALL}px; color: {C.WARNING}; font-style: italic;"
         )
         self._lbl_rfid_hint.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self._lbl_rfid_hint.setVisible(False)
@@ -357,23 +520,30 @@ class MixingScreen(QWidget):
 
         lay.addWidget(weight_card, stretch=1)
 
+        # Button row
         btn_row = QHBoxLayout()
-        btn_row.setSpacing(_GAP)
+        btn_row.setSpacing(S.GAP)
 
-        btn_abort = QPushButton("ABORT")
+        btn_abort = QPushButton(f"{Icon.CLOSE}  ABORT")
         btn_abort.setObjectName("danger")
         btn_abort.setCursor(Qt.CursorShape.PointingHandCursor)
-        btn_abort.setMinimumHeight(44)
+        btn_abort.setMinimumHeight(48)
         btn_abort.clicked.connect(self._on_abort)
         btn_row.addWidget(btn_abort)
 
-        self._btn_confirm_pour = QPushButton("CONFIRM POUR")
-        self._btn_confirm_pour.setStyleSheet(
-            f"background-color: {C.SUCCESS}; color: {C.BG_DARK};"
-            f"border: none; border-radius: 8px; font-size: {_F_MED}px;"
-            f"font-weight: bold; min-height: 44px;"
-        )
+        self._btn_confirm_pour = QPushButton(f"{Icon.OK}  CONFIRM POUR")
+        self._btn_confirm_pour.setObjectName("success")
         self._btn_confirm_pour.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._btn_confirm_pour.setMinimumHeight(48)
+        self._btn_confirm_pour.setStyleSheet(
+            f"QPushButton {{"
+            f"  background-color: {C.SUCCESS}; color: {C.BG_DARK};"
+            f"  border: none; border-radius: {S.RADIUS}px;"
+            f"  font-size: {F.BODY}px; font-weight: bold;"
+            f"  min-height: 48px; padding: 8px 16px;"
+            f"}}"
+            f"QPushButton:hover {{ background-color: #2ab86a; }}"
+        )
         self._btn_confirm_pour.clicked.connect(self._on_confirm_pour)
         btn_row.addWidget(self._btn_confirm_pour, stretch=1)
 
@@ -381,90 +551,140 @@ class MixingScreen(QWidget):
 
         return page
 
+    # ══════════════════════════════════════════════════════
+    # PAGE 3: CONFIRM MIX
+    # ══════════════════════════════════════════════════════
+
     def _build_confirm_page(self) -> QWidget:
         page = QWidget()
         lay = QVBoxLayout(page)
-        lay.setContentsMargins(_PAD * 2, _PAD * 2, _PAD * 2, _PAD)
-        lay.setSpacing(_PAD)
+        lay.setContentsMargins(S.PAD * 2, S.PAD * 2, S.PAD * 2, S.PAD)
+        lay.setSpacing(S.PAD)
 
-        lbl = QLabel("MIX RESULT")
-        lbl.setStyleSheet(f"font-size: {_F_BIG}px; font-weight: bold; color: {C.PRIMARY};")
-        lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        lay.addWidget(lbl)
+        # Title
+        title = QLabel("MIX RESULT")
+        title.setStyleSheet(
+            f"font-size: {F.H2}px; font-weight: bold; color: {C.PRIMARY};"
+        )
+        title.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        lay.addWidget(title)
 
-        card = QFrame()
-        card.setObjectName("card")
+        # Results card
+        card = _card_frame(C.PRIMARY)
         card_lay = QVBoxLayout(card)
-        card_lay.setContentsMargins(_PAD, _PAD, _PAD, _PAD)
-        card_lay.setSpacing(_GAP)
+        card_lay.setContentsMargins(S.PAD, S.PAD, S.PAD, S.PAD)
+        card_lay.setSpacing(S.GAP)
 
         self._lbl_result_base = QLabel("Base: ---")
-        self._lbl_result_base.setStyleSheet(f"font-size: {_F_MED}px; color: {C.TEXT};")
+        self._lbl_result_base.setStyleSheet(
+            f"font-size: {F.BODY}px; color: {C.TEXT};"
+        )
         card_lay.addWidget(self._lbl_result_base)
 
         self._lbl_result_hardener = QLabel("Hardener: ---")
-        self._lbl_result_hardener.setStyleSheet(f"font-size: {_F_MED}px; color: {C.TEXT};")
+        self._lbl_result_hardener.setStyleSheet(
+            f"font-size: {F.BODY}px; color: {C.TEXT};"
+        )
         card_lay.addWidget(self._lbl_result_hardener)
 
-        self._lbl_result_ratio = QLabel("Ratio: ---")
-        self._lbl_result_ratio.setStyleSheet(f"font-size: {_F_BIG}px; font-weight: bold; color: {C.SUCCESS};")
-        self._lbl_result_ratio.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        card_lay.addWidget(self._lbl_result_ratio)
+        # Ratio + spec badge row
+        ratio_row = QHBoxLayout()
+        ratio_row.setSpacing(S.GAP)
 
-        self._lbl_result_spec = QLabel("")
-        self._lbl_result_spec.setStyleSheet(f"font-size: {_F_MED}px; font-weight: bold;")
-        self._lbl_result_spec.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        card_lay.addWidget(self._lbl_result_spec)
+        self._lbl_result_ratio = QLabel("Ratio: ---")
+        self._lbl_result_ratio.setStyleSheet(
+            f"font-size: {F.H2}px; font-weight: bold; color: {C.SUCCESS};"
+        )
+        self._lbl_result_ratio.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        ratio_row.addWidget(self._lbl_result_ratio, stretch=1)
+
+        self._lbl_result_spec = type_badge("--", "muted")
+        ratio_row.addWidget(self._lbl_result_spec)
+
+        card_lay.addLayout(ratio_row)
 
         lay.addWidget(card)
         lay.addStretch(1)
 
-        btn = QPushButton("CONFIRM MIX")
-        btn.setStyleSheet(
-            f"background-color: {C.SUCCESS}; color: {C.BG_DARK};"
-            f"border: none; border-radius: 8px; font-size: {F.H3}px;"
-            f"font-weight: bold; min-height: 56px;"
+        btn = _gradient_btn(
+            f"{Icon.OK}  CONFIRM MIX", C.SUCCESS, C.PRIMARY, F.H3
         )
-        btn.setCursor(Qt.CursorShape.PointingHandCursor)
         btn.clicked.connect(self._on_confirm_mix)
         lay.addWidget(btn)
 
         return page
 
+    # ══════════════════════════════════════════════════════
+    # PAGE 4: THINNER (Application Method)
+    # ══════════════════════════════════════════════════════
+
     def _build_thinner_page(self) -> QWidget:
         page = QWidget()
         lay = QVBoxLayout(page)
-        lay.setContentsMargins(_PAD * 2, _PAD * 2, _PAD * 2, _PAD)
-        lay.setSpacing(_PAD)
+        lay.setContentsMargins(S.PAD * 2, S.PAD * 2, S.PAD * 2, S.PAD)
+        lay.setSpacing(S.PAD)
 
-        lbl = QLabel("ADD THINNER?")
-        lbl.setStyleSheet(f"font-size: {_F_BIG}px; font-weight: bold; color: {C.PRIMARY};")
-        lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        lay.addWidget(lbl)
+        # Title
+        title = QLabel("ADD THINNER?")
+        title.setStyleSheet(
+            f"font-size: {F.H2}px; font-weight: bold; color: {C.PRIMARY};"
+        )
+        title.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        lay.addWidget(title)
 
-        lbl2 = QLabel("Select application method:")
-        lbl2.setStyleSheet(f"font-size: {_F_MED}px; color: {C.TEXT_SEC};")
-        lbl2.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        lay.addWidget(lbl2)
+        sub = QLabel("Select application method:")
+        sub.setStyleSheet(f"font-size: {F.BODY}px; color: {C.TEXT_SEC};")
+        sub.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        lay.addWidget(sub)
+
+        lay.addSpacing(S.GAP)
+
+        # Method buttons with icon_badges
+        methods = [
+            ("brush", "BRUSH", Icon.EDIT),
+            ("roller", "ROLLER", Icon.SHELF),
+            ("spray", "SPRAY", Icon.CLOUD),
+        ]
 
         btn_row = QHBoxLayout()
-        btn_row.setSpacing(_PAD)
+        btn_row.setSpacing(S.PAD)
 
-        for method, label in [("brush", "BRUSH"), ("roller", "ROLLER"), ("spray", "SPRAY")]:
-            btn = QPushButton(label)
-            btn.setStyleSheet(
-                f"background-color: {C.BG_CARD}; color: {C.TEXT};"
-                f"border: 1px solid {C.BORDER}; border-radius: 8px;"
-                f"font-size: {_F_MED}px; font-weight: bold; min-height: 56px;"
+        for method_key, method_label, method_icon in methods:
+            method_card = QFrame()
+            method_card.setStyleSheet(
+                f"QFrame {{"
+                f"  background-color: {C.BG_CARD};"
+                f"  border: 1px solid {C.BORDER};"
+                f"  border-radius: {S.RADIUS}px;"
+                f"}}"
+                f"QFrame:hover {{ border-color: {C.PRIMARY}; }}"
             )
+            mc_lay = QVBoxLayout(method_card)
+            mc_lay.setContentsMargins(S.PAD, S.PAD, S.PAD, S.PAD)
+            mc_lay.setSpacing(S.GAP)
+            mc_lay.setAlignment(Qt.AlignmentFlag.AlignCenter)
+
+            badge = icon_badge(method_icon, bg_color=C.PRIMARY_BG,
+                               fg_color=C.PRIMARY, size=36)
+            mc_lay.addWidget(badge, alignment=Qt.AlignmentFlag.AlignCenter)
+
+            btn = QPushButton(method_label)
             btn.setCursor(Qt.CursorShape.PointingHandCursor)
-            btn.clicked.connect(lambda _, m=method: self._on_thinner(m))
-            btn_row.addWidget(btn)
+            btn.setStyleSheet(
+                f"background-color: transparent; color: {C.TEXT};"
+                f"border: none; font-size: {F.BODY}px; font-weight: bold;"
+                f"min-height: 36px;"
+            )
+            btn.clicked.connect(lambda _, m=method_key: self._on_thinner(m))
+            mc_lay.addWidget(btn)
+
+            btn_row.addWidget(method_card)
+
         lay.addLayout(btn_row)
 
         lay.addStretch(1)
 
-        btn_skip = QPushButton("SKIP - NO THINNER")
+        btn_skip = QPushButton(f"{Icon.FORWARD}  SKIP - NO THINNER")
         btn_skip.setObjectName("secondary")
         btn_skip.setCursor(Qt.CursorShape.PointingHandCursor)
         btn_skip.setMinimumHeight(48)
@@ -473,79 +693,118 @@ class MixingScreen(QWidget):
 
         return page
 
+    # ══════════════════════════════════════════════════════
+    # PAGE 5: POT LIFE ACTIVE
+    # ══════════════════════════════════════════════════════
+
     def _build_potlife_page(self) -> QWidget:
         page = QWidget()
         lay = QVBoxLayout(page)
-        lay.setContentsMargins(_PAD * 2, _PAD, _PAD * 2, _PAD)
-        lay.setSpacing(_PAD)
+        lay.setContentsMargins(S.PAD * 2, S.PAD, S.PAD * 2, S.PAD)
+        lay.setSpacing(S.PAD)
 
-        lbl = QLabel("POT LIFE ACTIVE")
-        lbl.setStyleSheet(f"font-size: {F.H3}px; font-weight: bold; color: {C.SUCCESS};")
-        lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        lay.addWidget(lbl)
+        # Title
+        title = QLabel("POT LIFE ACTIVE")
+        title.setStyleSheet(
+            f"font-size: {F.H2}px; font-weight: bold; color: {C.SUCCESS};"
+        )
+        title.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        lay.addWidget(title)
 
+        # Large countdown ProgressRing
+        self._potlife_ring = ProgressRing(size=120, thickness=10)
+        self._potlife_ring.set_color(C.SUCCESS)
+        lay.addWidget(
+            self._potlife_ring, alignment=Qt.AlignmentFlag.AlignCenter
+        )
+
+        # Time text
         self._lbl_potlife_remaining = QLabel("--:--:--")
         self._lbl_potlife_remaining.setStyleSheet(
-            f"font-size: 52px; font-weight: bold; color: {C.PRIMARY};"
+            f"font-size: {F.HERO}px; font-weight: bold; color: {C.PRIMARY};"
         )
         self._lbl_potlife_remaining.setAlignment(Qt.AlignmentFlag.AlignCenter)
         lay.addWidget(self._lbl_potlife_remaining)
 
+        # Progress bar
         self._progress_potlife = QProgressBar()
         self._progress_potlife.setRange(0, 100)
         self._progress_potlife.setValue(0)
         self._progress_potlife.setStyleSheet(
-            f"QProgressBar {{ background-color: {C.BG_INPUT}; border: none;"
-            f"border-radius: 6px; min-height: 12px; max-height: 12px; }}"
-            f"QProgressBar::chunk {{ background-color: {C.SUCCESS}; border-radius: 6px; }}"
+            f"QProgressBar {{"
+            f"  background-color: {C.BG_INPUT}; border: none;"
+            f"  border-radius: 6px; min-height: 12px; max-height: 12px;"
+            f"}}"
+            f"QProgressBar::chunk {{"
+            f"  background-color: {C.SUCCESS}; border-radius: 6px;"
+            f"}}"
         )
         lay.addWidget(self._progress_potlife)
 
         self._lbl_potlife_status = QLabel("Mix is usable")
-        self._lbl_potlife_status.setStyleSheet(f"font-size: {_F_MED}px; color: {C.TEXT_SEC};")
+        self._lbl_potlife_status.setStyleSheet(
+            f"font-size: {F.BODY}px; color: {C.TEXT_SEC};"
+        )
         self._lbl_potlife_status.setAlignment(Qt.AlignmentFlag.AlignCenter)
         lay.addWidget(self._lbl_potlife_status)
 
         lay.addStretch(1)
 
-        btn = QPushButton("DONE - COMPLETE SESSION")
-        btn.setStyleSheet(
-            f"background-color: {C.PRIMARY}; color: {C.BG_DARK};"
-            f"border: none; border-radius: 8px; font-size: {_F_MED}px;"
-            f"font-weight: bold; min-height: 48px;"
+        btn = _gradient_btn(
+            f"{Icon.OK}  DONE - COMPLETE SESSION", C.PRIMARY, C.SECONDARY,
+            F.BODY, 48
         )
-        btn.setCursor(Qt.CursorShape.PointingHandCursor)
         btn.clicked.connect(self._on_complete)
         lay.addWidget(btn)
 
         return page
 
+    # ══════════════════════════════════════════════════════
+    # PAGE 6: SESSION COMPLETE
+    # ══════════════════════════════════════════════════════
+
     def _build_complete_page(self) -> QWidget:
         page = QWidget()
         lay = QVBoxLayout(page)
-        lay.setContentsMargins(_PAD * 2, _PAD * 2, _PAD * 2, _PAD * 2)
-        lay.setSpacing(_PAD)
-
-        lbl = QLabel("SESSION COMPLETE")
-        lbl.setStyleSheet(f"font-size: {_F_BIG}px; font-weight: bold; color: {C.SUCCESS};")
-        lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        lay.addWidget(lbl)
-
-        self._lbl_summary = QLabel("")
-        self._lbl_summary.setStyleSheet(f"font-size: {_F_MED}px; color: {C.TEXT};")
-        self._lbl_summary.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self._lbl_summary.setWordWrap(True)
-        lay.addWidget(self._lbl_summary)
+        lay.setContentsMargins(S.PAD * 2, S.PAD * 2, S.PAD * 2, S.PAD * 2)
+        lay.setSpacing(S.PAD)
 
         lay.addStretch(1)
 
-        btn = QPushButton("BACK TO HOME")
-        btn.setStyleSheet(
-            f"background-color: {C.PRIMARY}; color: {C.BG_DARK};"
-            f"border: none; border-radius: 8px; font-size: {F.H3}px;"
-            f"font-weight: bold; min-height: 56px;"
+        # Success icon
+        success_badge = icon_badge(
+            Icon.OK, bg_color=C.SUCCESS_BG, fg_color=C.SUCCESS, size=56
         )
-        btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        lay.addWidget(success_badge, alignment=Qt.AlignmentFlag.AlignCenter)
+
+        title = QLabel("SESSION COMPLETE")
+        title.setStyleSheet(
+            f"font-size: {F.H2}px; font-weight: bold; color: {C.SUCCESS};"
+        )
+        title.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        lay.addWidget(title)
+
+        # Summary card
+        summary_card = _card_frame(C.SUCCESS)
+        sc_lay = QVBoxLayout(summary_card)
+        sc_lay.setContentsMargins(S.PAD, S.PAD, S.PAD, S.PAD)
+        sc_lay.setSpacing(S.GAP)
+
+        self._lbl_summary = QLabel("")
+        self._lbl_summary.setStyleSheet(
+            f"font-size: {F.BODY}px; color: {C.TEXT};"
+        )
+        self._lbl_summary.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self._lbl_summary.setWordWrap(True)
+        sc_lay.addWidget(self._lbl_summary)
+
+        lay.addWidget(summary_card)
+
+        lay.addStretch(1)
+
+        btn = _gradient_btn(
+            f"{Icon.HOME}  BACK TO HOME", C.PRIMARY, C.SECONDARY, F.H3
+        )
         btn.clicked.connect(lambda: self.app.go_screen("home"))
         lay.addWidget(btn)
 
@@ -558,7 +817,7 @@ class MixingScreen(QWidget):
     def on_enter(self):
         self._load_recipes()
         self._stack.setCurrentIndex(0)
-        self._state_badge.setText("IDLE")
+        self._set_state_badge("IDLE", "muted")
         self._input_user.clear()
 
         # Check if PaintNow passed pre-calculated quantities
@@ -595,18 +854,15 @@ class MixingScreen(QWidget):
         base_product_id = ""
         hardener_product_id = ""
         try:
-            # Find base product
             base_prod = self.app.db.get_product_by_name(product_name)
             if base_prod:
                 base_product_id = base_prod.get("product_id", "")
 
-            # Find hardener: try recipe first, then name match
             if base_product_id:
                 recipe = self.app.db.find_recipe_by_product_name(product_name)
                 if recipe:
                     hardener_product_id = recipe.get("hardener_product_id", "")
 
-            # Fallback: search by hardener name from chart
             if not hardener_product_id:
                 hard_name = pending.get("hardener_name", "")
                 if hard_name and hard_name != "Hardener":
@@ -614,7 +870,6 @@ class MixingScreen(QWidget):
                     if hard_prod:
                         hardener_product_id = hard_prod.get("product_id", "")
 
-            # Last fallback: search for any hardener product matching base name
             if not hardener_product_id:
                 products = self.app.db.get_products()
                 for p in products:
@@ -627,7 +882,6 @@ class MixingScreen(QWidget):
         except Exception as e:
             logger.debug(f"Product lookup for PaintNow recipe: {e}")
 
-        # Use names as fallback if no UUID found
         if not base_product_id:
             base_product_id = pending.get("product_name", "")
         if not hardener_product_id:
@@ -645,17 +899,11 @@ class MixingScreen(QWidget):
             pot_life_minutes=pot_life,
         )
 
-        # Load recipe and start session
         self.app.mixing_engine.load_recipes({recipe_id: mr})
         self.app.mixing_engine.start_session(recipe_id, user_name="Crew")
-
-        # Set amounts via engine
         self.app.mixing_engine.show_recipe(base_grams)
-
-        # Tare the mixing scale
         self.app.mixing_engine.tare_scale()
 
-        # Skip to weighing (bypass recipe selection + amount entry pages)
         session = self.app.mixing_engine.session
         if session:
             session.state = MixingState.WEIGH_BASE
@@ -678,16 +926,14 @@ class MixingScreen(QWidget):
         self._progress_weight.setValue(0)
         self._lbl_weight_zone.setText("Place container, then pour...")
 
-        # Track barcode verification state
         self._barcode_verified_base = False
         self._barcode_verified_hardener = False
 
         # Jump directly to weigh page (page 2)
         self._stack.setCurrentIndex(2)
-        self._state_badge.setText("WEIGHING BASE")
+        self._set_state_badge("WEIGHING BASE", "primary")
         self._barcode_banner.setVisible(False)
 
-        # If RFID is down, require barcode scan before pouring
         rfid_down = self._is_rfid_down()
         print(f"[MIXING] PaintNow auto-start: RFID down={rfid_down}")
         if rfid_down:
@@ -756,16 +1002,16 @@ class MixingScreen(QWidget):
 
         # Show recipe page
         self._lbl_recipe_name.setText(recipe_name)
-        self._lbl_ratio.setText(f"Ratio: {ratio_base}:{ratio_hardener}")
-        self._lbl_potlife_info.setText(f"Pot life: {pot_life} min")
-        self._lbl_tolerance.setText(f"Tolerance: +/-{tolerance}%")
+        self._lbl_ratio.setText(f"{ratio_base}:{ratio_hardener}")
+        self._lbl_potlife_info.setText(f"{pot_life} min")
+        self._lbl_tolerance.setText(f"+/-{tolerance}%")
         self._input_amount.clear()
         self._lbl_calc_base.setText("")
         self._lbl_calc_hardener.setText("")
 
         self._current_recipe = mr
         self._stack.setCurrentIndex(1)
-        self._state_badge.setText("SELECT AMOUNT")
+        self._set_state_badge("SELECT AMOUNT", "secondary")
 
         # Connect amount changes
         self._input_amount.textChanged.connect(self._on_amount_changed)
@@ -773,9 +1019,16 @@ class MixingScreen(QWidget):
     def _on_amount_changed(self, text):
         try:
             base_g = float(text)
-            hardener_g = base_g * (self._current_recipe.ratio_hardener / self._current_recipe.ratio_base)
-            self._lbl_calc_base.setText(f"Base: {base_g / 1000:.2f} kg")
-            self._lbl_calc_hardener.setText(f"Hardener: {hardener_g / 1000:.2f} kg")
+            hardener_g = base_g * (
+                self._current_recipe.ratio_hardener
+                / self._current_recipe.ratio_base
+            )
+            self._lbl_calc_base.setText(
+                f"{Icon.WEIGHT} Base: {base_g / 1000:.2f} kg"
+            )
+            self._lbl_calc_hardener.setText(
+                f"{Icon.WEIGHT} Hardener: {hardener_g / 1000:.2f} kg"
+            )
         except (ValueError, AttributeError):
             self._lbl_calc_base.setText("")
             self._lbl_calc_hardener.setText("")
@@ -783,20 +1036,20 @@ class MixingScreen(QWidget):
     def _is_rfid_down(self) -> bool:
         """Check if RFID is unavailable (fake driver or unhealthy)."""
         try:
-            # Check driver_status FIRST — fake driver means no real RFID
             driver_status = getattr(self.app, "driver_status", {})
             rfid_drv = driver_status.get("rfid", "unknown")
             if rfid_drv == "fake":
                 logger.info("[MIXING] RFID down: driver_status=fake")
                 return True
-            # Then check actual hardware health
             rfid = getattr(self.app, "rfid", None)
             if rfid and hasattr(rfid, "is_healthy"):
                 healthy = rfid.is_healthy()
-                logger.info(f"[MIXING] RFID check: driver={rfid_drv}, is_healthy={healthy}")
+                logger.info(
+                    f"[MIXING] RFID check: driver={rfid_drv}, is_healthy={healthy}"
+                )
                 return not healthy
-            logger.info(f"[MIXING] RFID down: no driver or no is_healthy method")
-            return True  # No RFID driver at all
+            logger.info("[MIXING] RFID down: no driver or no is_healthy method")
+            return True
         except Exception as e:
             logger.info(f"[MIXING] RFID down: exception {e}")
             return True
@@ -809,16 +1062,12 @@ class MixingScreen(QWidget):
 
         engine = self.app.mixing_engine
         engine.show_recipe(base_g)
-
-        # Tare the mixing scale
         engine.tare_scale()
 
-        # Skip pick phases, go straight to weighing
         session = engine.session
         if session:
             session.state = MixingState.WEIGH_BASE
 
-        # Track barcode verification state
         self._barcode_verified_base = False
         self._barcode_verified_hardener = False
 
@@ -830,10 +1079,9 @@ class MixingScreen(QWidget):
         self._progress_weight.setValue(0)
 
         self._stack.setCurrentIndex(2)
-        self._state_badge.setText("WEIGHING BASE")
+        self._set_state_badge("WEIGHING BASE", "primary")
         self._barcode_banner.setVisible(False)
 
-        # If RFID is down, require barcode scan before pouring
         rfid_down = self._is_rfid_down()
         print(f"[MIXING] RFID down={rfid_down}, requiring barcode={rfid_down}")
         if rfid_down:
@@ -848,28 +1096,27 @@ class MixingScreen(QWidget):
             f"background-color: {C.ACCENT_BG}; border: 2px solid {C.ACCENT};"
             f"border-radius: 6px; padding: 8px;"
         )
-        self._barcode_icon.setText(">>")
+        self._barcode_icon.setText(Icon.WARN)
         self._barcode_icon.setStyleSheet(
-            f"color: {C.ACCENT}; font-weight: bold; font-size: {_F_MED}px;"
+            f"color: {C.ACCENT}; font-weight: bold; font-size: {F.BODY}px;"
         )
         self._barcode_msg.setText(
             f"SCAN {component} BARCODE TO START POURING"
         )
         self._barcode_msg.setStyleSheet(
-            f"font-size: {_F_SM}px; font-weight: bold; color: {C.ACCENT};"
+            f"font-size: {F.SMALL}px; font-weight: bold; color: {C.ACCENT};"
         )
         self._lbl_weight_zone.setText(f"Scan {component.lower()} barcode...")
         self._lbl_rfid_hint.setVisible(True)
 
     def _update_weight(self):
-        # Read weight in try/except with logging
+        """Timer callback: read weight, update ring/bar/zone/buzzer."""
         current = 0.0
         try:
             status = self.app.mixing_engine.check_weight_target()
             if status:
                 current = status["current_g"]
             else:
-                # Fallback: read scale directly
                 reading = self.app.weight.read_weight("mixing_scale")
                 current = reading.grams
         except Exception as e:
@@ -878,7 +1125,10 @@ class MixingScreen(QWidget):
 
         self._lbl_weight_current.setText(f"{current / 1000:.2f} kg")
 
-        progress = (current / self._weight_target * 100) if self._weight_target > 0 else 0
+        progress = (
+            (current / self._weight_target * 100)
+            if self._weight_target > 0 else 0
+        )
         progress = min(100, max(0, progress))
         self._progress_weight.setValue(int(progress))
 
@@ -890,39 +1140,30 @@ class MixingScreen(QWidget):
         elif progress < 98:
             zone = "approaching"
             color = C.WARNING
-            zone_text = "Slow down!"
+            zone_text = f"{Icon.WARN}  Slow down!"
         elif progress <= 100:
             zone = "in_range"
             color = C.SUCCESS
-            zone_text = "STOP! Confirm pour"
+            zone_text = f"{Icon.OK}  STOP! Confirm pour"
         else:
             zone = "over"
             color = C.DANGER
-            zone_text = "TOO MUCH!"
+            zone_text = f"{Icon.ERROR}  TOO MUCH!"
 
         # ── Buzzer feedback (audio guide for blind pouring) ──
-        # Timer runs every 300ms. Beep frequencies:
-        #   Pouring (<85%):     every 2 ticks = ~0.6s
-        #   Approaching (85-98%): every tick = ~0.3s
-        #   Target (98-100%):   continuous tone
-        #   Over (>100%):       error buzz once
         try:
             buzzer = self.app.buzzer
             self._tick_counter += 1
 
             if zone == "pouring" and current > 5:
-                # Steady beep every ~0.6s while pouring
                 if self._tick_counter % 2 == 0:
                     buzzer.play(BuzzerPattern.POUR_STEADY)
             elif zone == "approaching":
-                # Fast beep every tick (~0.3s) when close
                 buzzer.play(BuzzerPattern.POUR_CLOSE)
             elif zone == "in_range":
-                # Continuous tone at target — play sustained beep
                 if self._tick_counter % 2 == 0:
                     buzzer.play(BuzzerPattern.POUR_TARGET)
             elif zone == "over":
-                # Error once when entering over zone
                 if self._last_buzzer_zone != "over":
                     buzzer.play(BuzzerPattern.ERROR)
 
@@ -930,16 +1171,26 @@ class MixingScreen(QWidget):
         except Exception:
             pass  # Buzzer errors should never break weight display
 
+        # Update weight text color
         self._lbl_weight_current.setStyleSheet(
-            f"font-size: 48px; font-weight: bold; color: {color};"
+            f"font-size: {F.HERO}px; font-weight: bold; color: {color};"
         )
+
+        # Update zone label color
         self._lbl_weight_zone.setText(zone_text)
+        self._lbl_weight_zone.setStyleSheet(
+            f"font-size: {F.BODY}px; font-weight: bold; color: {color};"
+        )
 
         # Update progress bar color
         self._progress_weight.setStyleSheet(
-            f"QProgressBar {{ background-color: {C.BG_INPUT}; border: none;"
-            f"border-radius: 6px; min-height: 16px; max-height: 16px; }}"
-            f"QProgressBar::chunk {{ background-color: {color}; border-radius: 6px; }}"
+            f"QProgressBar {{"
+            f"  background-color: {C.BG_INPUT}; border: none;"
+            f"  border-radius: 8px; min-height: 16px; max-height: 16px;"
+            f"}}"
+            f"QProgressBar::chunk {{"
+            f"  background-color: {color}; border-radius: 8px;"
+            f"}}"
         )
 
         # Update circular progress ring
@@ -953,28 +1204,31 @@ class MixingScreen(QWidget):
         if self._weighing_phase == "base":
             engine.confirm_base_weighed()
 
-            # Move to hardener
             session = engine.session
             if session:
                 session.state = MixingState.WEIGH_HARDENER
                 hardener_target = session.hardener_weight_target_g
 
                 self._weighing_phase = "hardener"
-                self._weight_target = session.base_weight_actual_g + hardener_target
+                self._weight_target = (
+                    session.base_weight_actual_g + hardener_target
+                )
                 self._last_buzzer_zone = ""
                 self._tick_counter = 0
                 self._lbl_pour_title.setText("POUR HARDENER")
                 self._lbl_weight_target.setText(
-                    f"Target: +{hardener_target / 1000:.2f} kg (total {self._weight_target / 1000:.2f} kg)"
+                    f"Target: +{hardener_target / 1000:.2f} kg "
+                    f"(total {self._weight_target / 1000:.2f} kg)"
                 )
-                self._lbl_weight_current.setText(f"{session.base_weight_actual_g / 1000:.2f} kg")
+                self._lbl_weight_current.setText(
+                    f"{session.base_weight_actual_g / 1000:.2f} kg"
+                )
                 self._progress_weight.setValue(0)
                 self._lbl_weight_zone.setText("Pour hardener...")
 
-                self._state_badge.setText("WEIGHING HARDENER")
+                self._set_state_badge("WEIGHING HARDENER", "accent")
                 self._barcode_banner.setVisible(False)
 
-                # Require hardener barcode scan when RFID is down
                 if self._is_rfid_down():
                     self._show_barcode_required("HARDENER")
                 else:
@@ -986,39 +1240,50 @@ class MixingScreen(QWidget):
 
             session = engine.session
             if session:
-                # Show confirm page
                 self._lbl_result_base.setText(
-                    f"Base: {session.base_weight_actual_g:.0f}g (target: {session.base_weight_target_g:.0f}g)"
+                    f"{Icon.WEIGHT}  Base: {session.base_weight_actual_g:.0f}g "
+                    f"(target: {session.base_weight_target_g:.0f}g)"
                 )
                 self._lbl_result_hardener.setText(
-                    f"Hardener: {session.hardener_weight_actual_g:.0f}g (target: {session.hardener_weight_target_g:.0f}g)"
+                    f"{Icon.WEIGHT}  Hardener: {session.hardener_weight_actual_g:.0f}g "
+                    f"(target: {session.hardener_weight_target_g:.0f}g)"
                 )
-                self._lbl_result_ratio.setText(f"Ratio: {session.ratio_achieved:.2f}")
+                self._lbl_result_ratio.setText(
+                    f"Ratio: {session.ratio_achieved:.2f}"
+                )
 
                 if session.ratio_in_spec:
                     self._lbl_result_spec.setText("IN SPEC")
                     self._lbl_result_spec.setStyleSheet(
-                        f"font-size: {_F_MED}px; font-weight: bold; color: {C.SUCCESS};"
+                        f"background-color: {C.SUCCESS_BG}; color: {C.SUCCESS};"
+                        f"border: 1px solid {C.SUCCESS}; border-radius: 4px;"
+                        f"padding: 2px 8px; font-size: {F.TINY}px;"
+                        f"font-weight: bold;"
                     )
                     self._lbl_result_ratio.setStyleSheet(
-                        f"font-size: {_F_BIG}px; font-weight: bold; color: {C.SUCCESS};"
+                        f"font-size: {F.H2}px; font-weight: bold;"
+                        f"color: {C.SUCCESS};"
                     )
                 else:
                     self._lbl_result_spec.setText("OUT OF SPEC!")
                     self._lbl_result_spec.setStyleSheet(
-                        f"font-size: {_F_MED}px; font-weight: bold; color: {C.DANGER};"
+                        f"background-color: {C.DANGER_BG}; color: {C.DANGER};"
+                        f"border: 1px solid {C.DANGER}; border-radius: 4px;"
+                        f"padding: 2px 8px; font-size: {F.TINY}px;"
+                        f"font-weight: bold;"
                     )
                     self._lbl_result_ratio.setStyleSheet(
-                        f"font-size: {_F_BIG}px; font-weight: bold; color: {C.DANGER};"
+                        f"font-size: {F.H2}px; font-weight: bold;"
+                        f"color: {C.DANGER};"
                     )
 
                 self._stack.setCurrentIndex(3)
-                self._state_badge.setText("CONFIRM MIX")
+                self._set_state_badge("CONFIRM MIX", "success")
 
     def _on_confirm_mix(self):
         self.app.mixing_engine.confirm_mix()
         self._stack.setCurrentIndex(4)
-        self._state_badge.setText("THINNER")
+        self._set_state_badge("THINNER", "accent")
 
     def _on_thinner(self, method_str):
         method = {
@@ -1036,7 +1301,7 @@ class MixingScreen(QWidget):
 
     def _start_potlife_display(self):
         self._stack.setCurrentIndex(5)
-        self._state_badge.setText("POT LIFE")
+        self._set_state_badge("POT LIFE", "warning")
         self._pot_life_timer.start(1000)
         self._update_pot_life()
 
@@ -1053,51 +1318,68 @@ class MixingScreen(QWidget):
         secs = int(remaining % 60)
         self._lbl_potlife_remaining.setText(f"{hours:02d}:{mins:02d}:{secs:02d}")
 
-        self._progress_potlife.setValue(int(100 - elapsed_pct))
+        remaining_pct = max(0, 100 - elapsed_pct)
+        self._progress_potlife.setValue(int(remaining_pct))
+        self._potlife_ring.set_value(remaining_pct / 100.0)
 
         if status["expired"]:
             self._lbl_potlife_remaining.setStyleSheet(
-                f"font-size: 52px; font-weight: bold; color: {C.DANGER};"
+                f"font-size: {F.HERO}px; font-weight: bold; color: {C.DANGER};"
             )
-            self._lbl_potlife_status.setText("EXPIRED! Discard the mix!")
-            self._lbl_potlife_status.setStyleSheet(f"font-size: {_F_MED}px; color: {C.DANGER};")
+            self._lbl_potlife_status.setText(
+                f"{Icon.ERROR}  EXPIRED! Discard the mix!"
+            )
+            self._lbl_potlife_status.setStyleSheet(
+                f"font-size: {F.BODY}px; color: {C.DANGER}; font-weight: bold;"
+            )
+            self._potlife_ring.set_color(C.DANGER)
             self._progress_potlife.setStyleSheet(
-                f"QProgressBar {{ background-color: {C.BG_INPUT}; border: none;"
-                f"border-radius: 6px; min-height: 12px; max-height: 12px; }}"
-                f"QProgressBar::chunk {{ background-color: {C.DANGER}; border-radius: 6px; }}"
+                f"QProgressBar {{"
+                f"  background-color: {C.BG_INPUT}; border: none;"
+                f"  border-radius: 6px; min-height: 12px; max-height: 12px;"
+                f"}}"
+                f"QProgressBar::chunk {{"
+                f"  background-color: {C.DANGER}; border-radius: 6px;"
+                f"}}"
             )
         elif elapsed_pct >= 75:
             self._lbl_potlife_remaining.setStyleSheet(
-                f"font-size: 52px; font-weight: bold; color: {C.WARNING};"
+                f"font-size: {F.HERO}px; font-weight: bold; color: {C.WARNING};"
             )
-            self._lbl_potlife_status.setText("Use soon!")
+            self._lbl_potlife_status.setText(f"{Icon.WARN}  Use soon!")
+            self._potlife_ring.set_color(C.WARNING)
             self._progress_potlife.setStyleSheet(
-                f"QProgressBar {{ background-color: {C.BG_INPUT}; border: none;"
-                f"border-radius: 6px; min-height: 12px; max-height: 12px; }}"
-                f"QProgressBar::chunk {{ background-color: {C.WARNING}; border-radius: 6px; }}"
+                f"QProgressBar {{"
+                f"  background-color: {C.BG_INPUT}; border: none;"
+                f"  border-radius: 6px; min-height: 12px; max-height: 12px;"
+                f"}}"
+                f"QProgressBar::chunk {{"
+                f"  background-color: {C.WARNING}; border-radius: 6px;"
+                f"}}"
             )
         else:
             self._lbl_potlife_remaining.setStyleSheet(
-                f"font-size: 52px; font-weight: bold; color: {C.PRIMARY};"
+                f"font-size: {F.HERO}px; font-weight: bold; color: {C.PRIMARY};"
             )
-            self._lbl_potlife_status.setText("Mix is usable")
+            self._lbl_potlife_status.setText(f"{Icon.OK}  Mix is usable")
+            self._potlife_ring.set_color(C.SUCCESS)
 
     def _on_complete(self):
         self._pot_life_timer.stop()
 
         session = self.app.mixing_engine.session
         if session:
+            spec_text = "IN SPEC" if session.ratio_in_spec else "OUT OF SPEC"
             summary = (
-                f"Base: {session.base_weight_actual_g:.0f}g | "
+                f"Base: {session.base_weight_actual_g:.0f}g  |  "
                 f"Hardener: {session.hardener_weight_actual_g:.0f}g\n"
-                f"Ratio: {session.ratio_achieved:.2f} | "
-                f"{'IN SPEC' if session.ratio_in_spec else 'OUT OF SPEC'}"
+                f"Ratio: {session.ratio_achieved:.2f}  |  {spec_text}"
             )
             self._lbl_summary.setText(summary)
 
         self.app.mixing_engine.complete_session()
         self._stack.setCurrentIndex(6)
-        self._state_badge.setText("COMPLETE")
+        self._set_state_badge("COMPLETE", "success")
 
     def _on_abort(self):
         self._weight_timer.stop()
@@ -1116,7 +1398,8 @@ class MixingScreen(QWidget):
     # BARCODE VERIFICATION (called from app barcode handler)
     # ══════════════════════════════════════════════════════
 
-    def on_barcode_verified(self, match: bool, component: str, product_info: dict):
+    def on_barcode_verified(self, match: bool, component: str,
+                            product_info: dict):
         """Called by app when barcode is scanned during mixing.
 
         Shows a banner on the weigh page indicating match/mismatch.
@@ -1127,46 +1410,57 @@ class MixingScreen(QWidget):
 
         if match:
             self._barcode_banner.setStyleSheet(
-                f"background-color: {C.SUCCESS_BG}; border: 1px solid {C.SUCCESS};"
+                f"background-color: {C.SUCCESS_BG};"
+                f"border: 1px solid {C.SUCCESS};"
                 f"border-radius: 6px;"
             )
-            self._barcode_icon.setText("OK")
+            self._barcode_icon.setText(Icon.OK)
             self._barcode_icon.setStyleSheet(
-                f"color: {C.SUCCESS}; font-weight: bold; font-size: {_F_MED}px;"
+                f"color: {C.SUCCESS}; font-weight: bold;"
+                f"font-size: {F.BODY}px;"
             )
             self._barcode_msg.setText(f"CORRECT {component}: {name}")
             self._barcode_msg.setStyleSheet(
-                f"font-size: {_F_SM}px; font-weight: bold; color: {C.SUCCESS};"
+                f"font-size: {F.SMALL}px; font-weight: bold;"
+                f"color: {C.SUCCESS};"
             )
 
-            # Unlock weighing if barcode was required (RFID down)
             if component == "BASE" and not self._barcode_verified_base:
                 self._barcode_verified_base = True
                 self._lbl_rfid_hint.setVisible(False)
-                self._weight_timer.start(300)  # Start weighing
-                QTimer.singleShot(3000, lambda: self._barcode_banner.setVisible(False))
+                self._weight_timer.start(300)
+                QTimer.singleShot(
+                    3000, lambda: self._barcode_banner.setVisible(False)
+                )
                 return
             elif component == "HARDENER" and not self._barcode_verified_hardener:
                 self._barcode_verified_hardener = True
                 self._lbl_rfid_hint.setVisible(False)
-                self._weight_timer.start(300)  # Resume weighing
-                QTimer.singleShot(3000, lambda: self._barcode_banner.setVisible(False))
+                self._weight_timer.start(300)
+                QTimer.singleShot(
+                    3000, lambda: self._barcode_banner.setVisible(False)
+                )
                 return
         else:
             self._barcode_banner.setStyleSheet(
-                f"background-color: {C.DANGER_BG}; border: 2px solid {C.DANGER};"
+                f"background-color: {C.DANGER_BG};"
+                f"border: 2px solid {C.DANGER};"
                 f"border-radius: 6px;"
             )
-            self._barcode_icon.setText("!!")
+            self._barcode_icon.setText(Icon.ERROR)
             self._barcode_icon.setStyleSheet(
-                f"color: {C.DANGER}; font-weight: bold; font-size: {_F_MED}px;"
+                f"color: {C.DANGER}; font-weight: bold;"
+                f"font-size: {F.BODY}px;"
             )
-            self._barcode_msg.setText(f"WARNING: {name} — verify correct product!")
+            self._barcode_msg.setText(
+                f"WARNING: {name} -- verify correct product!"
+            )
             self._barcode_msg.setStyleSheet(
-                f"font-size: {_F_SM}px; font-weight: bold; color: {C.DANGER};"
+                f"font-size: {F.SMALL}px; font-weight: bold;"
+                f"color: {C.DANGER};"
             )
 
-            # Still unlock weighing even on mismatch — user must be able to pour
+            # Still unlock weighing even on mismatch
             if component == "BASE" and not self._barcode_verified_base:
                 self._barcode_verified_base = True
                 self._lbl_rfid_hint.setVisible(False)
@@ -1177,7 +1471,9 @@ class MixingScreen(QWidget):
                 self._weight_timer.start(300)
 
         # Auto-hide after 8 seconds
-        QTimer.singleShot(8000, lambda: self._barcode_banner.setVisible(False))
+        QTimer.singleShot(
+            8000, lambda: self._barcode_banner.setVisible(False)
+        )
 
     def _check_rfid_status(self):
         """Check if RFID is healthy and show hint if not."""

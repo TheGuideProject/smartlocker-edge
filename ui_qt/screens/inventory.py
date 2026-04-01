@@ -2,9 +2,10 @@
 SmartLocker Inventory Screen
 
 ScrollArea with product cards showing stock levels, type badges,
-and color-coded progress bars. Auto-refreshes every 2 seconds.
+color swatches, and color-coded progress bars. Auto-refreshes every 2 seconds.
 """
 
+import json
 import logging
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
@@ -13,12 +14,25 @@ from PyQt6.QtWidgets import (
 from PyQt6.QtCore import Qt, QTimer
 
 from ui_qt.theme import C, F, S, enable_touch_scroll
+from ui_qt.icons import (
+    Icon, icon_badge, icon_label, status_dot, type_badge, section_header,
+    screen_header,
+)
 
 logger = logging.getLogger("smartlocker.ui.inventory")
 
 
 # Maximum liters per product for progress bar calculation
 MAX_LITERS = 20.0
+
+# Product type -> (border color, badge variant)
+_TYPE_STYLE = {
+    "BASE_PAINT": (C.PRIMARY,   "primary"),
+    "BASE":       (C.PRIMARY,   "primary"),
+    "HARDENER":   (C.ACCENT,    "accent"),
+    "THINNER":    (C.SECONDARY, "secondary"),
+    "PRIMER":     (C.SUCCESS,   "success"),
+}
 
 
 class InventoryScreen(QWidget):
@@ -32,48 +46,32 @@ class InventoryScreen(QWidget):
         self._card_widgets = []
         self._build_ui()
 
-    # ══════════════════════════════════════════════════════════
+    # ------------------------------------------------------------------
     # UI BUILD
-    # ══════════════════════════════════════════════════════════
+    # ------------------------------------------------------------------
 
     def _build_ui(self):
         root = QVBoxLayout(self)
         root.setContentsMargins(0, 0, 0, 0)
         root.setSpacing(0)
 
-        # ── Header bar ──────────────────────────────────
-        header = QFrame()
-        header.setStyleSheet(
-            f"background-color: {C.BG_STATUS};"
-            f"border-bottom: 1px solid {C.BORDER};"
+        # -- Header (standard screen_header) --
+        header_frame, header_layout = screen_header(
+            self.app, "INVENTORY", Icon.INVENTORY, C.SUCCESS,
         )
-        header_layout = QHBoxLayout(header)
-        header_layout.setContentsMargins(S.PAD, 8, S.PAD, 8)
-        header_layout.setSpacing(S.GAP)
 
-        btn_back = QPushButton("< BACK")
-        btn_back.setObjectName("ghost")
-        btn_back.setCursor(Qt.CursorShape.PointingHandCursor)
-        btn_back.clicked.connect(lambda: self.app.go_back())
-        header_layout.addWidget(btn_back)
-
-        title = QLabel("INVENTORY")
-        title.setStyleSheet(
-            f"font-size: {F.H3}px; font-weight: bold; color: {C.TEXT};"
-        )
-        header_layout.addWidget(title)
-
-        header_layout.addStretch(1)
-
+        # Product count badge in header
         self._count_label = QLabel("--")
         self._count_label.setStyleSheet(
-            f"font-size: {F.SMALL}px; color: {C.TEXT_SEC};"
+            f"background-color: {C.SUCCESS_BG}; color: {C.SUCCESS};"
+            f"border: 1px solid {C.SUCCESS}; border-radius: 10px;"
+            f"padding: 2px 10px; font-size: {F.TINY}px; font-weight: bold;"
         )
         header_layout.addWidget(self._count_label)
 
-        root.addWidget(header)
+        root.addWidget(header_frame)
 
-        # ── Scroll area for cards ───────────────────────
+        # -- Scroll area for cards --
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
         scroll.setHorizontalScrollBarPolicy(
@@ -90,7 +88,7 @@ class InventoryScreen(QWidget):
         enable_touch_scroll(scroll)
         root.addWidget(scroll, stretch=1)
 
-        # ── Bottom bar ──────────────────────────────────
+        # -- Bottom bar --
         bottom = QFrame()
         bottom.setStyleSheet(
             f"background-color: {C.BG_STATUS};"
@@ -100,7 +98,7 @@ class InventoryScreen(QWidget):
         bottom_layout.setContentsMargins(S.PAD, 6, S.PAD, 6)
         bottom_layout.setSpacing(S.GAP)
 
-        btn_shelves = QPushButton("CHECK SHELVES")
+        btn_shelves = QPushButton(f"{Icon.SHELF}  CHECK SHELVES")
         btn_shelves.setObjectName("secondary")
         btn_shelves.setCursor(Qt.CursorShape.PointingHandCursor)
         btn_shelves.clicked.connect(lambda: self.app.go_screen("shelf_map"))
@@ -110,9 +108,9 @@ class InventoryScreen(QWidget):
 
         root.addWidget(bottom)
 
-    # ══════════════════════════════════════════════════════════
+    # ------------------------------------------------------------------
     # DATA REFRESH
-    # ══════════════════════════════════════════════════════════
+    # ------------------------------------------------------------------
 
     def _refresh(self):
         """Reload stock data and rebuild cards."""
@@ -145,85 +143,108 @@ class InventoryScreen(QWidget):
         self._card_widgets.clear()
 
         if not stock:
-            empty = QLabel("No inventory data available.\nPair with cloud to sync products.")
-            empty.setStyleSheet(
-                f"font-size: {F.BODY}px; color: {C.TEXT_MUTED};"
-            )
-            empty.setAlignment(Qt.AlignmentFlag.AlignCenter)
-            empty.setWordWrap(True)
-            self._cards_layout.insertWidget(0, empty)
-            self._card_widgets.append(empty)
+            self._show_empty_state()
             return
 
         # Build a card for each product
         for item in stock:
             card = self._build_product_card(item)
-            # Insert before the stretch
             idx = self._cards_layout.count() - 1
             self._cards_layout.insertWidget(idx, card)
             self._card_widgets.append(card)
 
+    def _show_empty_state(self):
+        """Centered empty-state placeholder."""
+        wrapper = QWidget()
+        wrapper_layout = QVBoxLayout(wrapper)
+        wrapper_layout.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        wrapper_layout.setSpacing(S.GAP)
+
+        badge = icon_badge(Icon.INVENTORY, C.BG_CARD_ALT, C.TEXT_MUTED, size=48)
+        badge.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        wrapper_layout.addWidget(badge, alignment=Qt.AlignmentFlag.AlignCenter)
+
+        lbl = QLabel("No products in inventory")
+        lbl.setStyleSheet(
+            f"font-size: {F.BODY}px; color: {C.TEXT_MUTED}; font-weight: bold;"
+        )
+        lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        wrapper_layout.addWidget(lbl)
+
+        sub = QLabel("Pair with cloud to sync products.")
+        sub.setStyleSheet(
+            f"font-size: {F.SMALL}px; color: {C.TEXT_MUTED};"
+        )
+        sub.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        wrapper_layout.addWidget(sub)
+
+        idx = self._cards_layout.count() - 1
+        self._cards_layout.insertWidget(idx, wrapper)
+        self._card_widgets.append(wrapper)
+
     def _build_product_card(self, item: dict) -> QFrame:
-        """Build a single product card with name, type badge, and progress bar."""
+        """Build a single product card with left accent border, type badge,
+        color swatches, quantity, and progress bar."""
+
+        ptype = (item.get("product_type", "BASE") or "BASE").upper()
+        border_color, badge_variant = _TYPE_STYLE.get(
+            ptype, (C.TEXT_MUTED, "muted")
+        )
+
         card = QFrame()
         card.setObjectName("card")
+        card.setStyleSheet(
+            f"QFrame#card {{"
+            f"  background-color: {C.BG_CARD};"
+            f"  border: 1px solid {C.BORDER};"
+            f"  border-left: 4px solid {border_color};"
+            f"  border-radius: {S.RADIUS}px;"
+            f"}}"
+        )
 
         layout = QVBoxLayout(card)
-        layout.setContentsMargins(S.PAD_CARD, S.PAD_CARD, S.PAD_CARD, S.PAD_CARD)
+        layout.setContentsMargins(S.PAD_CARD + 4, S.PAD_CARD, S.PAD_CARD, S.PAD_CARD)
         layout.setSpacing(6)
 
-        # ── Top row: product name + type badge ──
-        top = QHBoxLayout()
-        top.setSpacing(S.GAP)
+        # -- Row 1: type badge + product name + delete icon --
+        row1 = QHBoxLayout()
+        row1.setSpacing(S.GAP)
+
+        ptype_display = ptype.replace("_", " ") if ptype else "BASE"
+        badge = type_badge(ptype_display, badge_variant)
+        badge.setFixedHeight(22)
+        row1.addWidget(badge)
 
         name = item.get("product_name", "Unknown")
         lbl_name = QLabel(name)
         lbl_name.setStyleSheet(
-            f"font-size: {F.BODY}px; font-weight: bold; color: {C.TEXT};"
+            f"font-size: {F.H3}px; font-weight: bold; color: {C.TEXT};"
         )
         lbl_name.setWordWrap(True)
-        top.addWidget(lbl_name, stretch=1)
+        row1.addWidget(lbl_name, stretch=1)
 
-        ptype = item.get("product_type", "BASE").upper()
-        # Normalize display name
-        ptype_display = ptype.replace("_", " ") if ptype else "BASE"
-        badge = QLabel(ptype_display)
-        badge_colors = {
-            "BASE_PAINT": (C.PRIMARY_BG, C.PRIMARY, C.PRIMARY),
-            "BASE": (C.PRIMARY_BG, C.PRIMARY, C.PRIMARY),
-            "HARDENER": (C.ACCENT_BG, C.ACCENT, C.ACCENT),
-            "THINNER": (C.SECONDARY_BG, C.SECONDARY, C.SECONDARY),
-            "PRIMER": (C.PRIMARY_BG, C.PRIMARY, C.PRIMARY),
-        }
-        bg, fg, border_c = badge_colors.get(ptype, (C.BG_CARD_ALT, C.TEXT_MUTED, C.TEXT_MUTED))
-        badge.setStyleSheet(
-            f"background-color: {bg}; color: {fg};"
-            f"border: 1px solid {border_c}; border-radius: 4px;"
-            f"padding: 2px 8px; font-size: {F.TINY}px; font-weight: bold;"
-        )
-        badge.setFixedHeight(22)
-        top.addWidget(badge)
-
-        # Delete button
         product_id = item.get("product_id", "")
-        btn_del = QPushButton("X")
-        btn_del.setFixedSize(28, 28)
+        btn_del = QPushButton()
+        btn_del.setFixedSize(32, 32)
         btn_del.setCursor(Qt.CursorShape.PointingHandCursor)
         btn_del.setStyleSheet(
-            f"background-color: transparent; color: {C.DANGER};"
-            f"font-weight: bold; font-size: 14px; border: 1px solid {C.DANGER};"
-            f"border-radius: 4px;"
+            f"background-color: {C.DANGER_BG}; color: {C.DANGER};"
+            f"font-weight: bold; font-size: 16px;"
+            f"border: 1px solid {C.DANGER}; border-radius: 6px;"
+            f"padding: 0px;"
         )
-        btn_del.clicked.connect(lambda checked, pid=product_id: self._delete_item(pid))
-        top.addWidget(btn_del)
+        btn_del.setText(Icon.DELETE)
+        btn_del.clicked.connect(
+            lambda checked, pid=product_id: self._delete_item(pid)
+        )
+        row1.addWidget(btn_del)
 
-        layout.addLayout(top)
+        layout.addLayout(row1)
 
-        # ── Color row (if available) ──
+        # -- Row 2: color swatches --
         colors_json = item.get("colors_json", "[]")
         if isinstance(colors_json, str):
             try:
-                import json
                 colors = json.loads(colors_json)
             except Exception:
                 colors = []
@@ -232,8 +253,9 @@ class InventoryScreen(QWidget):
 
         if colors:
             color_row = QHBoxLayout()
-            color_row.setSpacing(6)
-            for color_entry in colors[:4]:  # Max 4 colors
+            color_row.setSpacing(S.GAP)
+
+            for color_entry in colors[:4]:
                 if isinstance(color_entry, dict):
                     cname = color_entry.get("name", "")
                     chex = color_entry.get("hex", "#888888")
@@ -242,63 +264,103 @@ class InventoryScreen(QWidget):
                     chex = "#888888"
 
                 dot = QLabel()
-                dot.setFixedSize(14, 14)
+                dot.setFixedSize(20, 20)
                 dot.setStyleSheet(
-                    f"background-color: {chex}; border-radius: 7px;"
-                    f"border: 1px solid {C.BORDER};"
+                    f"background-color: {chex}; border-radius: 4px;"
+                    f"border: 2px solid {C.BORDER};"
                 )
                 color_row.addWidget(dot)
 
                 if cname:
                     clbl = QLabel(cname)
                     clbl.setStyleSheet(
-                        f"font-size: {F.TINY}px; color: {C.TEXT_SEC};"
+                        f"font-size: {F.SMALL}px; color: {C.TEXT_SEC};"
                     )
                     color_row.addWidget(clbl)
 
             color_row.addStretch()
             layout.addLayout(color_row)
 
-        # ── Quantity row ──
-        qty = float(item.get("current_liters", 0) or item.get("quantity_liters", 0))
-        density = float(item.get("density_g_per_ml", 1.3) or 1.3)
-        weight_kg = qty * density  # liters * kg/L
-        lbl_qty = QLabel(f"{qty:.1f} L  ({weight_kg:.1f} kg)")
-        lbl_qty.setStyleSheet(
-            f"font-size: {F.BODY}px; font-weight: bold; color: {C.TEXT_SEC};"
+        # -- Row 3: quantity --
+        qty = float(
+            item.get("current_liters", 0) or item.get("quantity_liters", 0)
         )
-        layout.addWidget(lbl_qty)
+        density = float(item.get("density_g_per_ml", 1.3) or 1.3)
+        weight_kg = qty * density
 
-        # ── Progress bar ──
-        pct = min(100, max(0, int((qty / MAX_LITERS) * 100))) if MAX_LITERS > 0 else 0
+        qty_row = QHBoxLayout()
+        qty_row.setSpacing(4)
+
+        lbl_vol = QLabel(f"{qty:.1f}")
+        lbl_vol.setStyleSheet(
+            f"font-size: {F.BODY}px; font-weight: bold; color: {C.TEXT};"
+        )
+        qty_row.addWidget(lbl_vol)
+
+        lbl_vol_unit = QLabel("L")
+        lbl_vol_unit.setStyleSheet(
+            f"font-size: {F.SMALL}px; color: {C.TEXT_MUTED};"
+        )
+        qty_row.addWidget(lbl_vol_unit)
+
+        sep_lbl = QLabel("|")
+        sep_lbl.setStyleSheet(
+            f"font-size: {F.SMALL}px; color: {C.BORDER}; padding: 0 4px;"
+        )
+        qty_row.addWidget(sep_lbl)
+
+        lbl_wt = QLabel(f"{weight_kg:.1f}")
+        lbl_wt.setStyleSheet(
+            f"font-size: {F.BODY}px; font-weight: bold; color: {C.TEXT};"
+        )
+        qty_row.addWidget(lbl_wt)
+
+        lbl_wt_unit = QLabel("kg")
+        lbl_wt_unit.setStyleSheet(
+            f"font-size: {F.SMALL}px; color: {C.TEXT_MUTED};"
+        )
+        qty_row.addWidget(lbl_wt_unit)
+
+        qty_row.addStretch()
+        layout.addLayout(qty_row)
+
+        # -- Row 4: progress bar --
+        pct = (
+            min(100, max(0, int((qty / MAX_LITERS) * 100)))
+            if MAX_LITERS > 0
+            else 0
+        )
 
         bar = QProgressBar()
         bar.setRange(0, 100)
         bar.setValue(pct)
         bar.setTextVisible(False)
-        bar.setFixedHeight(10)
+        bar.setFixedHeight(12)
 
-        # Color based on fill level
         if pct > 50:
-            chunk_color = C.PRIMARY
+            chunk_color = C.SUCCESS
         elif pct > 25:
             chunk_color = C.WARNING
         else:
             chunk_color = C.DANGER
 
         bar.setStyleSheet(
-            f"QProgressBar {{ background-color: {C.BG_INPUT};"
-            f"border: none; border-radius: 4px; }}"
-            f"QProgressBar::chunk {{ background-color: {chunk_color};"
-            f"border-radius: 4px; }}"
+            f"QProgressBar {{"
+            f"  background-color: {C.BG_INPUT};"
+            f"  border: none; border-radius: 6px;"
+            f"}}"
+            f"QProgressBar::chunk {{"
+            f"  background-color: {chunk_color};"
+            f"  border-radius: 6px;"
+            f"}}"
         )
         layout.addWidget(bar)
 
         return card
 
-    # ══════════════════════════════════════════════════════════
+    # ------------------------------------------------------------------
     # ACTIONS
-    # ══════════════════════════════════════════════════════════
+    # ------------------------------------------------------------------
 
     def _delete_item(self, product_id: str):
         """Delete a product from vessel_stock."""
@@ -310,9 +372,9 @@ class InventoryScreen(QWidget):
         except Exception as e:
             logger.error(f"Failed to delete vessel_stock item: {e}")
 
-    # ══════════════════════════════════════════════════════════
+    # ------------------------------------------------------------------
     # LIFECYCLE
-    # ══════════════════════════════════════════════════════════
+    # ------------------------------------------------------------------
 
     def on_enter(self):
         self._refresh()

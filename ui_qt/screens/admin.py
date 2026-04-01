@@ -1,5 +1,5 @@
 """
-Admin Screen — Sensor driver toggles and system configuration.
+Admin Screen -- Sensor driver toggles and system configuration.
 Compact layout for 800x480 touch display with scroll support.
 """
 import json
@@ -7,13 +7,16 @@ import logging
 
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
-    QFrame, QComboBox, QGroupBox, QGridLayout, QMessageBox,
-    QScrollArea,
+    QFrame, QComboBox, QGridLayout, QMessageBox,
+    QScrollArea, QSpinBox,
 )
 from PyQt6.QtCore import Qt
 from PyQt6.QtGui import QFont
 
-from ui_qt.theme import C, F, S
+from ui_qt.theme import C, F, S, enable_touch_scroll
+from ui_qt.icons import (
+    Icon, icon_badge, icon_label, section_header, screen_header, type_badge,
+)
 
 logger = logging.getLogger("smartlocker.admin")
 
@@ -30,122 +33,240 @@ class AdminScreen(QWidget):
         outer.setContentsMargins(0, 0, 0, 0)
         outer.setSpacing(0)
 
-        # Header (fixed, not scrollable)
-        header = QHBoxLayout()
-        header.setContentsMargins(15, 8, 15, 8)
-        btn_back = QPushButton("< Back")
-        btn_back.setFixedSize(90, 36)
-        btn_back.clicked.connect(self.app.go_back)
-        header.addWidget(btn_back)
+        # ── Screen header (consistent) ──
+        header, header_layout = screen_header(
+            self.app, "ADMIN CONFIG", Icon.SETTINGS, C.ACCENT
+        )
+        outer.addWidget(header)
 
-        title = QLabel("ADMIN")
-        title.setFont(QFont("Sans", 18, QFont.Weight.Bold))
-        title.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        header.addWidget(title, 1)
-        header.addSpacing(90)
-        outer.addLayout(header)
-
-        # Scroll area for content
+        # ── Scroll area for content ──
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
         scroll.setFrameShape(QFrame.Shape.NoFrame)
+        scroll.setHorizontalScrollBarPolicy(
+            Qt.ScrollBarPolicy.ScrollBarAlwaysOff
+        )
 
         content = QWidget()
         layout = QVBoxLayout(content)
-        layout.setContentsMargins(15, 5, 15, 10)
-        layout.setSpacing(6)
+        layout.setContentsMargins(S.PAD, S.PAD, S.PAD, S.PAD)
+        layout.setSpacing(S.PAD)
 
-        # ── SENSOR DRIVERS (compact grid) ──
-        lbl = QLabel("Sensor Drivers")
-        lbl.setFont(QFont("Sans", 13, QFont.Weight.Bold))
-        layout.addWidget(lbl)
+        # ── SENSOR DRIVERS card ──
+        layout.addWidget(self._build_drivers_card())
 
-        drivers = [
-            ("rfid", "RFID Reader"),
-            ("weight", "Weight (HX711)"),
-            ("led", "LED Indicators"),
-            ("buzzer", "Buzzer"),
-        ]
+        # ── HARDWARE card ──
+        layout.addWidget(self._build_hardware_card())
 
-        grid = QGridLayout()
-        grid.setSpacing(4)
-        for row, (key, label_text) in enumerate(drivers):
-            label = QLabel(label_text)
-            label.setFont(QFont("Sans", 12))
-            grid.addWidget(label, row, 0)
-
-            combo = QComboBox()
-            combo.addItems(["real", "fake"])
-            combo.setFixedSize(100, 32)
-            self._combos[key] = combo
-            grid.addWidget(combo, row, 1, Qt.AlignmentFlag.AlignRight)
-
-        layout.addLayout(grid)
-
-        # ── WEIGHT MODE ──
-        wrow = QHBoxLayout()
-        wrow.addWidget(QLabel("Weight Mode:"))
-        self._weight_mode_combo = QComboBox()
-        self._weight_mode_combo.addItems(["arduino_serial", "hx711_direct"])
-        self._weight_mode_combo.setFixedSize(160, 32)
-        wrow.addWidget(self._weight_mode_combo)
-        wrow.addStretch()
-        layout.addLayout(wrow)
-
-        # ── BUZZER MODE ──
-        brow = QHBoxLayout()
-        brow.addWidget(QLabel("Buzzer Mode:"))
-        self._buzzer_mode_combo = QComboBox()
-        self._buzzer_mode_combo.addItems(["all", "alarms_only", "mute"])
-        self._buzzer_mode_combo.setFixedSize(160, 32)
-        brow.addWidget(self._buzzer_mode_combo)
-        brow.addStretch()
-        layout.addLayout(brow)
-
-        layout.addSpacing(8)
-
-        # ── BUTTONS ──
-        btn_save = QPushButton("SAVE & RESTART")
-        btn_save.setFixedHeight(44)
-        btn_save.setFont(QFont("Sans", 13, QFont.Weight.Bold))
-        btn_save.setStyleSheet(f"""
-            QPushButton {{
-                background-color: {C.ACCENT};
-                color: white;
-                border-radius: 6px;
-            }}
-        """)
-        btn_save.clicked.connect(self._save_and_restart)
-        layout.addWidget(btn_save)
-
-        btn_reset = QPushButton("RESET TO DEFAULTS")
-        btn_reset.setFixedHeight(40)
-        btn_reset.setStyleSheet(f"""
-            QPushButton {{
-                background-color: {C.DANGER};
-                color: white;
-                border-radius: 6px;
-            }}
-        """)
-        btn_reset.clicked.connect(self._reset_defaults)
-        layout.addWidget(btn_reset)
-
-        btn_close = QPushButton("CLOSE APP")
-        btn_close.setFixedHeight(40)
-        btn_close.setStyleSheet(f"""
-            QPushButton {{
-                background-color: #333;
-                color: white;
-                border: 2px solid {C.DANGER};
-                border-radius: 6px;
-            }}
-        """)
-        btn_close.clicked.connect(self._close_app)
-        layout.addWidget(btn_close)
+        # ── ACTION BUTTONS card ──
+        layout.addWidget(self._build_actions_card())
 
         layout.addStretch()
         scroll.setWidget(content)
+        enable_touch_scroll(scroll)
         outer.addWidget(scroll)
+
+    # ──────────────────────────────────────────────────
+    # SENSOR DRIVERS card
+    # ──────────────────────────────────────────────────
+
+    def _build_drivers_card(self) -> QFrame:
+        card = self._make_card(C.SECONDARY)
+        lay = QVBoxLayout(card)
+        lay.setSpacing(S.GAP)
+
+        lay.addWidget(
+            section_header(Icon.SENSORS, "SENSOR DRIVERS", C.SECONDARY)
+        )
+
+        drivers = [
+            ("rfid", "RFID Reader", Icon.TAG),
+            ("weight", "Weight (HX711)", Icon.WEIGHT),
+            ("led", "LED Indicators", Icon.DOT),
+            ("buzzer", "Buzzer", Icon.ALARM),
+        ]
+
+        grid = QGridLayout()
+        grid.setSpacing(S.GAP)
+        grid.setColumnStretch(1, 1)
+        grid.setColumnStretch(2, 0)
+
+        for row, (key, label_text, glyph) in enumerate(drivers):
+            # Icon
+            icn = icon_label(glyph, color=C.SECONDARY, size=16)
+            grid.addWidget(icn, row, 0)
+
+            # Label
+            label = QLabel(label_text)
+            label.setStyleSheet(
+                f"color: {C.TEXT}; font-size: {F.BODY}px;"
+            )
+            grid.addWidget(label, row, 1)
+
+            # Dropdown (stretch to fill)
+            combo = QComboBox()
+            combo.addItems(["real", "fake"])
+            combo.setMinimumHeight(36)
+            combo.setStyleSheet(
+                f"QComboBox {{"
+                f"  background-color: {C.BG_INPUT};"
+                f"  color: {C.TEXT};"
+                f"  border: 1px solid {C.BORDER};"
+                f"  border-radius: 6px;"
+                f"  padding: 4px 12px;"
+                f"  font-size: {F.BODY}px;"
+                f"  min-width: 120px;"
+                f"}}"
+                f"QComboBox:focus {{"
+                f"  border-color: {C.SECONDARY};"
+                f"}}"
+                f"QComboBox::drop-down {{"
+                f"  border: none;"
+                f"  width: 28px;"
+                f"}}"
+                f"QComboBox QAbstractItemView {{"
+                f"  background-color: {C.BG_CARD};"
+                f"  color: {C.TEXT};"
+                f"  border: 1px solid {C.BORDER};"
+                f"  selection-background-color: {C.PRIMARY_BG};"
+                f"  selection-color: {C.PRIMARY};"
+                f"}}"
+            )
+            self._combos[key] = combo
+            grid.addWidget(combo, row, 2)
+
+        lay.addLayout(grid)
+        return card
+
+    # ──────────────────────────────────────────────────
+    # HARDWARE card
+    # ──────────────────────────────────────────────────
+
+    def _build_hardware_card(self) -> QFrame:
+        card = self._make_card(C.ACCENT)
+        lay = QVBoxLayout(card)
+        lay.setSpacing(S.GAP)
+
+        lay.addWidget(
+            section_header(Icon.SETTINGS, "HARDWARE", C.ACCENT)
+        )
+
+        combo_style = (
+            f"QComboBox {{"
+            f"  background-color: {C.BG_INPUT};"
+            f"  color: {C.TEXT};"
+            f"  border: 1px solid {C.BORDER};"
+            f"  border-radius: 6px;"
+            f"  padding: 4px 12px;"
+            f"  font-size: {F.BODY}px;"
+            f"  min-width: 160px;"
+            f"}}"
+            f"QComboBox:focus {{"
+            f"  border-color: {C.ACCENT};"
+            f"}}"
+            f"QComboBox::drop-down {{"
+            f"  border: none; width: 28px;"
+            f"}}"
+            f"QComboBox QAbstractItemView {{"
+            f"  background-color: {C.BG_CARD};"
+            f"  color: {C.TEXT};"
+            f"  border: 1px solid {C.BORDER};"
+            f"  selection-background-color: {C.ACCENT_BG};"
+            f"  selection-color: {C.ACCENT};"
+            f"}}"
+        )
+
+        grid = QGridLayout()
+        grid.setSpacing(S.GAP)
+        grid.setColumnStretch(1, 1)
+        grid.setColumnStretch(2, 0)
+
+        # Weight Mode
+        grid.addWidget(
+            icon_label(Icon.WEIGHT, color=C.ACCENT, size=16), 0, 0
+        )
+        wlbl = QLabel("Weight Mode")
+        wlbl.setStyleSheet(f"color: {C.TEXT}; font-size: {F.BODY}px;")
+        grid.addWidget(wlbl, 0, 1)
+
+        self._weight_mode_combo = QComboBox()
+        self._weight_mode_combo.addItems(["arduino_serial", "hx711_direct"])
+        self._weight_mode_combo.setMinimumHeight(36)
+        self._weight_mode_combo.setStyleSheet(combo_style)
+        grid.addWidget(self._weight_mode_combo, 0, 2)
+
+        # Buzzer Mode
+        grid.addWidget(
+            icon_label(Icon.ALARM, color=C.ACCENT, size=16), 1, 0
+        )
+        blbl = QLabel("Buzzer Mode")
+        blbl.setStyleSheet(f"color: {C.TEXT}; font-size: {F.BODY}px;")
+        grid.addWidget(blbl, 1, 1)
+
+        self._buzzer_mode_combo = QComboBox()
+        self._buzzer_mode_combo.addItems(["all", "alarms_only", "mute"])
+        self._buzzer_mode_combo.setMinimumHeight(36)
+        self._buzzer_mode_combo.setStyleSheet(combo_style)
+        grid.addWidget(self._buzzer_mode_combo, 1, 2)
+
+        lay.addLayout(grid)
+        return card
+
+    # ──────────────────────────────────────────────────
+    # ACTIONS card
+    # ──────────────────────────────────────────────────
+
+    def _build_actions_card(self) -> QFrame:
+        card = self._make_card(C.PRIMARY)
+        lay = QVBoxLayout(card)
+        lay.setSpacing(S.GAP)
+
+        lay.addWidget(
+            section_header(Icon.SAVE, "ACTIONS", C.PRIMARY)
+        )
+
+        # Save & Restart
+        btn_save = QPushButton(f"{Icon.SAVE}  SAVE & RESTART")
+        btn_save.setObjectName("accent")
+        btn_save.setCursor(Qt.CursorShape.PointingHandCursor)
+        btn_save.setMinimumHeight(48)
+        btn_save.clicked.connect(self._save_and_restart)
+        lay.addWidget(btn_save)
+
+        # Reset to defaults
+        btn_reset = QPushButton(f"{Icon.REFRESH}  RESET TO DEFAULTS")
+        btn_reset.setObjectName("danger")
+        btn_reset.setCursor(Qt.CursorShape.PointingHandCursor)
+        btn_reset.setMinimumHeight(44)
+        btn_reset.clicked.connect(self._reset_defaults)
+        lay.addWidget(btn_reset)
+
+        # Close app
+        btn_close = QPushButton(f"{Icon.CLOSE}  CLOSE APP")
+        btn_close.setObjectName("ghost")
+        btn_close.setCursor(Qt.CursorShape.PointingHandCursor)
+        btn_close.setMinimumHeight(44)
+        btn_close.setStyleSheet(
+            f"QPushButton {{"
+            f"  background-color: transparent;"
+            f"  color: {C.DANGER};"
+            f"  border: 2px solid {C.DANGER};"
+            f"  border-radius: 8px;"
+            f"  font-size: {F.BODY}px; font-weight: bold;"
+            f"  min-height: 44px;"
+            f"}}"
+            f"QPushButton:hover {{"
+            f"  background-color: {C.DANGER_BG};"
+            f"}}"
+        )
+        btn_close.clicked.connect(self._close_app)
+        lay.addWidget(btn_close)
+
+        return card
+
+    # ══════════════════════════════════════════════════
+    # LIFECYCLE
+    # ══════════════════════════════════════════════════
 
     def on_enter(self):
         admin_cfg = self.app.db.get_admin_config()
@@ -197,7 +318,7 @@ class AdminScreen(QWidget):
         python = sys.executable
         script = os.path.abspath(sys.argv[0])
         args = sys.argv[1:]
-        # Use bash to delay 3s before restarting (gives serial port time to release)
+        # Use bash to delay 3s before restarting
         restart_cmd = f"sleep 3 && {python} {script} {' '.join(args)}"
         subprocess.Popen(["bash", "-c", restart_cmd])
 
@@ -215,3 +336,24 @@ class AdminScreen(QWidget):
     def _close_app(self):
         from PyQt6.QtWidgets import QApplication
         QApplication.instance().quit()
+
+    # ══════════════════════════════════════════════════
+    # HELPERS
+    # ══════════════════════════════════════════════════
+
+    @staticmethod
+    def _make_card(accent_color: str = C.BORDER) -> QFrame:
+        """Create a styled card frame with left accent border."""
+        card = QFrame()
+        card.setObjectName("card")
+        card.setProperty("card", True)
+        card.setStyleSheet(
+            f"QFrame#card {{"
+            f"  background-color: {C.BG_CARD};"
+            f"  border: 1px solid {C.BORDER};"
+            f"  border-left: 4px solid {accent_color};"
+            f"  border-radius: {S.RADIUS}px;"
+            f"  padding: {S.PAD_CARD}px;"
+            f"}}"
+        )
+        return card

@@ -1,5 +1,5 @@
 """
-Barcode Inventory Popup — Load/Unload confirmation dialog.
+Barcode Inventory Popup -- Load/Unload confirmation dialog.
 
 Shown when a barcode is scanned outside of mixing mode.
 Asks the user to confirm if they are loading or unloading a product,
@@ -9,11 +9,12 @@ and verifies with shelf weight sensors.
 import logging
 from PyQt6.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
-    QFrame, QSizePolicy,
+    QFrame, QSizePolicy, QWidget,
 )
 from PyQt6.QtCore import Qt, QTimer
 
 from ui_qt.theme import C, F, S
+from ui_qt.icons import Icon, icon_badge, icon_label, type_badge
 
 logger = logging.getLogger("smartlocker.barcode_popup")
 
@@ -36,32 +37,66 @@ class BarcodeInventoryPopup(QDialog):
         self._confirmed = False
 
         self.setWindowTitle("Barcode Scan")
-        self.setFixedSize(500, 380)
-        self.setStyleSheet(f"background-color: {C.BG_DARK}; color: {C.TEXT};")
+        self.setFixedSize(520, 400)
+        self.setWindowFlags(
+            Qt.WindowType.Dialog
+            | Qt.WindowType.FramelessWindowHint
+        )
+        self.setStyleSheet(
+            f"QDialog {{"
+            f"  background-color: {C.BG_DARK};"
+            f"  color: {C.TEXT};"
+            f"  border: 1px solid {C.BORDER};"
+            f"  border-radius: {S.RADIUS}px;"
+            f"}}"
+        )
 
         self._weight_timer = QTimer(self)
         self._weight_timer.timeout.connect(self._check_weight)
 
         self._build_ui()
 
+    # ──────────────────────────────────────────────
+    # BUILD UI
+    # ──────────────────────────────────────────────
+
     def _build_ui(self):
         layout = QVBoxLayout(self)
-        layout.setSpacing(12)
+        layout.setSpacing(S.PAD)
         layout.setContentsMargins(20, 16, 20, 16)
 
-        # Title
-        title = QLabel("BARCODE SCANNED")
-        title.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        title.setStyleSheet(
-            f"font-size: {F.H3}px; font-weight: bold; color: {C.PRIMARY};"
-        )
-        layout.addWidget(title)
+        # ── Title row: icon badge + text ──
+        title_row = QHBoxLayout()
+        title_row.setSpacing(S.GAP)
+        title_row.setAlignment(Qt.AlignmentFlag.AlignCenter)
 
-        # Product info card
+        badge = icon_badge(Icon.TAG, bg_color=C.PRIMARY_BG, fg_color=C.PRIMARY, size=36)
+        title_row.addWidget(badge)
+
+        title = QLabel("BARCODE SCANNED")
+        title.setStyleSheet(
+            f"font-size: {F.H2}px; font-weight: bold; color: {C.PRIMARY};"
+            f"letter-spacing: 1px;"
+        )
+        title_row.addWidget(title)
+
+        layout.addLayout(title_row)
+
+        # ── Product info card ──
         card = QFrame()
-        card.setObjectName("card")
+        card.setObjectName("product_card")
+        card.setStyleSheet(
+            f"QFrame#product_card {{"
+            f"  background-color: {C.BG_CARD};"
+            f"  border: 1px solid {C.BORDER};"
+            f"  border-left: 4px solid {C.PRIMARY};"
+            f"  border-radius: {S.RADIUS}px;"
+            f"  padding: {S.PAD_CARD}px;"
+            f"}}"
+        )
         card_lay = QVBoxLayout(card)
         card_lay.setSpacing(6)
+        card_lay.setContentsMargins(S.PAD, S.PAD_CARD, S.PAD_CARD, S.PAD_CARD)
 
         name = self.product_info.get("product_name", "Unknown")
         ppg = self.product_info.get("ppg_code", "")
@@ -69,42 +104,62 @@ class BarcodeInventoryPopup(QDialog):
         color = self.product_info.get("color", "")
         batch = self.product_info.get("batch_number", "")
 
+        # Product name + type badge row
+        name_row = QHBoxLayout()
+        name_row.setSpacing(S.GAP)
+
         lbl_name = QLabel(name)
         lbl_name.setStyleSheet(
-            f"font-size: {F.H2}px; font-weight: bold; color: {C.TEXT};"
+            f"font-size: {F.H3}px; font-weight: bold; color: {C.TEXT};"
         )
-        lbl_name.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        card_lay.addWidget(lbl_name)
+        name_row.addWidget(lbl_name)
 
+        if ptype:
+            badge_variant = "accent"
+            if "base" in ptype.lower():
+                badge_variant = "primary"
+            elif "hardener" in ptype.lower():
+                badge_variant = "secondary"
+            elif "thinner" in ptype.lower():
+                badge_variant = "warning"
+            tb = type_badge(ptype.replace("_", " ").upper(), badge_variant)
+            name_row.addWidget(tb)
+
+        name_row.addStretch()
+        card_lay.addLayout(name_row)
+
+        # Detail lines: muted label + value
         details = []
         if ppg:
-            details.append(f"PPG: {ppg}")
-        if ptype:
-            details.append(ptype.replace("_", " ").title())
-        if color:
-            details.append(f"Color: {color}")
+            details.append(("PPG CODE", ppg))
         if batch:
-            details.append(f"Batch: {batch}")
+            details.append(("BATCH", batch))
+        if color:
+            details.append(("COLOR", color))
 
-        if details:
-            lbl_details = QLabel("  |  ".join(details))
-            lbl_details.setStyleSheet(
+        for label_text, value_text in details:
+            row = QHBoxLayout()
+            row.setSpacing(6)
+
+            lbl = QLabel(label_text)
+            lbl.setStyleSheet(
+                f"font-size: {F.TINY}px; color: {C.TEXT_MUTED};"
+                f"font-weight: bold; letter-spacing: 1px;"
+            )
+            lbl.setFixedWidth(80)
+            row.addWidget(lbl)
+
+            val = QLabel(value_text)
+            val.setStyleSheet(
                 f"font-size: {F.SMALL}px; color: {C.TEXT_SEC};"
             )
-            lbl_details.setAlignment(Qt.AlignmentFlag.AlignCenter)
-            card_lay.addWidget(lbl_details)
+            row.addWidget(val)
+            row.addStretch()
+            card_lay.addLayout(row)
 
         layout.addWidget(card)
 
-        # Status / weight label
-        self._status_label = QLabel("What do you want to do?")
-        self._status_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self._status_label.setStyleSheet(
-            f"font-size: {F.BODY}px; color: {C.TEXT_SEC}; padding: 8px;"
-        )
-        layout.addWidget(self._status_label)
-
-        # Weight display (hidden until action selected)
+        # ── Weight display (hidden until action selected) ──
         self._weight_label = QLabel("")
         self._weight_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self._weight_label.setStyleSheet(
@@ -113,66 +168,102 @@ class BarcodeInventoryPopup(QDialog):
         self._weight_label.setVisible(False)
         layout.addWidget(self._weight_label)
 
-        # Buttons
+        # ── Status text ──
+        self._status_label = QLabel("What do you want to do?")
+        self._status_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self._status_label.setStyleSheet(
+            f"font-size: {F.BODY}px; color: {C.TEXT_SEC}; padding: 4px;"
+        )
+        layout.addWidget(self._status_label)
+
+        # ── Action buttons: LOAD / UNLOAD ──
         self._btn_container = QFrame()
         self._btn_container.setStyleSheet("background: transparent; border: none;")
         btn_lay = QHBoxLayout(self._btn_container)
-        btn_lay.setSpacing(12)
+        btn_lay.setSpacing(S.PAD)
 
-        # LOAD button (green)
-        self._btn_load = QPushButton("LOAD\n(Put on shelf)")
+        # LOAD button
+        self._btn_load = QPushButton()
         self._btn_load.setObjectName("success")
-        self._btn_load.setMinimumHeight(70)
+        self._btn_load.setMinimumHeight(60)
         self._btn_load.setCursor(Qt.CursorShape.PointingHandCursor)
-        self._btn_load.setStyleSheet(
-            f"background-color: {C.SUCCESS_BG}; color: {C.SUCCESS};"
-            f"border: 2px solid {C.SUCCESS}; border-radius: 10px;"
-            f"font-size: {F.BODY}px; font-weight: bold;"
+        load_lay = QHBoxLayout(self._btn_load)
+        load_lay.setContentsMargins(0, 0, 0, 0)
+        load_lay.setSpacing(6)
+        load_lay.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        load_icon = QLabel(Icon.ADD)
+        load_icon.setStyleSheet(
+            f"font-size: {F.H3}px; font-weight: bold; color: {C.SUCCESS};"
         )
+        load_lay.addWidget(load_icon)
+        load_text = QLabel("LOAD")
+        load_text.setStyleSheet(
+            f"font-size: {F.BODY}px; font-weight: bold; color: {C.SUCCESS};"
+        )
+        load_lay.addWidget(load_text)
         self._btn_load.clicked.connect(lambda: self._on_action("load"))
         btn_lay.addWidget(self._btn_load)
 
-        # UNLOAD button (orange)
-        self._btn_unload = QPushButton("UNLOAD\n(Take from shelf)")
-        self._btn_unload.setMinimumHeight(70)
+        # UNLOAD button
+        self._btn_unload = QPushButton()
+        self._btn_unload.setObjectName("accent")
+        self._btn_unload.setMinimumHeight(60)
         self._btn_unload.setCursor(Qt.CursorShape.PointingHandCursor)
-        self._btn_unload.setStyleSheet(
-            f"background-color: {C.WARNING_BG}; color: {C.WARNING};"
-            f"border: 2px solid {C.WARNING}; border-radius: 10px;"
-            f"font-size: {F.BODY}px; font-weight: bold;"
+        unload_lay = QHBoxLayout(self._btn_unload)
+        unload_lay.setContentsMargins(0, 0, 0, 0)
+        unload_lay.setSpacing(6)
+        unload_lay.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        unload_icon = QLabel(Icon.DELETE)
+        unload_icon.setStyleSheet(
+            f"font-size: {F.H3}px; font-weight: bold; color: {C.ACCENT};"
         )
+        unload_lay.addWidget(unload_icon)
+        unload_text = QLabel("UNLOAD")
+        unload_text.setStyleSheet(
+            f"font-size: {F.BODY}px; font-weight: bold; color: {C.ACCENT};"
+        )
+        unload_lay.addWidget(unload_text)
         self._btn_unload.clicked.connect(lambda: self._on_action("unload"))
         btn_lay.addWidget(self._btn_unload)
 
         layout.addWidget(self._btn_container)
 
-        # Confirm/Cancel after weight verification
+        # ── Confirm/Cancel (hidden until weight verified) ──
         self._confirm_container = QFrame()
         self._confirm_container.setStyleSheet("background: transparent; border: none;")
         self._confirm_container.setVisible(False)
-        confirm_lay = QHBoxLayout(self._confirm_container)
-        confirm_lay.setSpacing(12)
+        confirm_lay = QVBoxLayout(self._confirm_container)
+        confirm_lay.setSpacing(S.GAP)
 
-        self._btn_confirm = QPushButton("CONFIRM")
-        self._btn_confirm.setMinimumHeight(56)
+        # CONFIRM (full width)
+        self._btn_confirm = QPushButton(f"{Icon.SAVE}  CONFIRM")
+        self._btn_confirm.setObjectName("primary")
+        self._btn_confirm.setMinimumHeight(S.BTN_H)
         self._btn_confirm.setCursor(Qt.CursorShape.PointingHandCursor)
-        self._btn_confirm.setStyleSheet(
-            f"background-color: {C.PRIMARY}; color: {C.BG_DARK};"
-            f"border: none; border-radius: 10px;"
-            f"font-size: {F.BODY}px; font-weight: bold;"
-        )
         self._btn_confirm.clicked.connect(self._on_confirm)
         self._btn_confirm.setEnabled(False)
         confirm_lay.addWidget(self._btn_confirm)
 
+        # CANCEL (full width, ghost)
         btn_cancel = QPushButton("CANCEL")
-        btn_cancel.setObjectName("danger")
-        btn_cancel.setMinimumHeight(56)
+        btn_cancel.setObjectName("ghost")
+        btn_cancel.setMinimumHeight(40)
         btn_cancel.setCursor(Qt.CursorShape.PointingHandCursor)
+        btn_cancel.setStyleSheet(
+            f"QPushButton#ghost {{"
+            f"  background: transparent; color: {C.TEXT_SEC};"
+            f"  border: none; font-size: {F.SMALL}px;"
+            f"}}"
+            f"QPushButton#ghost:hover {{ color: {C.TEXT}; }}"
+        )
         btn_cancel.clicked.connect(self.reject)
         confirm_lay.addWidget(btn_cancel)
 
         layout.addWidget(self._confirm_container)
+
+    # ──────────────────────────────────────────────
+    # LOGIC
+    # ──────────────────────────────────────────────
 
     def _on_action(self, action: str):
         """User selected Load or Unload."""
@@ -193,14 +284,14 @@ class BarcodeInventoryPopup(QDialog):
                 "Place the can on the shelf now..."
             )
             self._status_label.setStyleSheet(
-                f"font-size: {F.BODY}px; color: {C.SUCCESS}; padding: 8px;"
+                f"font-size: {F.BODY}px; color: {C.SUCCESS}; padding: 4px;"
             )
         else:
             self._status_label.setText(
                 "Remove the can from the shelf now..."
             )
             self._status_label.setStyleSheet(
-                f"font-size: {F.BODY}px; color: {C.WARNING}; padding: 8px;"
+                f"font-size: {F.BODY}px; color: {C.ACCENT}; padding: 4px;"
             )
 
         # Start weight monitoring
@@ -234,6 +325,9 @@ class BarcodeInventoryPopup(QDialog):
                 self._status_label.setText(
                     f"Weight increased +{diff / 1000:.2f} kg -- product detected!"
                 )
+                self._status_label.setStyleSheet(
+                    f"font-size: {F.BODY}px; color: {C.SUCCESS}; padding: 4px;"
+                )
                 self._btn_confirm.setEnabled(True)
                 self._confirmed = True
             else:
@@ -245,10 +339,13 @@ class BarcodeInventoryPopup(QDialog):
             # Expect weight decrease (> 100g = can removed)
             if diff < -100:
                 self._weight_label.setStyleSheet(
-                    f"font-size: {F.H1}px; font-weight: bold; color: {C.WARNING};"
+                    f"font-size: {F.H1}px; font-weight: bold; color: {C.ACCENT};"
                 )
                 self._status_label.setText(
                     f"Weight decreased {diff / 1000:.2f} kg -- product removed!"
+                )
+                self._status_label.setStyleSheet(
+                    f"font-size: {F.BODY}px; color: {C.ACCENT}; padding: 4px;"
                 )
                 self._btn_confirm.setEnabled(True)
                 self._confirmed = True

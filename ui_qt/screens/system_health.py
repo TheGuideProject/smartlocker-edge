@@ -4,12 +4,10 @@ SmartLocker System Health Screen
 Comprehensive system health dashboard showing:
 - Hardware metrics (CPU temp, CPU %, RAM, disk) with color-coded bars
 - Cloud sync status (paired, last sync, queue depth, heartbeat)
-- Sensor health (RFID, weight driver status)
-- Network connectivity
-- System uptime and version
-- Rolling history sparklines
+- Sensor health (RFID, weight, LED, buzzer driver status)
+- System info (uptime, version, network, power)
 
-Refreshes every 2 seconds. Syncs telemetry to cloud via heartbeat.
+Refreshes every 2 seconds. Uses icon system for consistent styling.
 """
 
 import time
@@ -19,71 +17,19 @@ from PyQt6.QtWidgets import (
     QFrame, QProgressBar, QGridLayout, QScrollArea, QSizePolicy,
 )
 from PyQt6.QtCore import Qt, QTimer
-from PyQt6.QtGui import QPainter, QPen, QColor
 
 from ui_qt.theme import C, F, S, enable_touch_scroll
+from ui_qt.icons import (
+    Icon, icon_badge, icon_label, status_dot, type_badge,
+    section_header, screen_header,
+)
 
 logger = logging.getLogger("smartlocker.ui.system_health")
 
 
-# ══════════════════════════════════════════════════════════════
-# Mini Sparkline Widget — draws last N values as a line graph
-# ══════════════════════════════════════════════════════════════
-
-class SparkLine(QWidget):
-    """Tiny sparkline chart for rolling metric history."""
-
-    def __init__(self, color: str = C.PRIMARY, max_val: float = 100.0):
-        super().__init__()
-        self._data = []
-        self._color = color
-        self._max_val = max_val
-        self.setFixedHeight(28)
-        self.setMinimumWidth(80)
-
-    def set_data(self, values: list):
-        self._data = values[-30:]  # Keep last 30 points
-        self.update()
-
-    def set_color(self, color: str):
-        self._color = color
-        self.update()
-
-    def paintEvent(self, event):
-        if len(self._data) < 2:
-            return
-        painter = QPainter(self)
-        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-
-        w = self.width()
-        h = self.height()
-        margin = 2
-
-        pen = QPen(QColor(self._color))
-        pen.setWidth(2)
-        painter.setPen(pen)
-
-        n = len(self._data)
-        step_x = (w - 2 * margin) / max(n - 1, 1)
-
-        points = []
-        for i, val in enumerate(self._data):
-            x = margin + i * step_x
-            clamped = max(0, min(val or 0, self._max_val))
-            y = h - margin - ((clamped / self._max_val) * (h - 2 * margin))
-            points.append((x, y))
-
-        for i in range(len(points) - 1):
-            x1, y1 = points[i]
-            x2, y2 = points[i + 1]
-            painter.drawLine(int(x1), int(y1), int(x2), int(y2))
-
-        painter.end()
-
-
-# ══════════════════════════════════════════════════════════════
+# ================================================================
 # System Health Screen
-# ══════════════════════════════════════════════════════════════
+# ================================================================
 
 class SystemHealthScreen(QWidget):
     """Comprehensive system health monitoring dashboard."""
@@ -94,51 +40,26 @@ class SystemHealthScreen(QWidget):
         self._timer = QTimer(self)
         self._timer.timeout.connect(self._refresh)
         self._metric_widgets = {}
-        self._sparklines = {}
         self._build_ui()
 
-    # ══════════════════════════════════════════════════════════
+    # ================================================================
     # UI BUILD
-    # ══════════════════════════════════════════════════════════
+    # ================================================================
 
     def _build_ui(self):
         root = QVBoxLayout(self)
         root.setContentsMargins(0, 0, 0, 0)
         root.setSpacing(0)
 
-        # ── Header ──────────────────────────────────────
-        header = QFrame()
-        header.setStyleSheet(
-            f"background-color: {C.BG_STATUS};"
-            f"border-bottom: 1px solid {C.BORDER};"
+        # Screen header with overall status badge
+        header_frame, header_layout = screen_header(
+            self.app, "SYSTEM HEALTH", Icon.HEALTH, C.SUCCESS
         )
-        h_layout = QHBoxLayout(header)
-        h_layout.setContentsMargins(S.PAD, 8, S.PAD, 8)
-        h_layout.setSpacing(S.GAP)
+        self._status_badge = type_badge("OFFLINE", "muted")
+        header_layout.addWidget(self._status_badge)
+        root.addWidget(header_frame)
 
-        btn_back = QPushButton("< BACK")
-        btn_back.setObjectName("ghost")
-        btn_back.setCursor(Qt.CursorShape.PointingHandCursor)
-        btn_back.clicked.connect(lambda: self.app.go_back())
-        h_layout.addWidget(btn_back)
-
-        title = QLabel("SYSTEM HEALTH")
-        title.setStyleSheet(
-            f"font-size: {F.H3}px; font-weight: bold; color: {C.TEXT};"
-        )
-        h_layout.addWidget(title)
-
-        h_layout.addStretch(1)
-
-        self._status_badge = QLabel("--")
-        self._status_badge.setStyleSheet(
-            f"font-size: {F.SMALL}px; color: {C.TEXT_MUTED};"
-        )
-        h_layout.addWidget(self._status_badge)
-
-        root.addWidget(header)
-
-        # ── Scrollable body ─────────────────────────────
+        # Scrollable body
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
         scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
@@ -148,7 +69,7 @@ class SystemHealthScreen(QWidget):
         body.setContentsMargins(S.PAD, S.PAD, S.PAD, S.PAD)
         body.setSpacing(S.GAP + 2)
 
-        # ── No-data label ───────────────────────────────
+        # No-data label (hidden by default)
         self._no_data_label = QLabel("Monitoring not started")
         self._no_data_label.setStyleSheet(
             f"font-size: {F.H3}px; color: {C.TEXT_MUTED};"
@@ -157,32 +78,33 @@ class SystemHealthScreen(QWidget):
         self._no_data_label.setVisible(False)
         body.addWidget(self._no_data_label)
 
-        # ── Hardware Metrics (2x2 grid) ─────────────────
+        # -- HARDWARE METRICS --
+        body.addWidget(section_header(Icon.SENSORS, "HARDWARE METRICS", C.PRIMARY))
+
         self._metrics_container = QWidget()
         metrics_config = [
-            ("cpu_temp", "CPU TEMP", "C", 85, 70, 100),
-            ("cpu_pct",  "CPU",      "%", 90, 70, 100),
-            ("ram_pct",  "RAM",      "%", 85, 65, 100),
-            ("disk_pct", "DISK",     "%", 90, 75, 100),
+            ("cpu_temp", "CPU TEMP", "C",  85, 70, 100, Icon.SENSORS, C.ACCENT,  C.ACCENT_BG),
+            ("cpu_pct",  "CPU",      "%",  90, 70, 100, Icon.SENSORS, C.PRIMARY, C.PRIMARY_BG),
+            ("ram_pct",  "RAM",      "%",  85, 65, 100, Icon.INFO,    C.SECONDARY, C.SECONDARY_BG),
+            ("disk_pct", "DISK",     "%",  90, 75, 100, Icon.INVENTORY, C.WARNING, C.WARNING_BG),
         ]
-
         metrics_grid = QGridLayout(self._metrics_container)
         metrics_grid.setSpacing(S.GAP)
         metrics_grid.setContentsMargins(0, 0, 0, 0)
-        for i, (key, label, unit, t_red, t_yellow, max_v) in enumerate(metrics_config):
-            card = self._build_metric_card(key, label, unit, t_red, t_yellow, max_v)
+        for i, (key, label, unit, t_red, t_yellow, max_v, glyph, fg, bg) in enumerate(metrics_config):
+            card = self._build_metric_card(key, label, unit, t_red, t_yellow, max_v, glyph, fg, bg)
             metrics_grid.addWidget(card, i // 2, i % 2)
         body.addWidget(self._metrics_container)
 
-        # ── Cloud & Sync Status ─────────────────────────
+        # -- CLOUD SYNC --
         self._cloud_card = self._build_cloud_card()
         body.addWidget(self._cloud_card)
 
-        # ── Sensor Health ───────────────────────────────
+        # -- SENSOR HEALTH --
         self._sensor_card = self._build_sensor_card()
         body.addWidget(self._sensor_card)
 
-        # ── System Info ─────────────────────────────────
+        # -- SYSTEM INFO --
         self._system_card = self._build_system_info_card()
         body.addWidget(self._system_card)
 
@@ -192,57 +114,59 @@ class SystemHealthScreen(QWidget):
         enable_touch_scroll(scroll)
         root.addWidget(scroll, stretch=1)
 
-    # ──────────────────────────────────────────────────────
-    # Metric Card (with sparkline)
-    # ──────────────────────────────────────────────────────
+    # ----------------------------------------------------------------
+    # Metric Card (2x2 grid cells)
+    # ----------------------------------------------------------------
 
     def _build_metric_card(self, key: str, label: str, unit: str,
                            thresh_red: int, thresh_yellow: int,
-                           max_val: float) -> QFrame:
+                           max_val: float, glyph: str,
+                           icon_fg: str, icon_bg: str) -> QFrame:
         card = QFrame()
         card.setObjectName("card")
 
         layout = QVBoxLayout(card)
-        layout.setContentsMargins(8, 6, 8, 6)
-        layout.setSpacing(3)
+        layout.setContentsMargins(S.PAD_CARD, S.PAD_CARD, S.PAD_CARD, S.PAD_CARD)
+        layout.setSpacing(4)
 
-        # Top row: label + sparkline + value
+        # Top row: icon badge + label
         top = QHBoxLayout()
         top.setSpacing(S.GAP)
 
+        badge = icon_badge(glyph, bg_color=icon_bg, fg_color=icon_fg, size=28)
+        top.addWidget(badge)
+
         lbl_name = QLabel(label)
         lbl_name.setStyleSheet(
-            f"font-size: {F.SMALL}px; font-weight: bold; color: {C.TEXT_SEC};"
+            f"font-size: {F.SMALL}px; font-weight: bold; color: {C.TEXT_MUTED};"
+            f"letter-spacing: 1px;"
         )
         top.addWidget(lbl_name)
+        top.addStretch()
 
-        # Sparkline
-        spark = SparkLine(color=C.PRIMARY, max_val=max_val)
-        spark.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
-        self._sparklines[key] = spark
-        top.addWidget(spark)
-
+        # Value (right-aligned in top row)
         lbl_value = QLabel(f"--{unit}")
         lbl_value.setStyleSheet(
-            f"font-size: {F.H3}px; font-weight: bold; color: {C.TEXT};"
+            f"font-size: {F.H2}px; font-weight: bold; color: {C.TEXT};"
         )
-        lbl_value.setAlignment(Qt.AlignmentFlag.AlignRight)
-        lbl_value.setMinimumWidth(60)
+        lbl_value.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+        lbl_value.setMinimumWidth(70)
         top.addWidget(lbl_value)
 
         layout.addLayout(top)
 
-        # Progress bar
+        # Progress bar (12px height, dynamic color)
         bar = QProgressBar()
         bar.setRange(0, 100)
         bar.setValue(0)
         bar.setTextVisible(False)
-        bar.setFixedHeight(10)
+        bar.setFixedHeight(12)
         bar.setStyleSheet(
             f"QProgressBar {{ background-color: {C.BG_INPUT};"
-            f"border: none; border-radius: 5px; }}"
+            f"border: none; border-radius: 6px;"
+            f"min-height: 12px; max-height: 12px; }}"
             f"QProgressBar::chunk {{ background-color: {C.PRIMARY};"
-            f"border-radius: 5px; }}"
+            f"border-radius: 6px; }}"
         )
         layout.addWidget(bar)
 
@@ -257,32 +181,29 @@ class SystemHealthScreen(QWidget):
 
         return card
 
-    # ──────────────────────────────────────────────────────
+    # ----------------------------------------------------------------
     # Cloud & Sync Card
-    # ──────────────────────────────────────────────────────
+    # ----------------------------------------------------------------
 
     def _build_cloud_card(self) -> QFrame:
         card = QFrame()
         card.setObjectName("card")
+        card.setStyleSheet(
+            f"QFrame#card {{ border-left: 4px solid {C.SECONDARY}; }}"
+        )
 
         layout = QVBoxLayout(card)
-        layout.setContentsMargins(10, 8, 10, 8)
-        layout.setSpacing(4)
+        layout.setContentsMargins(S.PAD, S.PAD_CARD, S.PAD, S.PAD_CARD)
+        layout.setSpacing(S.GAP)
 
-        # Section title
-        sec = QLabel("CLOUD SYNC")
-        sec.setObjectName("section")
-        layout.addWidget(sec)
+        # Section header
+        layout.addWidget(section_header(Icon.CLOUD, "CLOUD SYNC", C.SECONDARY))
 
         # Status row
         row1 = QHBoxLayout()
-        row1.setSpacing(6)
+        row1.setSpacing(S.GAP)
 
-        self._cloud_dot = QLabel()
-        self._cloud_dot.setFixedSize(10, 10)
-        self._cloud_dot.setStyleSheet(
-            f"background-color: {C.TEXT_MUTED}; border-radius: 5px;"
-        )
+        self._cloud_dot = status_dot(False, size=14)
         row1.addWidget(self._cloud_dot)
 
         self._cloud_status_lbl = QLabel("--")
@@ -292,83 +213,74 @@ class SystemHealthScreen(QWidget):
         row1.addWidget(self._cloud_status_lbl)
         row1.addStretch()
 
-        self._cloud_ws_badge = QLabel("")
-        self._cloud_ws_badge.setStyleSheet(
-            f"font-size: {F.TINY}px; color: {C.TEXT_MUTED};"
-        )
+        self._cloud_ws_badge = type_badge("WS: OFF", "muted")
         row1.addWidget(self._cloud_ws_badge)
 
         layout.addLayout(row1)
 
-        # Info grid
+        # Info grid: clean key:value pairs
         grid = QGridLayout()
         grid.setHorizontalSpacing(S.PAD)
-        grid.setVerticalSpacing(4)
+        grid.setVerticalSpacing(S.GAP)
 
-        grid.addWidget(self._muted("Last Sync"), 0, 0)
-        self._lbl_last_sync = QLabel("--")
-        self._lbl_last_sync.setStyleSheet(f"color: {C.TEXT}; font-size: {F.SMALL}px;")
+        grid.addWidget(self._key_label("Last Sync"), 0, 0)
+        self._lbl_last_sync = self._value_label("--")
         grid.addWidget(self._lbl_last_sync, 0, 1)
 
-        grid.addWidget(self._muted("Queue"), 0, 2)
-        self._lbl_queue = QLabel("--")
-        self._lbl_queue.setStyleSheet(f"color: {C.TEXT}; font-size: {F.SMALL}px;")
+        grid.addWidget(self._key_label("Queue"), 0, 2)
+        self._lbl_queue = self._value_label("--")
         grid.addWidget(self._lbl_queue, 0, 3)
 
-        grid.addWidget(self._muted("Heartbeat"), 1, 0)
-        self._lbl_heartbeat = QLabel("--")
-        self._lbl_heartbeat.setStyleSheet(f"color: {C.TEXT}; font-size: {F.SMALL}px;")
+        grid.addWidget(self._key_label("Heartbeat"), 1, 0)
+        self._lbl_heartbeat = self._value_label("--")
         grid.addWidget(self._lbl_heartbeat, 1, 1)
 
-        grid.addWidget(self._muted("Vessel"), 1, 2)
-        self._lbl_vessel = QLabel("--")
-        self._lbl_vessel.setStyleSheet(f"color: {C.TEXT}; font-size: {F.SMALL}px;")
+        grid.addWidget(self._key_label("Vessel"), 1, 2)
+        self._lbl_vessel = self._value_label("--")
         grid.addWidget(self._lbl_vessel, 1, 3)
 
         layout.addLayout(grid)
 
         return card
 
-    # ──────────────────────────────────────────────────────
+    # ----------------------------------------------------------------
     # Sensor Health Card
-    # ──────────────────────────────────────────────────────
+    # ----------------------------------------------------------------
 
     def _build_sensor_card(self) -> QFrame:
         card = QFrame()
         card.setObjectName("card")
+        card.setStyleSheet(
+            f"QFrame#card {{ border-left: 4px solid {C.ACCENT}; }}"
+        )
 
         layout = QVBoxLayout(card)
-        layout.setContentsMargins(10, 8, 10, 8)
-        layout.setSpacing(4)
+        layout.setContentsMargins(S.PAD, S.PAD_CARD, S.PAD, S.PAD_CARD)
+        layout.setSpacing(S.GAP)
 
-        sec = QLabel("SENSOR HEALTH")
-        sec.setObjectName("section")
-        layout.addWidget(sec)
+        # Section header
+        layout.addWidget(section_header(Icon.SENSORS, "SENSOR DRIVERS", C.ACCENT))
 
-        # Sensor rows
+        # Sensor rows with icon_badge + name + status_dot + text
         self._sensor_rows = {}
         sensors = [
-            ("rfid", "RFID Reader"),
-            ("weight", "Weight Scale"),
-            ("led", "LED Strip"),
-            ("buzzer", "Buzzer"),
+            ("rfid",   "RFID Reader",  Icon.TAG,    C.PRIMARY,   C.PRIMARY_BG),
+            ("weight", "Weight Scale", Icon.WEIGHT,  C.ACCENT,    C.ACCENT_BG),
+            ("led",    "LED Strip",    Icon.DOT,     C.SUCCESS,   C.SUCCESS_BG),
+            ("buzzer", "Buzzer",       Icon.ALARM,   C.SECONDARY, C.SECONDARY_BG),
         ]
-        for key, name in sensors:
+        for key, name, glyph, fg, bg in sensors:
             row = QHBoxLayout()
-            row.setSpacing(6)
+            row.setSpacing(S.GAP)
 
-            dot = QLabel()
-            dot.setFixedSize(8, 8)
-            dot.setStyleSheet(
-                f"background-color: {C.TEXT_MUTED}; border-radius: 4px;"
-            )
-            row.addWidget(dot)
+            badge = icon_badge(glyph, bg_color=bg, fg_color=fg, size=28)
+            row.addWidget(badge)
 
             name_lbl = QLabel(name)
             name_lbl.setStyleSheet(
-                f"font-size: {F.SMALL}px; color: {C.TEXT};"
+                f"font-size: {F.SMALL}px; color: {C.TEXT}; font-weight: bold;"
             )
-            name_lbl.setFixedWidth(110)
+            name_lbl.setFixedWidth(120)
             row.addWidget(name_lbl)
 
             driver_lbl = QLabel("--")
@@ -378,6 +290,9 @@ class SystemHealthScreen(QWidget):
             row.addWidget(driver_lbl)
 
             row.addStretch()
+
+            dot = status_dot(False, size=12)
+            row.addWidget(dot)
 
             status_lbl = QLabel("--")
             status_lbl.setStyleSheet(
@@ -394,73 +309,71 @@ class SystemHealthScreen(QWidget):
 
         return card
 
-    # ──────────────────────────────────────────────────────
+    # ----------------------------------------------------------------
     # System Info Card
-    # ──────────────────────────────────────────────────────
+    # ----------------------------------------------------------------
 
     def _build_system_info_card(self) -> QFrame:
         card = QFrame()
         card.setObjectName("card")
+        card.setStyleSheet(
+            f"QFrame#card {{ border-left: 4px solid {C.TEXT_MUTED}; }}"
+        )
 
         layout = QVBoxLayout(card)
-        layout.setContentsMargins(10, 8, 10, 8)
-        layout.setSpacing(4)
+        layout.setContentsMargins(S.PAD, S.PAD_CARD, S.PAD, S.PAD_CARD)
+        layout.setSpacing(S.GAP)
 
-        sec = QLabel("SYSTEM INFO")
-        sec.setObjectName("section")
-        layout.addWidget(sec)
+        # Section header
+        layout.addWidget(section_header(Icon.SETTINGS, "SYSTEM INFO", C.TEXT_SEC))
 
+        # Clean key:value grid
         grid = QGridLayout()
         grid.setHorizontalSpacing(S.PAD)
-        grid.setVerticalSpacing(4)
+        grid.setVerticalSpacing(S.GAP)
 
-        grid.addWidget(self._muted("Version"), 0, 0)
-        self._lbl_version = QLabel("--")
-        self._lbl_version.setStyleSheet(f"color: {C.TEXT}; font-size: {F.SMALL}px;")
+        grid.addWidget(self._key_label("Version"), 0, 0)
+        self._lbl_version = self._value_label("--")
         grid.addWidget(self._lbl_version, 0, 1)
 
-        grid.addWidget(self._muted("Uptime"), 0, 2)
-        self._lbl_uptime = QLabel("--")
-        self._lbl_uptime.setStyleSheet(f"color: {C.TEXT}; font-size: {F.SMALL}px;")
+        grid.addWidget(self._key_label("Uptime"), 0, 2)
+        self._lbl_uptime = self._value_label("--")
         grid.addWidget(self._lbl_uptime, 0, 3)
 
-        grid.addWidget(self._muted("Network"), 1, 0)
-        self._lbl_network = QLabel("--")
-        self._lbl_network.setStyleSheet(f"color: {C.TEXT}; font-size: {F.SMALL}px;")
+        grid.addWidget(self._key_label("Network"), 1, 0)
+        self._lbl_network = self._value_label("--")
         grid.addWidget(self._lbl_network, 1, 1)
 
-        grid.addWidget(self._muted("Clock"), 1, 2)
-        self._lbl_clock = QLabel("--")
-        self._lbl_clock.setStyleSheet(f"color: {C.TEXT}; font-size: {F.SMALL}px;")
+        grid.addWidget(self._key_label("Clock"), 1, 2)
+        self._lbl_clock = self._value_label("--")
         grid.addWidget(self._lbl_clock, 1, 3)
 
-        grid.addWidget(self._muted("SD Card"), 2, 0)
-        self._lbl_sd = QLabel("--")
-        self._lbl_sd.setStyleSheet(f"color: {C.TEXT}; font-size: {F.SMALL}px;")
+        grid.addWidget(self._key_label("SD Card"), 2, 0)
+        self._lbl_sd = self._value_label("--")
         grid.addWidget(self._lbl_sd, 2, 1)
 
-        grid.addWidget(self._muted("Power"), 2, 2)
-        self._lbl_power = QLabel("--")
-        self._lbl_power.setStyleSheet(f"color: {C.TEXT}; font-size: {F.SMALL}px;")
+        grid.addWidget(self._key_label("Power"), 2, 2)
+        self._lbl_power = self._value_label("--")
         grid.addWidget(self._lbl_power, 2, 3)
 
-        grid.addWidget(self._muted("Mode"), 3, 0)
-        self._lbl_mode = QLabel("--")
-        self._lbl_mode.setStyleSheet(f"color: {C.PRIMARY}; font-size: {F.SMALL}px; font-weight: bold;")
+        grid.addWidget(self._key_label("Mode"), 3, 0)
+        self._lbl_mode = self._value_label("--")
+        self._lbl_mode.setStyleSheet(
+            f"color: {C.PRIMARY}; font-size: {F.SMALL}px; font-weight: bold;"
+        )
         grid.addWidget(self._lbl_mode, 3, 1)
 
-        grid.addWidget(self._muted("DB Size"), 3, 2)
-        self._lbl_db_size = QLabel("--")
-        self._lbl_db_size.setStyleSheet(f"color: {C.TEXT}; font-size: {F.SMALL}px;")
+        grid.addWidget(self._key_label("DB Size"), 3, 2)
+        self._lbl_db_size = self._value_label("--")
         grid.addWidget(self._lbl_db_size, 3, 3)
 
         layout.addLayout(grid)
 
         return card
 
-    # ══════════════════════════════════════════════════════════
+    # ================================================================
     # DATA REFRESH
-    # ══════════════════════════════════════════════════════════
+    # ================================================================
 
     def _refresh(self):
         """Refresh all sections with latest data."""
@@ -470,7 +383,7 @@ class SystemHealthScreen(QWidget):
         self._refresh_system_info()
 
     def _refresh_metrics(self):
-        """Update hardware metric cards and sparklines."""
+        """Update hardware metric cards with color-coded values."""
         monitor = getattr(self.app, "system_monitor", None)
         if not monitor:
             self._show_no_data("Monitoring not available")
@@ -487,13 +400,14 @@ class SystemHealthScreen(QWidget):
             self._show_no_data("Starting monitor...")
             return
 
-        # Hide no-data, show metrics
+        # Hide no-data, show all sections
         self._no_data_label.setVisible(False)
         self._metrics_container.setVisible(True)
         self._cloud_card.setVisible(True)
         self._sensor_card.setVisible(True)
         self._system_card.setVisible(True)
 
+        # Update header badge to LIVE
         self._status_badge.setText("LIVE")
         self._status_badge.setStyleSheet(
             f"background-color: {C.SUCCESS_BG}; color: {C.SUCCESS};"
@@ -522,7 +436,7 @@ class SystemHealthScreen(QWidget):
             refs["value_label"].setText(display)
             refs["bar"].setValue(bar_val)
 
-            # Color coding
+            # Color coding: green < 70, yellow < 85, red >= 85
             if val >= thresh_red:
                 color = C.DANGER
                 val_color = C.DANGER
@@ -530,31 +444,19 @@ class SystemHealthScreen(QWidget):
                 color = C.WARNING
                 val_color = C.WARNING
             else:
-                color = C.PRIMARY
+                color = C.SUCCESS
                 val_color = C.TEXT
 
             refs["bar"].setStyleSheet(
                 f"QProgressBar {{ background-color: {C.BG_INPUT};"
-                f"border: none; border-radius: 5px; }}"
+                f"border: none; border-radius: 6px;"
+                f"min-height: 12px; max-height: 12px; }}"
                 f"QProgressBar::chunk {{ background-color: {color};"
-                f"border-radius: 5px; }}"
+                f"border-radius: 6px; }}"
             )
             refs["value_label"].setStyleSheet(
-                f"font-size: {F.H3}px; font-weight: bold; color: {val_color};"
+                f"font-size: {F.H2}px; font-weight: bold; color: {val_color};"
             )
-
-            # Update sparkline
-            if key in self._sparklines:
-                self._sparklines[key].set_color(color)
-
-        # Update sparklines with history
-        try:
-            history = monitor.get_history()
-            for key in self._sparklines:
-                values = [h.get(key, 0) or 0 for h in history]
-                self._sparklines[key].set_data(values)
-        except Exception:
-            pass
 
     def _refresh_cloud(self):
         """Update cloud sync status section."""
@@ -568,7 +470,7 @@ class SystemHealthScreen(QWidget):
 
         if is_paired:
             self._cloud_dot.setStyleSheet(
-                f"background-color: {C.SUCCESS}; border-radius: 5px;"
+                f"background-color: {C.SUCCESS}; border-radius: 7px;"
             )
             self._cloud_status_lbl.setText("CONNECTED")
             self._cloud_status_lbl.setStyleSheet(
@@ -576,7 +478,7 @@ class SystemHealthScreen(QWidget):
             )
         else:
             self._cloud_dot.setStyleSheet(
-                f"background-color: {C.DANGER}; border-radius: 5px;"
+                f"background-color: {C.DANGER}; border-radius: 7px;"
             )
             self._cloud_status_lbl.setText("NOT PAIRED")
             self._cloud_status_lbl.setStyleSheet(
@@ -611,17 +513,21 @@ class SystemHealthScreen(QWidget):
                 uptime_h = status.get("uptime_hours", 0)
                 self._lbl_uptime.setText(self._format_uptime(uptime_h))
 
-                # WebSocket
+                # WebSocket badge
                 ws = status.get("ws_connected", False)
                 if ws:
                     self._cloud_ws_badge.setText("WS: LIVE")
                     self._cloud_ws_badge.setStyleSheet(
-                        f"font-size: {F.TINY}px; color: {C.SUCCESS}; font-weight: bold;"
+                        f"background-color: {C.SUCCESS_BG}; color: {C.SUCCESS};"
+                        f"border: 1px solid {C.SUCCESS}; border-radius: 4px;"
+                        f"padding: 2px 8px; font-size: {F.TINY}px; font-weight: bold;"
                     )
                 else:
                     self._cloud_ws_badge.setText("WS: OFF")
                     self._cloud_ws_badge.setStyleSheet(
-                        f"font-size: {F.TINY}px; color: {C.TEXT_MUTED};"
+                        f"background-color: {C.BG_CARD_ALT}; color: {C.TEXT_MUTED};"
+                        f"border: 1px solid {C.TEXT_MUTED}; border-radius: 4px;"
+                        f"padding: 2px 8px; font-size: {F.TINY}px;"
                     )
 
                 # Heartbeat
@@ -641,11 +547,12 @@ class SystemHealthScreen(QWidget):
             drv = driver_status.get(key, "fake")
             is_real = drv == "real"
 
-            # Driver type
+            # Driver type badge text
             refs["driver"].setText(drv.upper())
             refs["driver"].setStyleSheet(
-                f"font-size: {F.TINY}px; color: {C.SUCCESS if is_real else C.TEXT_MUTED};"
-                f" font-weight: bold;"
+                f"font-size: {F.TINY}px;"
+                f"color: {C.SUCCESS if is_real else C.TEXT_MUTED};"
+                f"font-weight: bold;"
             )
 
             # Health check
@@ -677,7 +584,6 @@ class SystemHealthScreen(QWidget):
                     status_text = "ERROR"
 
             elif key in ("led", "buzzer"):
-                # LED/Buzzer don't have health checks, just show driver type
                 status_text = "ACTIVE" if is_real else "SIM"
                 health_ok = True
 
@@ -690,14 +596,16 @@ class SystemHealthScreen(QWidget):
                 dot_color = C.DANGER
 
             refs["dot"].setStyleSheet(
-                f"background-color: {dot_color}; border-radius: 4px;"
+                f"background-color: {dot_color}; border-radius: 6px;"
             )
 
             # Status label
             if health_ok:
                 refs["status"].setText(status_text)
                 refs["status"].setStyleSheet(
-                    f"font-size: {F.TINY}px; color: {C.SUCCESS if is_real else C.TEXT_MUTED};"
+                    f"font-size: {F.TINY}px;"
+                    f"color: {C.SUCCESS if is_real else C.TEXT_MUTED};"
+                    f"font-weight: bold;"
                 )
             else:
                 refs["status"].setText(status_text)
@@ -800,22 +708,24 @@ class SystemHealthScreen(QWidget):
         except Exception:
             pass
 
-    # ══════════════════════════════════════════════════════════
+    # ================================================================
     # NO-DATA STATE
-    # ══════════════════════════════════════════════════════════
+    # ================================================================
 
     def _show_no_data(self, message: str):
         self._no_data_label.setText(message)
         self._no_data_label.setVisible(True)
         self._status_badge.setText("OFFLINE")
         self._status_badge.setStyleSheet(
-            f"font-size: {F.SMALL}px; color: {C.TEXT_MUTED};"
+            f"background-color: {C.BG_CARD_ALT}; color: {C.TEXT_MUTED};"
+            f"border: 1px solid {C.TEXT_MUTED}; border-radius: 4px;"
+            f"padding: 2px 8px; font-size: {F.TINY}px;"
         )
         self._metrics_container.setVisible(False)
 
-    # ══════════════════════════════════════════════════════════
+    # ================================================================
     # LIFECYCLE
-    # ══════════════════════════════════════════════════════════
+    # ================================================================
 
     def on_enter(self):
         # Force an immediate health check if no data yet
@@ -831,15 +741,26 @@ class SystemHealthScreen(QWidget):
     def on_leave(self):
         self._timer.stop()
 
-    # ══════════════════════════════════════════════════════════
+    # ================================================================
     # HELPERS
-    # ══════════════════════════════════════════════════════════
+    # ================================================================
 
     @staticmethod
-    def _muted(text: str) -> QLabel:
+    def _key_label(text: str) -> QLabel:
+        """Create a muted key label for key:value grids."""
         lbl = QLabel(text)
-        lbl.setStyleSheet(f"color: {C.TEXT_MUTED}; font-size: {F.TINY}px;")
-        lbl.setFixedWidth(70)
+        lbl.setStyleSheet(
+            f"color: {C.TEXT_MUTED}; font-size: {F.TINY}px;"
+            f"font-weight: bold; letter-spacing: 0.5px;"
+        )
+        lbl.setFixedWidth(75)
+        return lbl
+
+    @staticmethod
+    def _value_label(text: str) -> QLabel:
+        """Create a value label for key:value grids."""
+        lbl = QLabel(text)
+        lbl.setStyleSheet(f"color: {C.TEXT}; font-size: {F.SMALL}px;")
         return lbl
 
     @staticmethod

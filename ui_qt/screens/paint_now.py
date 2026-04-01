@@ -17,6 +17,10 @@ from PyQt6.QtCore import Qt
 from PyQt6.QtGui import QDoubleValidator
 
 from ui_qt.theme import C, F, S, enable_touch_scroll
+from ui_qt.icons import (
+    Icon, icon_badge, icon_label, status_dot, type_badge, section_header,
+    screen_header,
+)
 
 logger = logging.getLogger("smartlocker.ui.paint_now")
 
@@ -35,8 +39,60 @@ STEP_LABELS = {
     WizardStep.SHOW_QUANTITIES: "Quantities",
 }
 
+STEP_ICONS = {
+    WizardStep.SELECT_AREA: Icon.CHART,
+    WizardStep.VIEW_LAYERS: Icon.SHELF,
+    WizardStep.ENTER_M2: Icon.EDIT,
+    WizardStep.SHOW_QUANTITIES: Icon.WEIGHT,
+}
+
 DEFAULT_COVERAGE = 8.0  # liters per m2 default
 
+
+# ─────────────────────────────────────────────────────────
+# Helpers
+# ─────────────────────────────────────────────────────────
+
+def _card_frame(accent: str = C.PRIMARY) -> QFrame:
+    """Return a styled QFrame card with left-border accent."""
+    card = QFrame()
+    card.setObjectName("card")
+    card.setStyleSheet(
+        f"QFrame#card {{"
+        f"  background-color: {C.BG_CARD};"
+        f"  border: 1px solid {C.BORDER};"
+        f"  border-left: 4px solid {accent};"
+        f"  border-radius: {S.RADIUS}px;"
+        f"}}"
+    )
+    return card
+
+
+def _gradient_btn(text: str, color1: str = C.PRIMARY,
+                  color2: str = C.SECONDARY, font_size: int = F.H3,
+                  min_h: int = S.BTN_H_LG) -> QPushButton:
+    """Return a gradient-styled primary action button."""
+    btn = QPushButton(text)
+    btn.setCursor(Qt.CursorShape.PointingHandCursor)
+    btn.setStyleSheet(
+        f"QPushButton {{"
+        f"  background: qlineargradient(x1:0,y1:0,x2:1,y2:0,"
+        f"    stop:0 {color1}, stop:1 {color2});"
+        f"  color: {C.BG_DARK}; border: none; border-radius: {S.RADIUS}px;"
+        f"  font-size: {font_size}px; font-weight: bold;"
+        f"  min-height: {min_h}px; padding: 8px 16px;"
+        f"}}"
+        f"QPushButton:hover {{"
+        f"  background: qlineargradient(x1:0,y1:0,x2:1,y2:0,"
+        f"    stop:0 {C.PRIMARY_DIM}, stop:1 {color2});"
+        f"}}"
+    )
+    return btn
+
+
+# ═════════════════════════════════════════════════════════
+# PAINT NOW SCREEN
+# ═════════════════════════════════════════════════════════
 
 class PaintNowScreen(QWidget):
     """4-step paint calculation wizard."""
@@ -46,75 +102,98 @@ class PaintNowScreen(QWidget):
         self.app = app
 
         self._step = WizardStep.SELECT_AREA
-        self._selected_area = None       # dict from chart
+        self._selected_area = None
         self._selected_area_idx = -1
-        self._selected_layer = None      # dict from area layers
+        self._selected_layer = None
         self._m2_value = 0.0
         self._quantities = []
 
         self._build_ui()
 
-    # ══════════════════════════════════════════════════════════
+    # ══════════════════════════════════════════════════════
     # UI BUILD
-    # ══════════════════════════════════════════════════════════
+    # ══════════════════════════════════════════════════════
 
     def _build_ui(self):
         root = QVBoxLayout(self)
         root.setContentsMargins(0, 0, 0, 0)
         root.setSpacing(0)
 
-        # ── Header ──────────────────────────────────────
-        header = QFrame()
-        header.setStyleSheet(
-            f"background-color: {C.BG_STATUS};"
-            f"border-bottom: 1px solid {C.BORDER};"
+        # ── Header ──
+        header, h_layout = screen_header(
+            self.app, "PAINT NOW", Icon.MIXING, C.PRIMARY
         )
-        h_layout = QHBoxLayout(header)
-        h_layout.setContentsMargins(S.PAD, 8, S.PAD, 8)
-        h_layout.setSpacing(S.GAP)
 
-        self._btn_back = QPushButton("< BACK")
-        self._btn_back.setObjectName("ghost")
-        self._btn_back.setCursor(Qt.CursorShape.PointingHandCursor)
-        self._btn_back.clicked.connect(self._go_back)
-        h_layout.addWidget(self._btn_back)
-
-        self._title_label = QLabel("PAINT NOW")
-        self._title_label.setStyleSheet(
-            f"font-size: {F.H3}px; font-weight: bold; color: {C.TEXT};"
-        )
-        h_layout.addWidget(self._title_label)
-
-        h_layout.addStretch(1)
-
-        self._step_label = QLabel("Step 1/4")
-        self._step_label.setStyleSheet(
-            f"font-size: {F.SMALL}px; color: {C.TEXT_SEC};"
-        )
-        h_layout.addWidget(self._step_label)
+        # Step badge in header
+        self._step_badge = type_badge("Step 1/4", "muted")
+        h_layout.addWidget(self._step_badge)
 
         root.addWidget(header)
 
-        # ── Step indicator dots ─────────────────────────
-        dot_bar = QFrame()
-        dot_bar.setStyleSheet(f"background-color: {C.BG_DARK};")
-        dot_layout = QHBoxLayout(dot_bar)
-        dot_layout.setContentsMargins(S.PAD, 6, S.PAD, 6)
-        dot_layout.setSpacing(8)
-        dot_layout.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        # ── Step indicator: 4 connected circles ──
+        self._step_bar = QFrame()
+        self._step_bar.setStyleSheet(
+            f"background-color: {C.BG_STATUS};"
+            f"border-bottom: 1px solid {C.BORDER};"
+        )
+        self._step_bar.setFixedHeight(52)
 
-        self._dots = []
-        for i in range(4):
-            dot = QLabel("o")
-            dot.setFixedWidth(24)
-            dot.setFixedHeight(24)
-            dot.setAlignment(Qt.AlignmentFlag.AlignCenter)
-            dot_layout.addWidget(dot)
-            self._dots.append(dot)
+        step_layout = QHBoxLayout(self._step_bar)
+        step_layout.setContentsMargins(S.PAD * 2, 6, S.PAD * 2, 6)
+        step_layout.setSpacing(0)
+        step_layout.setAlignment(Qt.AlignmentFlag.AlignCenter)
 
-        root.addWidget(dot_bar)
+        self._step_circles = []
+        self._step_lines = []
+        self._step_labels_ui = []
 
-        # ── Body scroll area ───────────────────────────
+        steps = list(WizardStep)
+        for i, ws in enumerate(steps):
+            if i > 0:
+                # Connecting line
+                line = QFrame()
+                line.setFixedHeight(2)
+                line.setMinimumWidth(40)
+                line.setSizePolicy(
+                    QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed
+                )
+                line.setStyleSheet(f"background-color: {C.BORDER};")
+                step_layout.addWidget(line)
+                self._step_lines.append(line)
+
+            # Circle + label column
+            col = QVBoxLayout()
+            col.setSpacing(2)
+            col.setAlignment(Qt.AlignmentFlag.AlignCenter)
+
+            circle = QLabel(str(i + 1))
+            circle.setFixedSize(28, 28)
+            circle.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            circle.setStyleSheet(
+                f"background-color: {C.BG_CARD}; color: {C.TEXT_MUTED};"
+                f"border-radius: 14px; border: 2px solid {C.BORDER};"
+                f"font-size: {F.TINY}px; font-weight: bold;"
+            )
+            col.addWidget(circle, alignment=Qt.AlignmentFlag.AlignCenter)
+
+            lbl = QLabel(STEP_LABELS[ws])
+            lbl.setStyleSheet(
+                f"font-size: 10px; color: {C.TEXT_MUTED};"
+            )
+            lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            col.addWidget(lbl)
+
+            wrapper = QWidget()
+            wrapper.setLayout(col)
+            wrapper.setFixedWidth(80)
+            step_layout.addWidget(wrapper)
+
+            self._step_circles.append(circle)
+            self._step_labels_ui.append(lbl)
+
+        root.addWidget(self._step_bar)
+
+        # ── Body scroll area ──
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
         scroll.setHorizontalScrollBarPolicy(
@@ -130,31 +209,80 @@ class PaintNowScreen(QWidget):
         enable_touch_scroll(scroll)
         root.addWidget(scroll, stretch=1)
 
-    # ══════════════════════════════════════════════════════════
+    # ══════════════════════════════════════════════════════
     # STEP NAVIGATION
-    # ══════════════════════════════════════════════════════════
+    # ══════════════════════════════════════════════════════
 
     def _set_step(self, step: WizardStep):
         self._step = step
         step_num = list(WizardStep).index(step) + 1
-        self._step_label.setText(f"Step {step_num}/4")
 
-        # Update dots
-        for i, dot in enumerate(self._dots):
-            if i < step_num:
-                dot.setStyleSheet(
+        # Update step badge
+        self._step_badge.setText(f"Step {step_num}/4")
+        colors = {
+            1: ("muted",),
+            2: ("secondary",),
+            3: ("accent",),
+            4: ("success",),
+        }
+        variant = colors.get(step_num, ("muted",))[0]
+        badge_colors = {
+            "primary": (C.PRIMARY_BG, C.PRIMARY, C.PRIMARY),
+            "secondary": (C.SECONDARY_BG, C.SECONDARY, C.SECONDARY),
+            "accent": (C.ACCENT_BG, C.ACCENT, C.ACCENT),
+            "success": (C.SUCCESS_BG, C.SUCCESS, C.SUCCESS),
+            "muted": (C.BG_CARD_ALT, C.TEXT_MUTED, C.TEXT_MUTED),
+        }
+        bg, fg, bd = badge_colors.get(variant, badge_colors["muted"])
+        self._step_badge.setStyleSheet(
+            f"background-color: {bg}; color: {fg};"
+            f"border: 1px solid {bd}; border-radius: 4px;"
+            f"padding: 2px 8px; font-size: {F.TINY}px; font-weight: bold;"
+        )
+
+        # Update step indicator circles + lines
+        for i, circle in enumerate(self._step_circles):
+            lbl = self._step_labels_ui[i]
+            if i < step_num - 1:
+                # Completed step
+                circle.setText(Icon.OK)
+                circle.setStyleSheet(
                     f"background-color: {C.PRIMARY}; color: {C.BG_DARK};"
-                    f"border-radius: 12px; font-weight: bold;"
-                    f"font-size: {F.TINY}px;"
+                    f"border-radius: 14px; border: 2px solid {C.PRIMARY};"
+                    f"font-size: {F.TINY}px; font-weight: bold;"
                 )
-                dot.setText(str(i + 1))
+                lbl.setStyleSheet(
+                    f"font-size: 10px; color: {C.PRIMARY}; font-weight: bold;"
+                )
+            elif i == step_num - 1:
+                # Current step -- highlighted
+                circle.setText(str(i + 1))
+                circle.setStyleSheet(
+                    f"background-color: {C.PRIMARY_BG}; color: {C.PRIMARY};"
+                    f"border-radius: 14px; border: 2px solid {C.PRIMARY};"
+                    f"font-size: {F.TINY}px; font-weight: bold;"
+                )
+                lbl.setStyleSheet(
+                    f"font-size: 10px; color: {C.PRIMARY}; font-weight: bold;"
+                )
             else:
-                dot.setStyleSheet(
+                # Future step
+                circle.setText(str(i + 1))
+                circle.setStyleSheet(
                     f"background-color: {C.BG_CARD}; color: {C.TEXT_MUTED};"
-                    f"border-radius: 12px; border: 1px solid {C.BORDER};"
-                    f"font-size: {F.TINY}px;"
+                    f"border-radius: 14px; border: 2px solid {C.BORDER};"
+                    f"font-size: {F.TINY}px; font-weight: bold;"
                 )
-                dot.setText(str(i + 1))
+                lbl.setStyleSheet(
+                    f"font-size: 10px; color: {C.TEXT_MUTED};"
+                )
+
+        # Update connecting lines
+        for i, line in enumerate(self._step_lines):
+            if i < step_num - 1:
+                line.setStyleSheet(f"background-color: {C.PRIMARY};")
+            else:
+                line.setStyleSheet(f"background-color: {C.BORDER};")
 
         self._rebuild_body()
 
@@ -166,9 +294,9 @@ class PaintNowScreen(QWidget):
         else:
             self.app.go_back()
 
-    # ══════════════════════════════════════════════════════════
+    # ══════════════════════════════════════════════════════
     # BODY REBUILD
-    # ══════════════════════════════════════════════════════════
+    # ══════════════════════════════════════════════════════
 
     def _clear_body(self):
         while self._body_layout.count():
@@ -189,43 +317,97 @@ class PaintNowScreen(QWidget):
         elif self._step == WizardStep.SHOW_QUANTITIES:
             self._build_step_show_quantities()
 
-    # ── Step 1: Select Area ─────────────────────────────
+    # ── Step 1: Select Area ──────────────────────────────
 
     def _build_step_select_area(self):
         chart = getattr(self.app, "maintenance_chart", None)
 
-        lbl = QLabel("Select vessel area to paint:")
-        lbl.setStyleSheet(
-            f"font-size: {F.H3}px; color: {C.TEXT_SEC};"
-        )
-        self._body_layout.addWidget(lbl)
+        # Section header
+        hdr = section_header(Icon.CHART, "SELECT VESSEL AREA", C.SECONDARY)
+        self._body_layout.addWidget(hdr)
 
         if not chart or not chart.get("areas"):
+            msg_card = _card_frame(C.TEXT_MUTED)
+            mc_lay = QVBoxLayout(msg_card)
+            mc_lay.setContentsMargins(S.PAD, S.PAD, S.PAD, S.PAD)
+            mc_lay.setSpacing(S.GAP)
+
+            no_icon = icon_badge(Icon.CLOUD, bg_color=C.BG_CARD_ALT,
+                                 fg_color=C.TEXT_MUTED, size=36)
+            mc_lay.addWidget(no_icon, alignment=Qt.AlignmentFlag.AlignCenter)
+
             msg = QLabel(
                 "No maintenance chart loaded.\n"
                 "Pair with cloud to receive the vessel chart."
             )
-            msg.setStyleSheet(f"font-size: {F.BODY}px; color: {C.TEXT_MUTED};")
+            msg.setStyleSheet(
+                f"font-size: {F.BODY}px; color: {C.TEXT_MUTED};"
+            )
             msg.setAlignment(Qt.AlignmentFlag.AlignCenter)
             msg.setWordWrap(True)
-            self._body_layout.addWidget(msg)
+            mc_lay.addWidget(msg)
+
+            self._body_layout.addWidget(msg_card)
             self._body_layout.addStretch(1)
             return
 
+        # Area color cycling for visual variety
+        area_colors = [C.SECONDARY, C.PRIMARY, C.ACCENT, C.SUCCESS]
+        area_icons = [Icon.CHART, Icon.SHELF, Icon.INVENTORY, Icon.SENSORS]
+
         areas = chart.get("areas", [])
         for i, area in enumerate(areas):
-            btn = QPushButton(area.get("name", f"Area {i+1}"))
-            btn.setObjectName("nav_tile")
-            btn.setCursor(Qt.CursorShape.PointingHandCursor)
-            btn.setMinimumHeight(40)
-            btn.setStyleSheet(
-                f"QPushButton {{ font-size: {F.BODY}px; font-weight: bold;"
-                f"text-align: left; padding-left: 16px;"
-                f"border-left: 4px solid {C.SECONDARY}; }}"
+            accent = area_colors[i % len(area_colors)]
+            area_icon = area_icons[i % len(area_icons)]
+
+            btn_card = QFrame()
+            btn_card.setStyleSheet(
+                f"QFrame {{"
+                f"  background-color: {C.BG_CARD};"
+                f"  border: 1px solid {C.BORDER};"
+                f"  border-left: 4px solid {accent};"
+                f"  border-radius: {S.RADIUS}px;"
+                f"}}"
+                f"QFrame:hover {{ border-color: {accent}; }}"
             )
-            idx = i  # capture
-            btn.clicked.connect(lambda checked=False, a=idx: self._on_area_selected(a))
-            self._body_layout.addWidget(btn)
+            bc_lay = QHBoxLayout(btn_card)
+            bc_lay.setContentsMargins(S.PAD_CARD, S.PAD_CARD,
+                                      S.PAD_CARD, S.PAD_CARD)
+            bc_lay.setSpacing(S.GAP)
+
+            badge = icon_badge(area_icon, bg_color=C.BG_CARD_ALT,
+                               fg_color=accent, size=32)
+            bc_lay.addWidget(badge)
+
+            area_name = area.get("name", f"Area {i+1}")
+            lbl = QLabel(area_name)
+            lbl.setStyleSheet(
+                f"font-size: {F.BODY}px; font-weight: bold; color: {C.TEXT};"
+            )
+            bc_lay.addWidget(lbl, stretch=1)
+
+            arrow = icon_label(Icon.FORWARD, color=accent, size=16)
+            bc_lay.addWidget(arrow)
+
+            # Make the whole card clickable via overlay button
+            btn = QPushButton()
+            btn.setStyleSheet(
+                "background: transparent; border: none;"
+            )
+            btn.setCursor(Qt.CursorShape.PointingHandCursor)
+            btn.setFixedSize(1, 1)  # invisible
+            idx = i
+            btn.clicked.connect(
+                lambda checked=False, a=idx: self._on_area_selected(a)
+            )
+
+            # We use a click handler on the card frame directly
+            btn_card.mousePressEvent = (
+                lambda event, a=i: self._on_area_selected(a)
+            )
+            btn_card.setCursor(Qt.CursorShape.PointingHandCursor)
+
+            self._body_layout.addWidget(btn_card)
 
         self._body_layout.addStretch(1)
 
@@ -239,7 +421,7 @@ class PaintNowScreen(QWidget):
             self._selected_area_idx = area_idx
             self._set_step(WizardStep.VIEW_LAYERS)
 
-    # ── Step 2: View Layers ─────────────────────────────
+    # ── Step 2: View Layers ──────────────────────────────
 
     def _build_step_view_layers(self):
         if not self._selected_area:
@@ -247,40 +429,43 @@ class PaintNowScreen(QWidget):
             return
 
         area_name = self._selected_area.get("name", "Selected Area")
-        lbl = QLabel(f"Layers for: {area_name}")
-        lbl.setStyleSheet(
-            f"font-size: {F.H3}px; font-weight: bold; color: {C.TEXT};"
-        )
-        self._body_layout.addWidget(lbl)
+
+        # Section header
+        hdr = section_header(Icon.SHELF, f"LAYERS: {area_name}", C.SECONDARY)
+        self._body_layout.addWidget(hdr)
 
         layers = self._selected_area.get("layers", [])
         if not layers:
             msg = QLabel("No layers defined for this area.")
-            msg.setStyleSheet(f"font-size: {F.BODY}px; color: {C.TEXT_MUTED};")
+            msg.setStyleSheet(
+                f"font-size: {F.BODY}px; color: {C.TEXT_MUTED};"
+            )
             self._body_layout.addWidget(msg)
             self._body_layout.addStretch(1)
             return
 
         for i, layer in enumerate(layers):
-            card = QFrame()
-            card.setObjectName("card")
+            card = _card_frame(C.SECONDARY)
             c_layout = QHBoxLayout(card)
-            c_layout.setContentsMargins(S.PAD_CARD, S.PAD_CARD, S.PAD_CARD, S.PAD_CARD)
+            c_layout.setContentsMargins(
+                S.PAD_CARD, S.PAD_CARD, S.PAD_CARD, S.PAD_CARD
+            )
             c_layout.setSpacing(S.GAP)
 
-            # Layer number
-            num = QLabel(f"L{i+1}")
-            num.setStyleSheet(
-                f"font-size: {F.H3}px; font-weight: bold; color: {C.SECONDARY};"
+            # Layer number badge
+            layer_badge = icon_badge(
+                f"L{i+1}", bg_color=C.SECONDARY_BG,
+                fg_color=C.SECONDARY, size=36
             )
-            num.setFixedWidth(36)
-            c_layout.addWidget(num)
+            c_layout.addWidget(layer_badge)
 
-            # Product name and color
+            # Product info column
             info_layout = QVBoxLayout()
             info_layout.setSpacing(2)
 
-            product = layer.get("product_name", layer.get("product", "Unknown"))
+            product = layer.get(
+                "product_name", layer.get("product", "Unknown")
+            )
             lbl_prod = QLabel(product)
             lbl_prod.setStyleSheet(
                 f"font-size: {F.BODY}px; font-weight: bold; color: {C.TEXT};"
@@ -296,13 +481,19 @@ class PaintNowScreen(QWidget):
                 )
                 info_layout.addWidget(lbl_color)
 
+            # Type badge if product type available
+            ptype = layer.get("type", "")
+            if ptype:
+                tbadge = type_badge(ptype.upper(), "primary")
+                info_layout.addWidget(tbadge)
+
             c_layout.addLayout(info_layout, stretch=1)
 
             # Select button
-            btn = QPushButton("SELECT")
+            btn = QPushButton(f"{Icon.FORWARD}  SELECT")
             btn.setObjectName("secondary")
             btn.setCursor(Qt.CursorShape.PointingHandCursor)
-            btn.setFixedWidth(90)
+            btn.setFixedWidth(100)
             layer_idx = i
             btn.clicked.connect(
                 lambda checked=False, li=layer_idx: self._on_layer_selected(li)
@@ -319,7 +510,7 @@ class PaintNowScreen(QWidget):
             self._selected_layer = layers[layer_idx]
             self._set_step(WizardStep.ENTER_M2)
 
-    # ── Step 3: Enter m2 ────────────────────────────────
+    # ── Step 3: Enter m2 ─────────────────────────────────
 
     def _build_step_enter_m2(self):
         product = ""
@@ -328,38 +519,53 @@ class PaintNowScreen(QWidget):
                 "product_name", self._selected_layer.get("product", "")
             )
 
-        lbl = QLabel(f"Enter surface area (m2) for: {product}")
-        lbl.setStyleSheet(
-            f"font-size: {F.H3}px; color: {C.TEXT};"
+        # Section header
+        hdr = section_header(
+            Icon.EDIT, f"SURFACE AREA (m2): {product}", C.SECONDARY
         )
-        lbl.setWordWrap(True)
-        self._body_layout.addWidget(lbl)
+        self._body_layout.addWidget(hdr)
 
-        # Input field
+        # Input card
+        input_card = _card_frame(C.ACCENT)
+        ic_lay = QVBoxLayout(input_card)
+        ic_lay.setContentsMargins(S.PAD, S.PAD, S.PAD, S.PAD)
+        ic_lay.setSpacing(S.GAP)
+
+        lbl = QLabel("AREA (m2)")
+        lbl.setStyleSheet(
+            f"font-size: {F.SMALL}px; font-weight: bold; color: {C.TEXT_SEC};"
+        )
+        ic_lay.addWidget(lbl)
+
         self._m2_input = QLineEdit()
         self._m2_input.setPlaceholderText("Enter m2...")
         self._m2_input.setValidator(QDoubleValidator(0.1, 9999.0, 1))
         self._m2_input.setStyleSheet(
-            f"font-size: {F.H3}px; padding: 8px; min-height: 36px;"
+            f"font-size: {F.H2}px; padding: 10px;"
+            f"min-height: 44px; text-align: center;"
+            f"background-color: {C.BG_INPUT}; color: {C.TEXT};"
+            f"border: 1px solid {C.BORDER}; border-radius: 8px;"
         )
         self._m2_input.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self._body_layout.addWidget(self._m2_input)
+        ic_lay.addWidget(self._m2_input)
 
-        # Preset buttons row
-        preset_label = QLabel("Quick presets:")
-        preset_label.setStyleSheet(
-            f"font-size: {F.SMALL}px; color: {C.TEXT_SEC};"
+        # Quick presets
+        preset_lbl = QLabel("QUICK PRESETS")
+        preset_lbl.setStyleSheet(
+            f"font-size: {F.TINY}px; color: {C.TEXT_MUTED}; font-weight: bold;"
         )
-        self._body_layout.addWidget(preset_label)
+        ic_lay.addWidget(preset_lbl)
 
         presets_row = QHBoxLayout()
         presets_row.setSpacing(S.GAP)
 
         for val in [10, 25, 50, 100]:
-            btn = QPushButton(str(val))
+            btn = QPushButton(f"{val} m2")
             btn.setCursor(Qt.CursorShape.PointingHandCursor)
-            btn.setMinimumHeight(36)
+            btn.setMinimumHeight(40)
             btn.setStyleSheet(
+                f"background-color: {C.BG_CARD_ALT}; color: {C.TEXT};"
+                f"border: 1px solid {C.BORDER}; border-radius: 6px;"
                 f"font-size: {F.BODY}px; font-weight: bold;"
             )
             btn.clicked.connect(
@@ -369,15 +575,16 @@ class PaintNowScreen(QWidget):
 
         preset_wrapper = QWidget()
         preset_wrapper.setLayout(presets_row)
-        self._body_layout.addWidget(preset_wrapper)
+        ic_lay.addWidget(preset_wrapper)
+
+        self._body_layout.addWidget(input_card)
 
         self._body_layout.addStretch(1)
 
         # Calculate button
-        btn_calc = QPushButton("CALCULATE")
-        btn_calc.setObjectName("primary")
-        btn_calc.setCursor(Qt.CursorShape.PointingHandCursor)
-        btn_calc.setMinimumHeight(44)
+        btn_calc = _gradient_btn(
+            f"{Icon.FORWARD}  CALCULATE", C.PRIMARY, C.SECONDARY, F.H3
+        )
         btn_calc.clicked.connect(self._on_calculate)
         self._body_layout.addWidget(btn_calc)
 
@@ -407,13 +614,14 @@ class PaintNowScreen(QWidget):
             "product_name", self._selected_layer.get("product", "Unknown")
         )
 
-        # Try to find coverage from maintenance chart products
         coverage = DEFAULT_COVERAGE
         chart = getattr(self.app, "maintenance_chart", None)
         if chart:
             for p in chart.get("products", []):
                 if p.get("name", "") == product:
-                    coverage = p.get("coverage_m2_per_liter", DEFAULT_COVERAGE)
+                    coverage = p.get(
+                        "coverage_m2_per_liter", DEFAULT_COVERAGE
+                    )
                     break
 
         if coverage <= 0:
@@ -427,7 +635,6 @@ class PaintNowScreen(QWidget):
             "liters": round(liters_needed, 2),
         })
 
-        # Check for hardener ratio from chart
         if chart:
             for p in chart.get("products", []):
                 if p.get("name", "") == product and p.get("is_bicomponent"):
@@ -442,26 +649,41 @@ class PaintNowScreen(QWidget):
                     })
                     break
 
-    # ── Step 4: Show Quantities ────────────────────────
+    # ── Step 4: Show Quantities ──────────────────────────
 
     def _build_step_show_quantities(self):
-        area_name = self._selected_area.get("name", "") if self._selected_area else ""
-
-        lbl = QLabel(f"Paint required for {self._m2_value:.0f} m2 - {area_name}")
-        lbl.setStyleSheet(
-            f"font-size: {F.H3}px; font-weight: bold; color: {C.TEXT};"
+        area_name = (
+            self._selected_area.get("name", "")
+            if self._selected_area else ""
         )
-        lbl.setWordWrap(True)
-        self._body_layout.addWidget(lbl)
+
+        # Section header
+        hdr = section_header(
+            Icon.WEIGHT,
+            f"REQUIRED: {self._m2_value:.0f} m2 - {area_name}",
+            C.SUCCESS,
+        )
+        self._body_layout.addWidget(hdr)
 
         if not self._quantities:
             msg = QLabel("No quantities calculated.")
-            msg.setStyleSheet(f"font-size: {F.BODY}px; color: {C.TEXT_MUTED};")
+            msg.setStyleSheet(
+                f"font-size: {F.BODY}px; color: {C.TEXT_MUTED};"
+            )
             self._body_layout.addWidget(msg)
         else:
             for q in self._quantities:
-                card = QFrame()
-                card.setObjectName("card")
+                ptype = q.get("type", "BASE")
+
+                # Choose card accent by type
+                accent_map = {
+                    "BASE": C.PRIMARY,
+                    "HARDENER": C.ACCENT,
+                    "THINNER": C.SECONDARY,
+                }
+                accent = accent_map.get(ptype, C.TEXT_MUTED)
+
+                card = _card_frame(accent)
                 c_layout = QHBoxLayout(card)
                 c_layout.setContentsMargins(
                     S.PAD_CARD, S.PAD_CARD, S.PAD_CARD, S.PAD_CARD
@@ -469,23 +691,15 @@ class PaintNowScreen(QWidget):
                 c_layout.setSpacing(S.GAP)
 
                 # Type badge
-                ptype = q.get("type", "BASE")
-                badge = QLabel(ptype)
-                badge_map = {
-                    "BASE": (C.PRIMARY_BG, C.PRIMARY, C.PRIMARY),
-                    "HARDENER": (C.ACCENT_BG, C.ACCENT, C.ACCENT),
-                    "THINNER": (C.SECONDARY_BG, C.SECONDARY, C.SECONDARY),
+                badge_variant = {
+                    "BASE": "primary",
+                    "HARDENER": "accent",
+                    "THINNER": "secondary",
                 }
-                bg, fg, bd = badge_map.get(
-                    ptype, (C.BG_CARD_ALT, C.TEXT_MUTED, C.TEXT_MUTED)
+                tbadge = type_badge(
+                    ptype, badge_variant.get(ptype, "muted")
                 )
-                badge.setStyleSheet(
-                    f"background-color: {bg}; color: {fg};"
-                    f"border: 1px solid {bd}; border-radius: 4px;"
-                    f"padding: 2px 8px; font-size: {F.TINY}px; font-weight: bold;"
-                )
-                badge.setFixedHeight(22)
-                c_layout.addWidget(badge)
+                c_layout.addWidget(tbadge)
 
                 # Product name
                 lbl_name = QLabel(q.get("product", ""))
@@ -498,7 +712,7 @@ class PaintNowScreen(QWidget):
                 # Amount
                 lbl_amt = QLabel(f"{q.get('liters', 0):.2f} L")
                 lbl_amt.setStyleSheet(
-                    f"font-size: {F.H3}px; font-weight: bold; color: {C.PRIMARY};"
+                    f"font-size: {F.H3}px; font-weight: bold; color: {accent};"
                 )
                 c_layout.addWidget(lbl_amt)
 
@@ -507,16 +721,15 @@ class PaintNowScreen(QWidget):
         self._body_layout.addStretch(1)
 
         # Start Mixing button
-        btn_mix = QPushButton("START MIXING")
-        btn_mix.setObjectName("primary")
-        btn_mix.setCursor(Qt.CursorShape.PointingHandCursor)
-        btn_mix.setMinimumHeight(44)
+        btn_mix = _gradient_btn(
+            f"{Icon.PLAY}  START MIXING", C.PRIMARY, C.SECONDARY, F.H3
+        )
         btn_mix.clicked.connect(self._on_start_mixing)
         self._body_layout.addWidget(btn_mix)
 
-    # ══════════════════════════════════════════════════════════
+    # ══════════════════════════════════════════════════════
     # LIFECYCLE
-    # ══════════════════════════════════════════════════════════
+    # ══════════════════════════════════════════════════════
 
     def on_enter(self):
         self._step = WizardStep.SELECT_AREA
@@ -532,7 +745,6 @@ class PaintNowScreen(QWidget):
         if not self._quantities:
             return
 
-        # Convert liters to grams (paint density ~1.3 kg/L average)
         DENSITY_G_PER_L = 1300.0
 
         base_q = None
@@ -548,7 +760,6 @@ class PaintNowScreen(QWidget):
 
         base_grams = base_q["liters"] * DENSITY_G_PER_L
 
-        # Find ratio info from chart
         product_name = base_q.get("product", "Unknown")
         ratio_base = 4.0
         ratio_hardener = 1.0
@@ -559,7 +770,8 @@ class PaintNowScreen(QWidget):
         chart = getattr(self.app, "maintenance_chart", None)
         if chart:
             for p in chart.get("products", []):
-                if p.get("name", "") == product_name and p.get("is_bicomponent"):
+                if (p.get("name", "") == product_name
+                        and p.get("is_bicomponent")):
                     ratio_base = p.get("ratio_base", 4.0)
                     ratio_hardener = p.get("ratio_hardener", 1.0)
                     pot_life = p.get("pot_life_minutes", 480)
@@ -569,19 +781,23 @@ class PaintNowScreen(QWidget):
 
         hardener_grams = base_grams * (ratio_hardener / ratio_base)
 
-        # Store pending mix data on app for the mixing screen to pick up
         self.app.pending_mix = {
             "product_name": product_name,
             "hardener_name": hardener_name,
             "base_grams": round(base_grams, 0),
             "hardener_grams": round(hardener_grams, 0),
             "base_liters": base_q["liters"],
-            "hardener_liters": hardener_q["liters"] if hardener_q else 0,
+            "hardener_liters": (
+                hardener_q["liters"] if hardener_q else 0
+            ),
             "ratio_base": ratio_base,
             "ratio_hardener": ratio_hardener,
             "pot_life_minutes": pot_life,
             "tolerance_pct": tolerance,
-            "area_name": self._selected_area.get("name", "") if self._selected_area else "",
+            "area_name": (
+                self._selected_area.get("name", "")
+                if self._selected_area else ""
+            ),
             "m2": self._m2_value,
         }
 

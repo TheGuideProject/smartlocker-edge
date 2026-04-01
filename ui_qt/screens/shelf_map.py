@@ -5,6 +5,7 @@ Grid display of all locker slots. Tap a slot to assign a product via
 barcode scan (RFID backup). Refreshes every 1.5 seconds.
 """
 
+import json
 import logging
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
@@ -14,6 +15,10 @@ from PyQt6.QtCore import Qt, QTimer
 from PyQt6.QtGui import QFont
 
 from ui_qt.theme import C, F, S
+from ui_qt.icons import (
+    Icon, icon_badge, icon_label, status_dot, type_badge, section_header,
+    screen_header,
+)
 
 logger = logging.getLogger("smartlocker.ui.shelf_map")
 
@@ -49,50 +54,46 @@ class ShelfMapScreen(QWidget):
         root.setContentsMargins(0, 0, 0, 0)
         root.setSpacing(0)
 
-        # ── Header ──
-        header = QFrame()
-        header.setStyleSheet(
-            f"background-color: {C.BG_STATUS};"
-            f"border-bottom: 1px solid {C.BORDER};"
+        # -- Header (standard screen_header) --
+        header_frame, header_layout = screen_header(
+            self.app, "SHELF MAP", Icon.SHELF, C.SECONDARY,
         )
-        h_layout = QHBoxLayout(header)
-        h_layout.setContentsMargins(S.PAD, 8, S.PAD, 8)
-        h_layout.setSpacing(S.GAP)
 
-        btn_back = QPushButton("< BACK")
-        btn_back.setObjectName("ghost")
-        btn_back.setCursor(Qt.CursorShape.PointingHandCursor)
-        btn_back.clicked.connect(lambda: self.app.go_back())
-        h_layout.addWidget(btn_back)
-
-        title = QLabel("SHELF MAP")
-        title.setStyleSheet(
-            f"font-size: {F.H2}px; font-weight: bold; color: {C.TEXT};"
-        )
-        h_layout.addWidget(title)
-
-        h_layout.addStretch(1)
-
+        # Summary count badge
         self._summary_label = QLabel("--")
         self._summary_label.setStyleSheet(
-            f"font-size: {F.SMALL}px; color: {C.TEXT_SEC};"
+            f"background-color: {C.SECONDARY_BG}; color: {C.SECONDARY};"
+            f"border: 1px solid {C.SECONDARY}; border-radius: 10px;"
+            f"padding: 2px 10px; font-size: {F.TINY}px; font-weight: bold;"
         )
-        h_layout.addWidget(self._summary_label)
+        header_layout.addWidget(self._summary_label)
 
-        root.addWidget(header)
+        root.addWidget(header_frame)
 
-        # ── Status bar (shows "Scan barcode for S1..." when slot selected) ──
-        self._status_bar = QLabel("")
-        self._status_bar.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self._status_bar.setFixedHeight(32)
+        # -- Status bar (barcode scanning prompt) --
+        self._status_bar = QFrame()
+        self._status_bar.setFixedHeight(38)
         self._status_bar.setStyleSheet(
-            f"background-color: {C.BG_CARD}; color: {C.ACCENT}; "
-            f"font-size: {F.BODY}px; font-weight: bold;"
+            f"background-color: {C.ACCENT_BG};"
+            f"border-bottom: 1px solid {C.ACCENT};"
         )
+        status_layout = QHBoxLayout(self._status_bar)
+        status_layout.setContentsMargins(S.PAD, 0, S.PAD, 0)
+        status_layout.setSpacing(S.GAP)
+
+        status_icon = icon_label(Icon.TAG, color=C.ACCENT, size=18)
+        status_layout.addWidget(status_icon)
+
+        self._status_text = QLabel("")
+        self._status_text.setStyleSheet(
+            f"font-size: {F.BODY}px; font-weight: bold; color: {C.ACCENT};"
+        )
+        status_layout.addWidget(self._status_text, stretch=1)
+
         self._status_bar.hide()
         root.addWidget(self._status_bar)
 
-        # ── Grid container ──
+        # -- Grid container --
         grid_wrapper = QWidget()
         self._grid_layout = QGridLayout(grid_wrapper)
         self._grid_layout.setContentsMargins(S.PAD, S.PAD, S.PAD, S.PAD)
@@ -101,9 +102,9 @@ class ShelfMapScreen(QWidget):
         root.addWidget(grid_wrapper, stretch=1)
         root.addStretch(0)
 
-    # ════════════════════════════════════════════════
+    # ================================================================
     # DATA REFRESH
-    # ════════════════════════════════════════════════
+    # ================================================================
 
     def _refresh(self):
         """Rebuild the slot grid from inventory engine + assignments."""
@@ -132,8 +133,10 @@ class ShelfMapScreen(QWidget):
         except Exception:
             pass
 
-        occupied = sum(1 for i, s in enumerate(slots)
-                       if self._is_occupied(s) or i in assignments)
+        occupied = sum(
+            1 for i, s in enumerate(slots)
+            if self._is_occupied(s) or i in assignments
+        )
         total = len(slots)
         self._summary_label.setText(f"{occupied}/{total} occupied")
 
@@ -155,22 +158,20 @@ class ShelfMapScreen(QWidget):
 
     def _make_placeholder_slots(self, count: int) -> list:
         return [
-            {"slot_id": f"S{i+1}", "position": i + 1, "occupied": False,
-             "product_name": "", "status_text": "EMPTY"}
+            {
+                "slot_id": f"S{i+1}", "position": i + 1, "occupied": False,
+                "product_name": "", "status_text": "EMPTY",
+            }
             for i in range(count)
         ]
 
     def _build_slot_card(self, index: int, slot, assignment=None) -> QFrame:
-        """Build a single slot card."""
+        """Build a single slot card with top accent border, large number,
+        status icon + text, and product/tag info."""
+
         card = ClickableSlotCard(index, self)
-        card.setObjectName("card")
 
-        layout = QVBoxLayout(card)
-        layout.setContentsMargins(S.PAD_CARD, S.PAD_CARD, S.PAD_CARD, S.PAD_CARD)
-        layout.setSpacing(4)
-        layout.setAlignment(Qt.AlignmentFlag.AlignTop)
-
-        # Determine slot info from RFID
+        # -- Determine slot info from RFID --
         if hasattr(slot, "slot_id"):
             slot_label = f"S{slot.position}"
             from core.models import SlotStatus
@@ -185,8 +186,8 @@ class ShelfMapScreen(QWidget):
             rfid_tag_uid = slot.get("tag_id", "")
             status_text = slot.get("status_text", "EMPTY")
 
-        # Determine display state
-        is_selected = (self._selected_slot == index)
+        # -- Determine display state --
+        is_selected = self._selected_slot == index
         has_assignment = assignment is not None
 
         if is_selected:
@@ -194,26 +195,41 @@ class ShelfMapScreen(QWidget):
             border_color = C.ACCENT
             status_text = "SCANNING..."
             status_color = C.ACCENT
+            status_icon = Icon.TAG
         elif is_rfid_occupied:
             accent = C.PRIMARY
             border_color = C.PRIMARY
             status_color = C.PRIMARY
+            status_icon = Icon.OCCUPIED
         elif has_assignment:
             accent = C.SUCCESS
             border_color = C.SUCCESS
             status_text = "ASSIGNED"
             status_color = C.SUCCESS
+            status_icon = Icon.OK
         else:
             accent = C.TEXT_MUTED
             border_color = C.BORDER
             status_color = C.TEXT_MUTED
+            status_icon = Icon.EMPTY
 
+        card.setObjectName("slot_card")
         card.setStyleSheet(
-            f"QFrame#card {{ border-top: 3px solid {accent};"
-            f"border-color: {border_color}; }}"
+            f"QFrame#slot_card {{"
+            f"  background-color: {C.BG_CARD};"
+            f"  border: 1px solid {C.BORDER};"
+            f"  border-top: 3px solid {accent};"
+            f"  border-radius: {S.RADIUS}px;"
+            f"  padding: {S.PAD_CARD}px;"
+            f"}}"
         )
 
-        # Slot number
+        layout = QVBoxLayout(card)
+        layout.setContentsMargins(S.PAD_CARD, S.PAD_CARD, S.PAD_CARD, S.PAD_CARD)
+        layout.setSpacing(4)
+        layout.setAlignment(Qt.AlignmentFlag.AlignTop)
+
+        # -- Top: large slot number --
         lbl_num = QLabel(slot_label)
         lbl_num.setStyleSheet(
             f"font-size: {F.H1}px; font-weight: bold; color: {accent};"
@@ -221,20 +237,27 @@ class ShelfMapScreen(QWidget):
         lbl_num.setAlignment(Qt.AlignmentFlag.AlignCenter)
         layout.addWidget(lbl_num)
 
-        # Status
+        # -- Middle: status icon + status text --
+        status_row = QHBoxLayout()
+        status_row.setSpacing(4)
+        status_row.setAlignment(Qt.AlignmentFlag.AlignCenter)
+
+        s_icon = icon_label(status_icon, color=status_color, size=14)
+        status_row.addWidget(s_icon)
+
         lbl_status = QLabel(status_text)
         lbl_status.setStyleSheet(
             f"font-size: {F.TINY}px; font-weight: bold; color: {status_color};"
         )
-        lbl_status.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        layout.addWidget(lbl_status)
+        status_row.addWidget(lbl_status)
 
-        # Product name — resolve from product_id, rfid_tag table, or show UID
+        layout.addLayout(status_row)
+
+        # -- Bottom: product name / tag / placeholder --
         display_name = ""
         if is_rfid_occupied and rfid_product:
             display_name = self._resolve_product_name(rfid_product)
         elif is_rfid_occupied and rfid_tag_uid:
-            # No product_id but tag detected — try rfid_tag table then show UID
             display_name = self._resolve_name_from_tag(rfid_tag_uid)
         elif has_assignment:
             display_name = assignment.get("product_name", "")
@@ -248,30 +271,45 @@ class ShelfMapScreen(QWidget):
             lbl_prod.setWordWrap(True)
             layout.addWidget(lbl_prod)
 
-            # Color dot if available
+            # Color swatch dot if available
             colors_json = ""
             if has_assignment:
                 colors_json = assignment.get("colors_json", "[]")
-                color_name = assignment.get("color", "")
             if colors_json and colors_json not in ("[]", "null", ""):
                 try:
-                    import json
-                    colors = json.loads(colors_json) if isinstance(colors_json, str) else colors_json
+                    colors = (
+                        json.loads(colors_json)
+                        if isinstance(colors_json, str) else colors_json
+                    )
                     if colors and isinstance(colors, list):
                         first = colors[0]
                         hex_c = first.get("hex", "#999")
                         name_c = first.get("name", "")
-                        dot_html = (
-                            f'<span style="color: {hex_c};">&#9679;</span> '
-                            f'<span style="color: {C.TEXT_SEC};">{name_c}</span>'
+
+                        dot_row = QHBoxLayout()
+                        dot_row.setAlignment(Qt.AlignmentFlag.AlignCenter)
+                        dot_row.setSpacing(4)
+
+                        dot = QLabel()
+                        dot.setFixedSize(12, 12)
+                        dot.setStyleSheet(
+                            f"background-color: {hex_c};"
+                            f"border-radius: 6px;"
+                            f"border: 1px solid {C.BORDER};"
                         )
-                        lbl_color = QLabel(dot_html)
-                        lbl_color.setTextFormat(Qt.TextFormat.RichText)
-                        lbl_color.setAlignment(Qt.AlignmentFlag.AlignCenter)
-                        lbl_color.setStyleSheet(f"font-size: {F.TINY}px;")
-                        layout.addWidget(lbl_color)
+                        dot_row.addWidget(dot)
+
+                        if name_c:
+                            clbl = QLabel(name_c)
+                            clbl.setStyleSheet(
+                                f"font-size: {F.TINY}px; color: {C.TEXT_MUTED};"
+                            )
+                            dot_row.addWidget(clbl)
+
+                        layout.addLayout(dot_row)
                 except Exception:
                     pass
+
         elif is_selected:
             lbl_scan = QLabel("Scan barcode...")
             lbl_scan.setStyleSheet(
@@ -315,13 +353,13 @@ class ShelfMapScreen(QWidget):
                     return self._resolve_product_name(pid)
         except Exception:
             pass
-        # Fallback: show abbreviated tag UID so user knows something is there
+        # Fallback: show abbreviated tag UID
         short_uid = tag_uid[-8:] if len(tag_uid) > 8 else tag_uid
         return f"Tag: {short_uid}"
 
-    # ════════════════════════════════════════════════
+    # ================================================================
     # SLOT TAP HANDLING
-    # ════════════════════════════════════════════════
+    # ================================================================
 
     def _on_slot_tapped(self, index: int):
         """Handle tap on a slot card."""
@@ -333,7 +371,7 @@ class ShelfMapScreen(QWidget):
             pass
 
         if index in assignments:
-            # Slot is assigned — ask remove or replace
+            # Slot is assigned -- ask remove or replace
             product_name = assignments[index].get("product_name", "Unknown")
             reply = QMessageBox.question(
                 self,
@@ -354,21 +392,23 @@ class ShelfMapScreen(QWidget):
                 self._refresh()
             return
 
-        # Empty slot — select it for barcode scanning
+        # Empty slot -- select it for barcode scanning
         if self._selected_slot == index:
             # Deselect
             self._selected_slot = None
             self._status_bar.hide()
         else:
             self._selected_slot = index
-            self._status_bar.setText(f"Scan barcode for S{index + 1}...")
+            self._status_text.setText(
+                f"Scan barcode for S{index + 1}..."
+            )
             self._status_bar.show()
 
         self._refresh()
 
-    # ════════════════════════════════════════════════
+    # ================================================================
     # BARCODE ASSIGNMENT (called from app.py)
-    # ════════════════════════════════════════════════
+    # ================================================================
 
     def on_barcode_for_slot(self, product_info: dict):
         """Assign a scanned product to the selected slot."""
@@ -415,9 +455,9 @@ class ShelfMapScreen(QWidget):
         self._status_bar.hide()
         self._refresh()
 
-    # ════════════════════════════════════════════════
+    # ================================================================
     # LIFECYCLE
-    # ════════════════════════════════════════════════
+    # ================================================================
 
     def on_enter(self):
         self._selected_slot = None
