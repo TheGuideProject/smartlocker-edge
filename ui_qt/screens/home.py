@@ -392,12 +392,20 @@ class HomeScreen(QWidget):
         self._alarm_text.setStyleSheet(
             f"font-size: {F.SMALL}px; font-weight: bold; color: {C.TEXT};"
         )
+        self._alarm_text.setMaximumWidth(550)
         layout.addWidget(self._alarm_text, stretch=1)
 
-        btn = QPushButton("VIEW")
-        btn.setObjectName("danger")
-        btn.setFixedWidth(70)
+        btn = QPushButton(f"{Icon.WARN} VIEW")
         btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        btn.setMinimumWidth(90)
+        btn.setStyleSheet(
+            f"QPushButton {{"
+            f"  background-color: {C.DANGER}; color: {C.BG_DARK};"
+            f"  border: none; border-radius: 6px;"
+            f"  font-size: {F.BODY}px; font-weight: bold;"
+            f"  padding: 8px 12px; min-height: 36px;"
+            f"}}"
+        )
         btn.clicked.connect(lambda: self.app.go_screen("alarm"))
         layout.addWidget(btn)
 
@@ -422,12 +430,20 @@ class HomeScreen(QWidget):
         self._mix_text.setStyleSheet(
             f"font-size: {F.SMALL}px; font-weight: bold; color: {C.TEXT};"
         )
+        self._mix_text.setMaximumWidth(550)
         layout.addWidget(self._mix_text, stretch=1)
 
-        btn = QPushButton("RESUME")
-        btn.setObjectName("primary")
-        btn.setFixedWidth(90)
+        btn = QPushButton(f"{Icon.PLAY} RESUME")
         btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        btn.setMinimumWidth(110)
+        btn.setStyleSheet(
+            f"QPushButton {{"
+            f"  background-color: {C.PRIMARY}; color: {C.BG_DARK};"
+            f"  border: none; border-radius: 6px;"
+            f"  font-size: {F.BODY}px; font-weight: bold;"
+            f"  padding: 8px 16px; min-height: 36px;"
+            f"}}"
+        )
         btn.clicked.connect(lambda: self.app.go_screen("mixing"))
         layout.addWidget(btn)
 
@@ -554,9 +570,13 @@ class HomeScreen(QWidget):
         # Driver status
         try:
             ds = self.app.driver_status
-            real_count = sum(1 for v in ds.values() if v == "real")
+            real_count = sum(1 for v in ds.values() if v in ("real", "socket"))
             total_drv = len(ds)
-            self._driver_label.setText(f"{real_count}/{total_drv} real")
+            has_socket = any(v == "socket" for v in ds.values())
+            if has_socket:
+                self._driver_label.setText(f"Daemon ({real_count}/{total_drv})")
+            else:
+                self._driver_label.setText(f"{real_count}/{total_drv} real")
             if real_count == total_drv:
                 dot_c = C.SUCCESS
             elif real_count > 0:
@@ -647,9 +667,11 @@ class HomeScreen(QWidget):
             state_name = session.state.name.replace("_", " ").title()
             recipe_id = getattr(session, "recipe_id", "")
             if recipe_id:
-                self._mix_text.setText(f"Mixing: {recipe_id} -- {state_name}")
+                # Truncate long recipe IDs
+                short_id = recipe_id if len(recipe_id) <= 25 else recipe_id[:22] + "..."
+                self._mix_text.setText(f"{short_id} - {state_name}")
             else:
-                self._mix_text.setText(f"Mixing in progress -- {state_name}")
+                self._mix_text.setText(f"Mixing - {state_name}")
 
             self._mixing_bar.setStyleSheet(
                 f"QFrame#mixing_bar {{ background-color: {C.PRIMARY_BG};"
