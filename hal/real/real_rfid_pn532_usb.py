@@ -281,11 +281,15 @@ class RealRFIDDriverPN532USB(RFIDDriverInterface):
 
             except Exception as e:
                 now = time.time()
-                if now - self._last_error_time > 10:
+                if now - self._last_error_time > 30:
                     logger.error(f"[PN532 USB] Poll error: {e}")
                     self._last_error_time = now
-                # Try reconnect on serial errors
-                if not self._ser or not self._ser.is_open:
+                # I/O error = USB disconnect, try reconnect
+                err_str = str(e).lower()
+                if "i/o error" in err_str or "input/output" in err_str or "errno 5" in err_str:
+                    logger.warning("[PN532 USB] USB I/O error — reconnecting...")
+                    self._try_reconnect()
+                elif not self._ser or not self._ser.is_open:
                     self._try_reconnect()
                 return []
 
