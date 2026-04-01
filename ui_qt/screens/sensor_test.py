@@ -239,21 +239,15 @@ class SensorTestScreen(QWidget):
         drv_row = QHBoxLayout()
         drv_row.setSpacing(S.GAP)
         drv_type = self.app.driver_status.get("weight", "fake")
-        drv_badge = type_badge(drv_type.upper(), "success" if drv_type == "real" else "muted")
+        drv_badge = type_badge(drv_type.upper(), "success" if drv_type in ("real", "socket") else "muted")
         drv_row.addWidget(drv_badge)
-        healthy = False
-        try:
-            healthy = self.app.weight.is_healthy()
-        except Exception:
-            pass
-        health_dot = status_dot(healthy, size=12)
-        drv_row.addWidget(health_dot)
-        health_lbl = QLabel("Healthy" if healthy else "Offline")
-        health_lbl.setStyleSheet(
-            f"font-size: {F.SMALL}px; font-weight: bold;"
-            f"color: {C.SUCCESS if healthy else C.DANGER};"
+        self._weight_health_dot = status_dot(False, size=12)
+        drv_row.addWidget(self._weight_health_dot)
+        self._weight_health_lbl = QLabel("Checking...")
+        self._weight_health_lbl.setStyleSheet(
+            f"font-size: {F.SMALL}px; font-weight: bold; color: {C.TEXT_MUTED};"
         )
-        drv_row.addWidget(health_lbl)
+        drv_row.addWidget(self._weight_health_lbl)
         drv_row.addStretch()
         layout.addLayout(drv_row)
 
@@ -369,7 +363,35 @@ class SensorTestScreen(QWidget):
             b.setChecked(ch == channel)
         self._weight_chart.clear_data()
 
+    def _update_health_indicators(self):
+        """Refresh health dots for all sensor tabs (called every 300ms)."""
+        # Weight health
+        try:
+            w_ok = self.app.weight.is_healthy()
+        except Exception:
+            w_ok = False
+        self._weight_health_dot.setStyleSheet(
+            f"background-color: {C.SUCCESS if w_ok else C.DANGER};"
+            f"border-radius: 6px; border: none;"
+        )
+        self._weight_health_lbl.setText("Healthy" if w_ok else "Offline")
+        self._weight_health_lbl.setStyleSheet(
+            f"font-size: {F.SMALL}px; font-weight: bold;"
+            f"color: {C.SUCCESS if w_ok else C.DANGER};"
+        )
+
+        # RFID health
+        try:
+            r_ok = self.app.rfid.is_healthy()
+        except Exception:
+            r_ok = False
+        self._rfid_health_dot.setStyleSheet(
+            f"background-color: {C.SUCCESS if r_ok else C.DANGER};"
+            f"border-radius: 6px; border: none;"
+        )
+
     def _update_weight(self):
+        self._update_health_indicators()
         if not self._active_channel:
             return
         try:
@@ -440,20 +462,15 @@ class SensorTestScreen(QWidget):
         drv_row = QHBoxLayout()
         drv_row.setSpacing(S.GAP)
         drv_type = self.app.driver_status.get("rfid", "fake")
-        drv_badge = type_badge(drv_type.upper(), "success" if drv_type == "real" else "muted")
+        drv_badge = type_badge(drv_type.upper(), "success" if drv_type in ("real", "socket") else "muted")
         drv_row.addWidget(drv_badge)
-        healthy = False
-        try:
-            healthy = self.app.rfid.is_healthy()
-        except Exception:
-            pass
-        health_dot = status_dot(healthy, size=12)
-        drv_row.addWidget(health_dot)
-        health_lbl = QLabel("PN532 USB NFC")
-        health_lbl.setStyleSheet(
+        self._rfid_health_dot = status_dot(False, size=12)
+        drv_row.addWidget(self._rfid_health_dot)
+        self._rfid_health_lbl = QLabel("PN532 USB NFC")
+        self._rfid_health_lbl.setStyleSheet(
             f"font-size: {F.SMALL}px; font-weight: bold; color: {C.TEXT};"
         )
-        drv_row.addWidget(health_lbl)
+        drv_row.addWidget(self._rfid_health_lbl)
         drv_row.addStretch()
         layout.addLayout(drv_row)
 
