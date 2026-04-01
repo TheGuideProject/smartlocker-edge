@@ -91,7 +91,12 @@ def init_drivers(force_mode: Optional[str] = None):
     # RFID
     if drv_rfid == "real":
         from config.settings import RFID_MODULE, RFID_USB_PORT
-        if RFID_MODULE == "pn532_usb":
+        if RFID_MODULE == "pn532_multi_usb":
+            # Multi-reader: N × PN532 via USB hub (demo: 4, production: 40-50)
+            from config.settings import RFID_READER_MAP
+            from hal.real.real_rfid_multi_pn532 import RealRFIDMultiPN532USB
+            rfid = RealRFIDMultiPN532USB(reader_configs=RFID_READER_MAP or None)
+        elif RFID_MODULE == "pn532_usb":
             from hal.real.real_rfid_pn532_usb import RealRFIDDriverPN532USB
             rfid = RealRFIDDriverPN532USB(port=RFID_USB_PORT)
         elif RFID_MODULE == "rc522":
@@ -203,6 +208,7 @@ class HardwareDaemon:
         self._rfid_healthy = True
         self._running = False
         self._hw_ready = False  # True after hardware init completes
+        self._rfid_pause = False  # Pause RFID polling during tag write
 
         # Polling intervals (seconds)
         self._rfid_poll_s = 2.0
@@ -276,17 +282,18 @@ class HardwareDaemon:
 
         # Tell RFID which port Arduino claimed — avoid probing it
         arduino_port = getattr(self.weight, '_port', None)
-        if arduino_port and hasattr(self.rfid, '_skip_ports'):
-            self.rfid._skip_ports = {arduino_port}
-            logger.info(f"RFID will skip Arduino port: {arduino_port}")
-        elif arduino_port:
-            # Fallback: set RFID to use the OTHER USB port directly
-            import os
-            for candidate in ["/dev/ttyUSB0", "/dev/ttyUSB1", "/dev/ttyUSB2"]:
-                if candidate != arduino_port and os.path.exists(candidate):
-                    self.rfid._port = candidate
-                    logger.info(f"RFID port set to {candidate} (Arduino on {arduino_port})")
-                    break
+        if arduino_port:
+            if hasattr(self.rfid, '_skip_ports'):
+                self.rfid._skip_ports = {arduino_port}
+                logger.info(f"RFID will skip Arduino port: {arduino_port}")
+            elif hasattr(self.rfid, '_port'):
+                # Single-reader fallback: set to OTHER USB port
+                import os
+                for candidate in ["/dev/ttyUSB0", "/dev/ttyUSB1", "/dev/ttyUSB2"]:
+                    if candidate != arduino_port and os.path.exists(candidate):
+                        self.rfid._port = candidate
+                        logger.info(f"RFID port set to {candidate} (Arduino on {arduino_port})")
+                        break
 
         rfid_ok = self.rfid.initialize()
         led_ok = self.led.initialize()
@@ -463,14 +470,32 @@ class HardwareDaemon:
 
         elif cmd == "write_tag":
             data = msg.get("data", "")
+            target_reader = msg.get("reader_id")  # Optional: specific reader
             loop = asyncio.get_running_loop()
+            # Pause RFID polling so write has exclusive PN532 access
+            self._rfid_pause = True
+            await asyncio.sleep(0.5)  # Let current poll finish
             try:
-                ok = await loop.run_in_executor(
-                    None, self.rfid.write_product_data, data
-                )
+                # Multi-reader driver accepts reader_id; single-reader ignores it
+                if target_reader and hasattr(self.rfid, 'write_product_data'):
+                    import inspect
+                    sig = inspect.signature(self.rfid.write_product_data)
+                    if 'reader_id' in sig.parameters:
+                        ok = await loop.run_in_executor(
+                            None, self.rfid.write_product_data, data, target_reader
+                        )
+                    else:
+                        ok = await loop.run_in_executor(
+                            None, self.rfid.write_product_data, data
+                        )
+                else:
+                    ok = await loop.run_in_executor(
+                        None, self.rfid.write_product_data, data
+                    )
                 # Clear tag cache so next read gets fresh data
-                if ok and hasattr(self.rfid, '_tag_cache'):
+                if hasattr(self.rfid, '_tag_cache'):
                     self.rfid._tag_cache.clear()
+                logger.info(f"Tag write {'OK' if ok else 'FAILED'}: {data[:40]}")
                 await self._send_json(writer, {
                     "type": "write_tag_result", "ok": ok,
                 })
@@ -479,6 +504,8 @@ class HardwareDaemon:
                 await self._send_json(writer, {
                     "type": "write_tag_result", "ok": False, "error": str(e),
                 })
+            finally:
+                self._rfid_pause = False
 
         elif cmd == "shutdown":
             logger.info(f"Shutdown requested by {cid}")
@@ -516,6 +543,11 @@ class HardwareDaemon:
         """Poll RFID tags and broadcast changes."""
         loop = asyncio.get_running_loop()
         while self._running:
+            # Skip polling while a tag write is in progress
+            if self._rfid_pause:
+                await asyncio.sleep(0.3)
+                continue
+
             try:
                 healthy, readings = await loop.run_in_executor(
                     None, self._sync_rfid_poll

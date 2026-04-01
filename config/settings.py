@@ -34,8 +34,19 @@ MODE = "auto"
 #   all real  -> "live" mode
 # ============================================================
 DRIVER_RFID = "real"       # "fake" or "real"
-RFID_MODULE = "pn532_usb"  # "pn532_usb" (USB serial) or "rc522" (SPI) or "pn532" (I2C)
-RFID_USB_PORT = "/dev/ttyUSB0"  # PN532 pinned to ttyUSB0
+RFID_MODULE = "pn532_multi_usb"  # "pn532_multi_usb" (N readers via USB hub) or "pn532_usb" (single) or "rc522" (SPI) or "pn532" (I2C)
+RFID_USB_PORT = "/dev/ttyUSB0"  # Single-reader mode: PN532 port (legacy)
+
+# Multi-reader config: list of {port, reader_id} pairs.
+# Empty list = auto-detect all CH340/CP210x ports (excluding Arduino).
+# Example for 4 readers via USB hub:
+#   RFID_READER_MAP = [
+#       {"port": "/dev/ttyUSB2", "reader_id": "shelf1_slot1"},
+#       {"port": "/dev/ttyUSB3", "reader_id": "shelf1_slot2"},
+#       {"port": "/dev/ttyUSB4", "reader_id": "shelf1_slot3"},
+#       {"port": "/dev/ttyUSB5", "reader_id": "shelf1_slot4"},
+#   ]
+RFID_READER_MAP = []  # Empty = auto-detect all PN532 modules
 DRIVER_WEIGHT = "real"     # "fake" or "real" - Arduino serial bridge
 DRIVER_LED = "real"        # "fake" or "real" - Bar graph + shelf LEDs via Arduino
 DRIVER_BUZZER = "real"     # "fake" or "real" - GPIO PWM buzzer on GPIO 13

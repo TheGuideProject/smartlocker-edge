@@ -1,30 +1,26 @@
 """
-Real LED Driver - WS2812B via Arduino Nano Serial Bridge
+Real LED Driver - Bar Graph + Shelf Indicators via Arduino Nano
 
-Controls WS2812B addressable LEDs connected to the Arduino Nano.
-Shares the same serial connection as the weight driver.
+Controls:
+  - KYX-B10BGYR-4 bar graph (10 segments: 4 green, 3 yellow, 3 red)
+    Used as weight progress indicator during mixing.
+  - 4x Red panel-mount indicator LEDs (one per shelf slot)
+    Show which slot is active or has low stock.
 
-LED layout (configured in Arduino firmware):
-  - LED 0..3  = Shelf slot indicators (under cans)
-  - LED 4..11 = Balance bar (weight progress during mixing)
-
-The Arduino handles all LED timing/animation. This driver just
-sends high-level commands.
+Shares the serial connection with the Arduino weight driver.
 
 Commands sent to Arduino:
-  {"cmd":"led","idx":0,"r":0,"g":255,"b":0}          // single LED
-  {"cmd":"led_range","from":0,"to":4,"r":255,"g":0,"b":0}  // range
-  {"cmd":"led_off"}                                    // all off
-  {"cmd":"led_bar","pct":75,"r":0,"g":255,"b":0}     // balance bar %
-  {"cmd":"led_bright","val":50}                        // brightness 0-255
-
-Graceful fallback: if Arduino weight driver not available, all ops are no-ops.
+  {"cmd":"bar","pct":75}          // fill bar to 75%
+  {"cmd":"bar","seg":7}           // light first 7 segments
+  {"cmd":"bar_off"}               // bar all off
+  {"cmd":"slot","idx":0,"on":1}   // shelf LED 0 on
+  {"cmd":"slot","idx":2,"on":0}   // shelf LED 2 off
+  {"cmd":"slot_all","on":0}       // all shelf LEDs off
+  {"cmd":"led_off"}               // everything off
 """
 
 import logging
-import threading
-import time
-from typing import Dict, Tuple, Optional
+from typing import Dict, Optional
 
 from hal.interfaces import LEDDriverInterface, LEDColor, LEDPattern
 
@@ -33,17 +29,18 @@ logger = logging.getLogger("smartlocker.sensor")
 
 class RealLEDDriverArduino(LEDDriverInterface):
     """
-    LED driver that sends commands to Arduino Nano via shared serial.
+    LED driver for bar graph + shelf indicators via Arduino serial bridge.
 
-    Requires a RealWeightDriver instance (which owns the serial connection).
-    Call set_weight_driver() after both drivers are created.
+    The bar graph has fixed colors per segment (green/yellow/red),
+    so LEDColor is mapped to on/off behavior. The shelf LEDs are
+    single-color (red) and simply toggle on/off.
     """
 
     def __init__(self):
-        self._weight_driver = None  # Set after construction
+        self._weight_driver = None
         self._initialized = False
 
-        # Map slot IDs to physical LED indices on the Arduino chain
+        # Map slot IDs to physical LED indices (0-3)
         self._slot_map: Dict[str, int] = {
             "shelf1_slot1": 0,
             "shelf1_slot2": 1,
@@ -51,211 +48,130 @@ class RealLEDDriverArduino(LEDDriverInterface):
             "shelf1_slot4": 3,
         }
 
-        # Track current state for pattern animation
-        self._state: Dict[str, Tuple[LEDColor, LEDPattern]] = {}
-
-        # Animation thread for blink/pulse (runs on Python side)
-        self._animation_thread: Optional[threading.Thread] = None
-        self._animation_running = False
+        # Track slot states for blink animation
+        self._slot_states: Dict[str, bool] = {}
 
     def set_weight_driver(self, weight_driver) -> None:
-        """
-        Inject the weight driver that owns the Arduino serial connection.
-        Must be called before initialize().
-        """
+        """Inject the weight driver that owns the Arduino serial connection."""
         self._weight_driver = weight_driver
 
     def initialize(self) -> bool:
-        """Initialize LED driver. Requires weight driver to be connected."""
+        """Initialize LED driver."""
         if self._weight_driver is None:
-            logger.warning("[ARDUINO LED] No weight driver set. Call set_weight_driver() first.")
+            logger.warning("[ARDUINO LED] No weight driver set.")
             return False
 
-        # Test communication
+        # Test: turn everything off
         resp = self._weight_driver.send_command({"cmd": "led_off"})
         if resp and "ok" in resp:
-            logger.info("[ARDUINO LED] Connected via Arduino serial bridge")
+            logger.info("[ARDUINO LED] Connected — bar graph + 4 shelf LEDs")
             self._initialized = True
-
-            # Start animation thread
-            self._animation_running = True
-            self._animation_thread = threading.Thread(
-                target=self._animation_loop, daemon=True,
-                name="Arduino-LED-anim",
-            )
-            self._animation_thread.start()
-
             return True
         else:
-            logger.warning("[ARDUINO LED] Arduino not responding to LED commands")
-            # Still mark as initialized — LEDs are optional
+            logger.warning("[ARDUINO LED] No response, marking as initialized anyway")
             self._initialized = True
             return True
+
+    # ============================================================
+    # SHELF SLOT LEDs (required by LEDDriverInterface)
+    # ============================================================
 
     def set_slot(self, slot_id: str, color: LEDColor,
                  pattern: LEDPattern = LEDPattern.SOLID) -> None:
-        """Set color and pattern for a shelf slot LED."""
+        """Turn on/off a shelf slot LED. Color is ignored (LEDs are red)."""
         if not self._initialized or not self._weight_driver:
             return
-
-        self._state[slot_id] = (color, pattern)
 
         led_index = self._slot_map.get(slot_id)
         if led_index is None:
             logger.warning(f"[ARDUINO LED] Unknown slot '{slot_id}'")
             return
 
-        r, g, b = color.value
-        if pattern == LEDPattern.SOLID:
-            self._weight_driver.send_command({
-                "cmd": "led", "idx": led_index,
-                "r": r, "g": g, "b": b,
-            })
-        # Blink/pulse patterns handled by animation thread
+        # LED is ON for any color except OFF
+        on = 1 if color != LEDColor.OFF else 0
+        self._slot_states[slot_id] = bool(on)
+
+        self._weight_driver.send_command({
+            "cmd": "slot", "idx": led_index, "on": on,
+        })
 
     def clear_slot(self, slot_id: str) -> None:
-        """Turn off LED for a specific slot."""
-        self._state.pop(slot_id, None)
+        """Turn off a shelf slot LED."""
+        self._slot_states.pop(slot_id, None)
         led_index = self._slot_map.get(slot_id)
         if led_index is not None and self._weight_driver:
             self._weight_driver.send_command({
-                "cmd": "led", "idx": led_index,
-                "r": 0, "g": 0, "b": 0,
+                "cmd": "slot", "idx": led_index, "on": 0,
             })
 
     def clear_all(self) -> None:
-        """Turn off all LEDs."""
-        self._state.clear()
+        """Turn off all LEDs (bar + slots)."""
+        self._slot_states.clear()
         if self._weight_driver:
             self._weight_driver.send_command({"cmd": "led_off"})
 
     def shutdown(self) -> None:
-        """Turn off all LEDs and stop animation."""
-        self._animation_running = False
-        if self._animation_thread and self._animation_thread.is_alive():
-            self._animation_thread.join(timeout=2.0)
-
+        """Turn off all LEDs."""
         self.clear_all()
         self._initialized = False
         logger.info("[ARDUINO LED] Shutdown")
 
     # ============================================================
-    # BALANCE BAR - Weight progress indicator
+    # BAR GRAPH - Weight progress indicator
     # ============================================================
 
-    def set_balance_bar(self, percentage: float, color: LEDColor = LEDColor.GREEN) -> None:
+    def set_balance_bar(self, percentage: float) -> None:
         """
-        Set the balance bar to show weight progress during mixing.
+        Set the bar graph to show weight progress during mixing.
+
+        The bar has built-in colors:
+          seg 0-3  = GREEN  (0-40%)
+          seg 4-6  = YELLOW (40-70%)
+          seg 7-9  = RED    (70-100%)
 
         Args:
-            percentage: 0-100 (can exceed 100 for overpour)
-            color: LED color for the filled portion
+            percentage: 0-100 (clamped)
         """
         if not self._weight_driver:
             return
 
         pct = max(0, min(int(percentage), 100))
-        r, g, b = color.value
-        self._weight_driver.send_command({
-            "cmd": "led_bar", "pct": pct,
-            "r": r, "g": g, "b": b,
-        })
+        self._weight_driver.send_command({"cmd": "bar", "pct": pct})
 
-    def set_balance_bar_smart(self, percentage: float) -> None:
-        """
-        Smart balance bar: auto-selects color based on progress.
+    def set_balance_segments(self, count: int) -> None:
+        """Set exact number of bar segments lit (0-10)."""
+        if not self._weight_driver:
+            return
 
-          0-80%  = GREEN  (pouring, on track)
-         80-95%  = YELLOW (getting close)
-         95-100% = GREEN  (target zone, perfect)
-         >100%   = RED    (overpour!)
-        """
-        if percentage <= 80:
-            self.set_balance_bar(percentage, LEDColor.GREEN)
-        elif percentage <= 95:
-            self.set_balance_bar(percentage, LEDColor.YELLOW)
-        elif percentage <= 102:
-            self.set_balance_bar(min(percentage, 100), LEDColor.GREEN)
-        else:
-            self.set_balance_bar(100, LEDColor.RED)
+        seg = max(0, min(count, 10))
+        self._weight_driver.send_command({"cmd": "bar", "seg": seg})
 
     def clear_balance_bar(self) -> None:
-        """Turn off the balance bar."""
+        """Turn off the bar graph."""
         if self._weight_driver:
-            self._weight_driver.send_command({
-                "cmd": "led_bar", "pct": 0,
-                "r": 0, "g": 0, "b": 0,
-            })
+            self._weight_driver.send_command({"cmd": "bar_off"})
 
     # ============================================================
-    # SHELF STOCK INDICATORS
+    # SHELF STOCK INDICATORS (convenience methods)
     # ============================================================
 
     def set_slot_stock_level(self, slot_id: str, percentage: float) -> None:
         """
-        Set slot LED color based on remaining stock percentage.
-
-          >50%  = GREEN
-          20-50% = YELLOW
-          <20%  = RED
-          0%    = OFF
+        Turn shelf LED on/off based on stock level.
+        LED ON = stock below 20% (warning!)
+        LED OFF = stock OK
         """
         if percentage <= 0:
             self.clear_slot(slot_id)
         elif percentage < 20:
+            # Low stock: LED ON (blinking would need a timer, keep simple)
             self.set_slot(slot_id, LEDColor.RED, LEDPattern.SOLID)
-        elif percentage < 50:
-            self.set_slot(slot_id, LEDColor.YELLOW, LEDPattern.SOLID)
         else:
-            self.set_slot(slot_id, LEDColor.GREEN, LEDPattern.SOLID)
+            # Stock OK: LED OFF
+            self.clear_slot(slot_id)
 
-    # ============================================================
-    # ANIMATION THREAD (blink/pulse patterns)
-    # ============================================================
-
-    def _animation_loop(self) -> None:
-        """Background thread for blink/pulse patterns."""
-        tick = 0
-        while self._animation_running:
-            try:
-                for slot_id, (color, pattern) in list(self._state.items()):
-                    led_index = self._slot_map.get(slot_id)
-                    if led_index is None:
-                        continue
-
-                    r, g, b = color.value
-
-                    if pattern == LEDPattern.BLINK_SLOW:
-                        on = (tick % 30) < 15
-                        self._weight_driver.send_command({
-                            "cmd": "led", "idx": led_index,
-                            "r": r if on else 0,
-                            "g": g if on else 0,
-                            "b": b if on else 0,
-                        })
-
-                    elif pattern == LEDPattern.BLINK_FAST:
-                        on = (tick % 10) < 5
-                        self._weight_driver.send_command({
-                            "cmd": "led", "idx": led_index,
-                            "r": r if on else 0,
-                            "g": g if on else 0,
-                            "b": b if on else 0,
-                        })
-
-                    elif pattern == LEDPattern.PULSE:
-                        import math
-                        phase = (tick % 60) / 60.0
-                        brightness = (math.sin(phase * 2 * math.pi - math.pi / 2) + 1) / 2
-                        self._weight_driver.send_command({
-                            "cmd": "led", "idx": led_index,
-                            "r": int(r * brightness),
-                            "g": int(g * brightness),
-                            "b": int(b * brightness),
-                        })
-
-            except Exception as e:
-                logger.error(f"[ARDUINO LED] Animation error: {e}")
-
-            tick += 1
-            time.sleep(1.0 / 30.0)
+    def set_all_slots_off(self) -> None:
+        """Turn off all shelf LEDs."""
+        self._slot_states.clear()
+        if self._weight_driver:
+            self._weight_driver.send_command({"cmd": "slot_all", "on": 0})

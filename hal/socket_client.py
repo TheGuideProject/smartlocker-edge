@@ -292,12 +292,13 @@ class SocketRFIDDriver(RFIDDriverInterface):
             return resp.get("ids", [])
         return []
 
-    def write_product_data(self, product_string: str) -> bool:
+    def write_product_data(self, product_string: str,
+                           reader_id: Optional[str] = None) -> bool:
         """Write product data to NFC tag via daemon."""
-        resp = self._conn.send_command({
-            "cmd": "write_tag",
-            "data": product_string,
-        })
+        cmd = {"cmd": "write_tag", "data": product_string}
+        if reader_id:
+            cmd["reader_id"] = reader_id
+        resp = self._conn.send_command(cmd)
         if resp:
             return resp.get("ok", False)
         return False

@@ -91,7 +91,19 @@ def main_cli():
     # ---- RFID Driver (after weight — so Arduino already claimed its port) ----
     if drv_rfid == "real":
         from config.settings import RFID_MODULE, RFID_USB_PORT
-        if RFID_MODULE == "pn532_usb":
+        if RFID_MODULE == "pn532_multi_usb":
+            # Multi-reader: N × PN532 via USB hub
+            from config.settings import RFID_READER_MAP
+            from hal.real.real_rfid_multi_pn532 import RealRFIDMultiPN532USB
+            skip = set()
+            arduino_port = getattr(weight, '_port', None)
+            if arduino_port:
+                skip.add(arduino_port)
+            rfid = RealRFIDMultiPN532USB(
+                reader_configs=RFID_READER_MAP or None,
+                skip_ports=skip,
+            )
+        elif RFID_MODULE == "pn532_usb":
             from hal.real.real_rfid_pn532_usb import RealRFIDDriverPN532USB
             rfid = RealRFIDDriverPN532USB(port=RFID_USB_PORT)
         elif RFID_MODULE == "rc522":
