@@ -265,9 +265,13 @@ class HardwareDaemon:
             self._shutdown_hardware()
 
     def _init_hardware_sync(self) -> dict:
-        """Initialize all hardware drivers (runs in thread pool)."""
-        rfid_ok = self.rfid.initialize()
+        """Initialize all hardware drivers (runs in thread pool).
+
+        Order matters: Weight FIRST so Arduino claims its serial port,
+        then RFID can skip it and find the PN532 on the remaining port.
+        """
         weight_ok = self.weight.initialize()
+        rfid_ok = self.rfid.initialize()
         led_ok = self.led.initialize()
         buzzer_ok = self.buzzer.initialize()
 
