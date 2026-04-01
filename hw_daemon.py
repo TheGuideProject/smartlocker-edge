@@ -390,13 +390,17 @@ class HardwareDaemon:
 
         elif cmd == "tare":
             channel = msg.get("channel", "")
-            ok = self.weight.tare(channel)
+            loop = asyncio.get_running_loop()
+            ok = await loop.run_in_executor(None, self.weight.tare, channel)
             await self._send_json(writer, {"type": "tare_result", "channel": channel, "ok": ok})
 
         elif cmd == "read_weight":
             channel = msg.get("channel", "")
+            loop = asyncio.get_running_loop()
             try:
-                reading = self.weight.read_weight(channel)
+                reading = await loop.run_in_executor(
+                    None, self.weight.read_weight, channel
+                )
                 await self._send_json(writer, {
                     "type": "weight_response",
                     **weight_reading_to_dict(reading),
@@ -408,8 +412,11 @@ class HardwareDaemon:
                 })
 
         elif cmd == "poll_tags":
+            loop = asyncio.get_running_loop()
             try:
-                readings = self.rfid.poll_tags()
+                readings = await loop.run_in_executor(
+                    None, self.rfid.poll_tags
+                )
                 await self._send_json(writer, {
                     "type": "tags_response",
                     "tags": [tag_reading_to_dict(r) for r in readings],
@@ -420,11 +427,17 @@ class HardwareDaemon:
                 })
 
         elif cmd == "get_channels":
-            channels = self.weight.get_channels()
+            loop = asyncio.get_running_loop()
+            channels = await loop.run_in_executor(
+                None, self.weight.get_channels
+            )
             await self._send_json(writer, {"type": "channels", "channels": channels})
 
         elif cmd == "get_reader_ids":
-            ids = self.rfid.get_reader_ids()
+            loop = asyncio.get_running_loop()
+            ids = await loop.run_in_executor(
+                None, self.rfid.get_reader_ids
+            )
             await self._send_json(writer, {"type": "reader_ids", "ids": ids})
 
         elif cmd == "shutdown":
@@ -437,14 +450,39 @@ class HardwareDaemon:
             await self._send_json(writer, {"type": "error", "msg": f"unknown cmd: {cmd}"})
 
     # ── Polling Loops ──
+    # All hardware calls are blocking (serial I/O) so they MUST run
+    # in a thread pool via run_in_executor to avoid freezing the
+    # asyncio event loop (which handles TCP client communication).
+
+    def _sync_rfid_poll(self):
+        """Blocking RFID poll (runs in thread pool)."""
+        healthy = self.rfid.is_healthy()
+        readings = self.rfid.poll_tags() if healthy else []
+        return healthy, readings
+
+    def _sync_weight_read(self, channel: str):
+        """Blocking weight read (runs in thread pool)."""
+        return self.weight.read_weight(channel)
+
+    def _sync_weight_channels(self):
+        """Blocking get_channels (runs in thread pool)."""
+        return self.weight.get_channels()
+
+    def _sync_status_check(self):
+        """Blocking health check (runs in thread pool)."""
+        return self.weight.is_healthy()
 
     async def _poll_rfid_loop(self):
         """Poll RFID tags and broadcast changes."""
+        loop = asyncio.get_running_loop()
         while self._running:
             try:
-                self._rfid_healthy = self.rfid.is_healthy()
-                if self._rfid_healthy:
-                    readings = self.rfid.poll_tags()
+                healthy, readings = await loop.run_in_executor(
+                    None, self._sync_rfid_poll
+                )
+                self._rfid_healthy = healthy
+
+                if healthy:
                     current_ids = {r.tag_id for r in readings}
 
                     # Detect new tags
@@ -465,7 +503,6 @@ class HardwareDaemon:
                     self._previous_tags = current_ids
                 else:
                     if self._previous_tags:
-                        # RFID went down — clear all tags
                         for tag_id in self._previous_tags:
                             await self._broadcast({
                                 "type": "tag_disappeared",
@@ -481,16 +518,20 @@ class HardwareDaemon:
 
     async def _poll_weight_loop(self):
         """Poll weight sensors and broadcast readings."""
-        channels = []
+        loop = asyncio.get_running_loop()
         try:
-            channels = self.weight.get_channels()
+            channels = await loop.run_in_executor(
+                None, self._sync_weight_channels
+            )
         except Exception:
             channels = ["shelf1"]
 
         while self._running:
             for ch in channels:
                 try:
-                    reading = self.weight.read_weight(ch)
+                    reading = await loop.run_in_executor(
+                        None, self._sync_weight_read, ch
+                    )
                     await self._broadcast({
                         "type": "weight",
                         **weight_reading_to_dict(reading),
@@ -502,12 +543,19 @@ class HardwareDaemon:
 
     async def _poll_status_loop(self):
         """Broadcast sensor health status periodically."""
+        loop = asyncio.get_running_loop()
         while self._running:
+            try:
+                weight_ok = await loop.run_in_executor(
+                    None, self._sync_status_check
+                )
+            except Exception:
+                weight_ok = False
             status = {
                 "type": "sensor_status",
                 "rfid": self._rfid_healthy,
-                "weight": self.weight.is_healthy(),
-                "led": True,  # LED/buzzer don't have health checks
+                "weight": weight_ok,
+                "led": True,
                 "buzzer": True,
                 "ts": time.time(),
             }
