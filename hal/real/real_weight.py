@@ -129,7 +129,7 @@ class RealWeightDriver(WeightDriverInterface):
                 if any(kw in (p.description or "").lower() for kw in ["ch340", "ftdi", "arduino", "usb serial"]):
                     if p.device not in ports_to_try:
                         ports_to_try.append(p.device)
-                        logger.info(f"[ARDUINO WEIGHT] Found potential Arduino: {p.device} ({p.description})")
+                        logger.info(f"[ARDUINO WEIGHT] Found potential port: {p.device} ({p.description})")
         except Exception:
             pass
 
@@ -138,17 +138,28 @@ class RealWeightDriver(WeightDriverInterface):
                 self._serial = serial.Serial(
                     port=port,
                     baudrate=self._baud,
-                    timeout=2.0,
+                    timeout=1.0,
                 )
 
-                # Wait for Arduino to boot (resets on serial connect)
-                # Clone Nanos with old bootloader need extra time
-                time.sleep(3.5)
+                # Quick pre-check: read any boot data (Arduino sends JSON on connect,
+                # PN532 modules send nothing or binary garbage)
+                time.sleep(2.0)
+                boot_data = b""
+                if self._serial.in_waiting:
+                    boot_data = self._serial.read(self._serial.in_waiting)
+
+                # Fast reject: if we got binary data with 0x00 bytes, it's likely PN532
+                if boot_data and b'\x00\x55' in boot_data:
+                    logger.debug(f"[ARDUINO WEIGHT] Skipping {port} (PN532 binary detected)")
+                    self._serial.close()
+                    self._serial = None
+                    continue
+
                 self._serial.reset_input_buffer()
 
-                # Ping to verify
+                # Ping to verify — short timeout for non-Arduino devices
                 self._send({"cmd": "ping"})
-                response = self._recv(timeout=3.0)
+                response = self._recv(timeout=2.0)
 
                 if response and response.get("status") == "ok":
                     fw = response.get("fw", "?")
@@ -173,7 +184,7 @@ class RealWeightDriver(WeightDriverInterface):
 
                     return True
                 else:
-                    logger.warning(f"[ARDUINO WEIGHT] No ping response on {port}")
+                    logger.info(f"[ARDUINO WEIGHT] No ping response on {port} (not Arduino)")
                     self._serial.close()
                     self._serial = None
 
