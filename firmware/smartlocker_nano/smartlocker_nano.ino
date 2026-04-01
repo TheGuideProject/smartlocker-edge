@@ -99,7 +99,7 @@ int   mixHistIdx   = 0;
 bool  shelfStable  = false;
 bool  mixStable    = false;
 
-char serialBuf[256];
+char serialBuf[128];
 int  serialPos = 0;
 
 int barSegments = 0;
@@ -155,7 +155,7 @@ void buzzAlarm() {
 void setup() {
     Serial.begin(115200);
     delay(500);
-    Serial.println("{\"boot\":\"starting\"}");
+    Serial.println(F("{\"boot\":\"starting\"}"));
 
     // Bar graph pins
     for (int i = 0; i < NUM_BAR_SEGS; i++) {
@@ -191,7 +191,7 @@ void setup() {
         mixHistory[i] = 0;
     }
 
-    Serial.println("{\"boot\":\"ready\"}");
+    Serial.println(F("{\"boot\":\"ready\"}"));
 }
 
 // ============================================================
@@ -223,33 +223,33 @@ void loop() {
 // ============================================================
 void initHX711() {
     if (hx711_initialized) return;
-    Serial.println("{\"info\":\"hx711_init_start\"}");
+    Serial.println(F("{\"info\":\"hx711_init_start\"}"));
 
     scaleShelf.begin(SHELF_DT, SHELF_SCK);
     scaleMix.begin(MIX_DT, MIX_SCK);
 
     if (scaleShelf.wait_ready_timeout(2000)) {
         shelfOffset = scaleShelf.read_average(SAMPLES_TARE);
-        Serial.println("{\"info\":\"shelf_tared\"}");
+        Serial.println(F("{\"info\":\"shelf_tared\"}"));
     }
     if (scaleMix.wait_ready_timeout(2000)) {
         mixOffset = scaleMix.read_average(SAMPLES_TARE);
-        Serial.println("{\"info\":\"mix_tared\"}");
+        Serial.println(F("{\"info\":\"mix_tared\"}"));
     }
 
     hx711_initialized = true;
-    Serial.println("{\"info\":\"hx711_init_done\"}");
+    Serial.println(F("{\"info\":\"hx711_init_done\"}"));
 }
 
 // ============================================================
 // COMMAND PROCESSOR
 // ============================================================
 void processCommand(const char* json) {
-    JsonDocument doc;
+    StaticJsonDocument<192> doc;
     DeserializationError err = deserializeJson(doc, json);
 
     if (err) {
-        Serial.println("{\"err\":\"json_parse\"}");
+        Serial.println(F("{\"err\":\"json_parse\"}"));
         return;
     }
 
@@ -257,7 +257,7 @@ void processCommand(const char* json) {
 
     // ---- PING ----
     if (strcmp(cmd, "ping") == 0) {
-        Serial.println("{\"status\":\"ok\",\"fw\":\"1.2\"}");
+        Serial.println(F("{\"status\":\"ok\",\"fw\":\"1.2\"}"));
     }
 
     // ---- INIT HX711 ----
@@ -278,7 +278,7 @@ void processCommand(const char* json) {
                         mixHistory, &mixHistIdx, &mixStable);
         }
         else {
-            Serial.println("{\"err\":\"unknown channel\"}");
+            Serial.println(F("{\"err\":\"unknown channel\"}"));
         }
     }
 
@@ -304,7 +304,7 @@ void processCommand(const char* json) {
             snprintf(resp, sizeof(resp), "{\"ok\":\"tare\",\"ch\":\"%s\"}", ch);
             Serial.println(resp);
         } else {
-            Serial.println("{\"err\":\"tare_failed\"}");
+            Serial.println(F("{\"err\":\"tare_failed\"}"));
         }
     }
 
@@ -326,14 +326,14 @@ void processCommand(const char* json) {
             snprintf(resp, sizeof(resp), "{\"ok\":\"bar\",\"seg\":%d}", seg);
             Serial.println(resp);
         } else {
-            Serial.println("{\"err\":\"bar_range\"}");
+            Serial.println(F("{\"err\":\"bar_range\"}"));
         }
     }
 
     // ---- BAR OFF ----
     else if (strcmp(cmd, "bar_off") == 0) {
         setBar(0);
-        Serial.println("{\"ok\":\"bar_off\"}");
+        Serial.println(F("{\"ok\":\"bar_off\"}"));
     }
 
     // ---- SINGLE SHELF LED ----
@@ -346,7 +346,7 @@ void processCommand(const char* json) {
             snprintf(resp, sizeof(resp), "{\"ok\":\"slot\",\"idx\":%d,\"on\":%d}", idx, on);
             Serial.println(resp);
         } else {
-            Serial.println("{\"err\":\"slot_idx\"}");
+            Serial.println(F("{\"err\":\"slot_idx\"}"));
         }
     }
 
@@ -372,7 +372,7 @@ void processCommand(const char* json) {
             else if (strcmp(pat, "target") == 0)    buzzTarget();
             else if (strcmp(pat, "alarm") == 0)     buzzAlarm();
             else {
-                Serial.println("{\"err\":\"unknown pattern\"}");
+                Serial.println(F("{\"err\":\"unknown pattern\"}"));
                 return;
             }
             char resp[48];
@@ -385,10 +385,10 @@ void processCommand(const char* json) {
             tone(BUZZER_PIN, freq, dur);
             buzzing = true;
             buzzEndTime = millis() + dur;
-            Serial.println("{\"ok\":\"buzz\"}");
+            Serial.println(F("{\"ok\":\"buzz\"}"));
         }
         else {
-            Serial.println("{\"err\":\"buzz_args\"}");
+            Serial.println(F("{\"err\":\"buzz_args\"}"));
         }
     }
 
@@ -396,7 +396,7 @@ void processCommand(const char* json) {
     else if (strcmp(cmd, "buzz_off") == 0) {
         noTone(BUZZER_PIN);
         buzzing = false;
-        Serial.println("{\"ok\":\"buzz_off\"}");
+        Serial.println(F("{\"ok\":\"buzz_off\"}"));
     }
 
     // ---- EVERYTHING OFF ----
@@ -407,7 +407,7 @@ void processCommand(const char* json) {
         }
         noTone(BUZZER_PIN);
         buzzing = false;
-        Serial.println("{\"ok\":\"led_off\"}");
+        Serial.println(F("{\"ok\":\"led_off\"}"));
     }
 
     // ---- SET CALIBRATION ----
@@ -424,7 +424,7 @@ void processCommand(const char* json) {
             snprintf(resp, sizeof(resp), "{\"ok\":\"cal\",\"ch\":\"%s\",\"scale\":%.4f}", ch, (double)scale);
             Serial.println(resp);
         } else {
-            Serial.println("{\"err\":\"invalid scale\"}");
+            Serial.println(F("{\"err\":\"invalid scale\"}"));
         }
     }
 
@@ -432,7 +432,7 @@ void processCommand(const char* json) {
     else if (strcmp(cmd, "status") == 0) {
         bool shelf_ok = hx711_initialized ? scaleShelf.is_ready() : false;
         bool mix_ok = hx711_initialized ? scaleMix.is_ready() : false;
-        char resp[128];
+        char resp[96];
         snprintf(resp, sizeof(resp),
             "{\"status\":\"ok\",\"shelf_ok\":%s,\"mix_ok\":%s,\"bar\":%d,\"slots\":%d,\"buzz\":true,\"fw\":\"1.2\"}",
             shelf_ok ? "true" : "false",
@@ -443,7 +443,7 @@ void processCommand(const char* json) {
 
     // ---- UNKNOWN ----
     else {
-        Serial.println("{\"err\":\"unknown command\"}");
+        Serial.println(F("{\"err\":\"unknown command\"}"));
     }
 }
 
@@ -490,7 +490,7 @@ void readAndSend(HX711* scale, const char* chName,
     char gramsStr[16];
     dtostrf(grams, 1, 1, gramsStr);
 
-    char resp[128];
+    char resp[96];
     snprintf(resp, sizeof(resp),
         "{\"ch\":\"%s\",\"g\":%s,\"raw\":%ld,\"stable\":%s}",
         chName, gramsStr, raw, *stable ? "true" : "false");
