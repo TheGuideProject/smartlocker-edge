@@ -8,6 +8,7 @@ Initializes all hardware drivers, engines, and screens.
 import sys
 import os
 import time
+import json
 import logging
 
 from PyQt6.QtWidgets import (
@@ -455,6 +456,18 @@ class SmartLockerWindow(QMainWindow):
         init_ok = self.inventory_engine.initialize()
         if not init_ok:
             print("WARNING: Failed to initialize sensors!")
+
+        # Load saved RFID reader→slot mapping (reorder persistence)
+        if hasattr(self.rfid, 'apply_saved_mapping'):
+            try:
+                saved_map_json = self.db.get_config("rfid_reader_map")
+                if saved_map_json:
+                    saved_map = json.loads(saved_map_json)
+                    count = self.rfid.apply_saved_mapping(saved_map)
+                    if count:
+                        print(f"  Reader mapping restored: {count} readers remapped")
+            except Exception as e:
+                logger.warning(f"Failed to load saved reader map: {e}")
 
         # Cloud & Sync
         self.cloud = CloudClient()

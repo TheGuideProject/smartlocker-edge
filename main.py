@@ -179,6 +179,19 @@ def main_cli():
     if not inventory_engine.initialize():
         print("WARNING: Some sensors failed to initialize (continuing with partial drivers)")
 
+    # Load saved RFID reader→slot mapping (reorder persistence)
+    if hasattr(rfid, 'apply_saved_mapping'):
+        try:
+            saved_map_json = db.get_config("rfid_reader_map")
+            if saved_map_json:
+                import json as _json2
+                saved_map = _json2.loads(saved_map_json)
+                count = rfid.apply_saved_mapping(saved_map)
+                if count:
+                    print(f"  Reader mapping restored: {count} readers remapped")
+        except Exception as e:
+            print(f"  WARNING: Failed to load saved reader map: {e}")
+
     cloud = CloudClient()
     sync_engine = SyncEngine(db, cloud)
 

@@ -274,6 +274,11 @@ class InventoryEngine:
 
         ok = rfid_ok and weight_ok and led_ok and buzzer_ok
 
+        # Rebuild shelves now that DB is available (set_database called before init)
+        # This reads slot_count from DB and creates shelf/slot rows for FK constraints
+        if self._db:
+            self.rebuild_shelves()
+
         if not rfid_ok:
             logger.warning("InventoryEngine: RFID init failed (continuing without)")
         if not weight_ok:

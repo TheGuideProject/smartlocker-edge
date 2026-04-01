@@ -516,6 +516,94 @@ class RealRFIDMultiPN532USB(RFIDDriverInterface):
         healthy = sum(1 for r in self._readers.values() if r.healthy)
         return healthy, total
 
+    def get_mapping(self) -> list:
+        """Return current port → reader_id mapping for persistence."""
+        return [
+            {"port": r.port, "reader_id": rid}
+            for rid, r in self._readers.items()
+        ]
+
+    def apply_saved_mapping(self, saved_map: List[dict]) -> int:
+        """Apply a saved port→reader_id mapping after auto-detection.
+
+        After auto-detect assigns sequential IDs (shelf1_slot1, slot2, ...),
+        this rearranges readers so each port maps to the reader_id the user
+        configured via the reorder UI.
+
+        Args:
+            saved_map: List of {"port": "/dev/ttyUSBx", "reader_id": "shelf1_slotN"}
+
+        Returns:
+            Number of readers successfully remapped.
+        """
+        if not saved_map or not self._readers:
+            return 0
+
+        # Build port→desired_reader_id from saved config
+        port_to_desired = {m["port"]: m["reader_id"] for m in saved_map}
+
+        # Index current readers by port
+        by_port: Dict[str, ReaderInstance] = {}
+        for reader in self._readers.values():
+            by_port[reader.port] = reader
+
+        # Rebuild _readers dict with saved IDs
+        new_readers: Dict[str, ReaderInstance] = {}
+        used_ids: set = set()
+        remapped = 0
+
+        # First pass: assign saved reader_ids to known ports
+        for port, reader in by_port.items():
+            desired_id = port_to_desired.get(port)
+            if desired_id:
+                reader.reader_id = desired_id
+                new_readers[desired_id] = reader
+                used_ids.add(desired_id)
+                remapped += 1
+
+        # Second pass: assign IDs to new/unknown ports (not in saved map)
+        slot_num = 1
+        for port, reader in by_port.items():
+            if port not in port_to_desired:
+                while f"shelf1_slot{slot_num}" in used_ids:
+                    slot_num += 1
+                new_id = f"shelf1_slot{slot_num}"
+                reader.reader_id = new_id
+                new_readers[new_id] = reader
+                used_ids.add(new_id)
+                slot_num += 1
+
+        self._readers = new_readers
+
+        # Clear all tag caches (reader_ids changed)
+        for r in self._readers.values():
+            r.tag_cache.clear()
+
+        logger.info(
+            f"[MultiPN532] Applied saved mapping: {remapped}/{len(self._readers)} remapped"
+        )
+        return remapped
+
+    def swap_readers(self, id1: str, id2: str) -> bool:
+        """Swap the logical reader_ids of two physical readers.
+
+        After swap, the reader that was shelf1_slot1 becomes shelf1_slot2
+        and vice-versa. The physical PN532 modules stay on their ports.
+        """
+        if id1 not in self._readers or id2 not in self._readers:
+            return False
+        r1, r2 = self._readers[id1], self._readers[id2]
+        # Swap reader_ids
+        r1.reader_id, r2.reader_id = id2, id1
+        # Swap dict entries
+        self._readers[id1] = r2
+        self._readers[id2] = r1
+        # Clear caches so tags get re-read with correct reader_id
+        r1.tag_cache.clear()
+        r2.tag_cache.clear()
+        logger.info(f"[MultiPN532] Swapped {id1} <-> {id2}")
+        return True
+
     def shutdown(self) -> None:
         """Close all readers and release resources."""
         for reader in self._readers.values():

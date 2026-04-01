@@ -47,6 +47,11 @@ class ShelfMapScreen(QWidget):
         self._timer.timeout.connect(self._refresh)
         self._slot_cards = []
         self._selected_slot = None  # Index of slot waiting for barcode
+
+        # Reorder mode: swap reader↔slot assignments via tap-tap
+        self._reorder_mode = False
+        self._reorder_first = None  # Index of first slot selected for swap
+
         self._build_ui()
 
     def _build_ui(self):
@@ -67,6 +72,21 @@ class ShelfMapScreen(QWidget):
             f"padding: 2px 10px; font-size: {F.TINY}px; font-weight: bold;"
         )
         header_layout.addWidget(self._summary_label)
+
+        # -- Reorder button (swap reader↔slot assignments) --
+        self._reorder_btn = QPushButton(f"{Icon.EDIT} REORDER")
+        self._reorder_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._reorder_btn.setFixedHeight(30)
+        self._reorder_btn.setStyleSheet(
+            f"QPushButton {{"
+            f"  background-color: {C.BG_CARD}; color: {C.ACCENT};"
+            f"  border: 1px solid {C.ACCENT}; border-radius: 6px;"
+            f"  padding: 2px 12px; font-size: {F.SMALL}px; font-weight: bold;"
+            f"}}"
+            f"QPushButton:hover {{ background-color: {C.ACCENT_BG}; }}"
+        )
+        self._reorder_btn.clicked.connect(self._toggle_reorder)
+        header_layout.addWidget(self._reorder_btn)
 
         root.addWidget(header_frame)
 
@@ -113,6 +133,12 @@ class ShelfMapScreen(QWidget):
             self._grid_layout.removeWidget(w)
             w.deleteLater()
         self._slot_cards.clear()
+
+        # Cache reader map for reorder mode display
+        if self._reorder_mode:
+            self._reader_map_cache = self._get_reader_display_map()
+        else:
+            self._reader_map_cache = {}
 
         # Get slot data from inventory engine
         slots = []
@@ -188,9 +214,24 @@ class ShelfMapScreen(QWidget):
 
         # -- Determine display state --
         is_selected = self._selected_slot == index
+        is_reorder_selected = (self._reorder_mode and self._reorder_first == index)
         has_assignment = assignment is not None
 
-        if is_selected:
+        if is_reorder_selected:
+            # Reorder: first-selected slot (bright highlight)
+            accent = C.ACCENT
+            border_color = C.ACCENT
+            status_color = C.ACCENT
+            status_icon = Icon.EDIT
+            status_text = "SELECTED"
+        elif self._reorder_mode:
+            # Reorder: other slots (subtle dashed look)
+            accent = C.SECONDARY
+            border_color = C.SECONDARY
+            status_color = C.SECONDARY
+            status_icon = Icon.SHELF
+            # Keep normal status text
+        elif is_selected:
             accent = C.ACCENT
             border_color = C.ACCENT
             status_text = "SCANNING..."
@@ -213,11 +254,13 @@ class ShelfMapScreen(QWidget):
             status_color = C.TEXT_MUTED
             status_icon = Icon.EMPTY
 
+        # Card style: highlighted border for reorder selection
+        border_width = "3px" if is_reorder_selected else "1px"
         card.setObjectName("slot_card")
         card.setStyleSheet(
             f"QFrame#slot_card {{"
             f"  background-color: {C.BG_CARD};"
-            f"  border: 1px solid {C.BORDER};"
+            f"  border: {border_width} solid {border_color};"
             f"  border-top: 3px solid {accent};"
             f"  border-radius: {S.RADIUS}px;"
             f"  padding: {S.PAD_CARD}px;"
@@ -325,6 +368,44 @@ class ShelfMapScreen(QWidget):
             lbl_empty.setAlignment(Qt.AlignmentFlag.AlignCenter)
             layout.addWidget(lbl_empty)
 
+        # -- Reader port badge (shown in reorder mode) --
+        if self._reorder_mode and hasattr(self, '_reader_map_cache'):
+            rinfo = self._reader_map_cache.get(index)
+            if rinfo:
+                port_row = QHBoxLayout()
+                port_row.setAlignment(Qt.AlignmentFlag.AlignCenter)
+                port_row.setSpacing(4)
+
+                # Health dot
+                health_color = C.SUCCESS if rinfo.get("healthy", True) else C.ERROR
+                hdot = QLabel(Icon.DOT)
+                hdot.setStyleSheet(
+                    f"font-size: 8px; color: {health_color};"
+                )
+                port_row.addWidget(hdot)
+
+                # Port name badge
+                port_lbl = QLabel(rinfo["short_port"])
+                port_lbl.setStyleSheet(
+                    f"background-color: {C.SECONDARY_BG};"
+                    f"color: {C.SECONDARY};"
+                    f"border: 1px solid {C.SECONDARY};"
+                    f"border-radius: 4px;"
+                    f"padding: 1px 6px;"
+                    f"font-size: {F.TINY}px; font-weight: bold;"
+                )
+                port_row.addWidget(port_lbl)
+
+                layout.addLayout(port_row)
+            else:
+                no_reader = QLabel("No reader")
+                no_reader.setStyleSheet(
+                    f"font-size: {F.TINY}px; color: {C.TEXT_MUTED};"
+                    f"font-style: italic;"
+                )
+                no_reader.setAlignment(Qt.AlignmentFlag.AlignCenter)
+                layout.addWidget(no_reader)
+
         return card
 
     def _resolve_product_name(self, product_id: str) -> str:
@@ -358,11 +439,171 @@ class ShelfMapScreen(QWidget):
         return f"Tag: {short_uid}"
 
     # ================================================================
+    # REORDER MODE (swap reader↔slot assignments)
+    # ================================================================
+
+    def _has_multi_reader(self) -> bool:
+        """Check if RFID driver supports multi-reader swap."""
+        return hasattr(self.app, 'rfid') and hasattr(self.app.rfid, 'swap_readers')
+
+    def _toggle_reorder(self):
+        """Enter/exit reorder mode."""
+        if not self._has_multi_reader():
+            QMessageBox.information(
+                self, "Reorder",
+                "Reader reorder requires multi-reader RFID (PN532 USB).",
+            )
+            return
+
+        if not self._reorder_mode:
+            # Enter reorder mode
+            self._reorder_mode = True
+            self._reorder_first = None
+            self._selected_slot = None  # Cancel any barcode assignment
+            self._reorder_btn.setText(f"{Icon.OK} DONE")
+            self._reorder_btn.setStyleSheet(
+                f"QPushButton {{"
+                f"  background-color: {C.SUCCESS}; color: white;"
+                f"  border: 1px solid {C.SUCCESS}; border-radius: 6px;"
+                f"  padding: 2px 12px; font-size: {F.SMALL}px; font-weight: bold;"
+                f"}}"
+                f"QPushButton:hover {{ background-color: {C.PRIMARY}; }}"
+            )
+            self._status_text.setText(
+                "REORDER MODE: Tap a slot to select, then tap another to swap"
+            )
+            self._status_bar.show()
+        else:
+            # Exit reorder mode
+            self._reorder_mode = False
+            self._reorder_first = None
+            self._reorder_btn.setText(f"{Icon.EDIT} REORDER")
+            self._reorder_btn.setStyleSheet(
+                f"QPushButton {{"
+                f"  background-color: {C.BG_CARD}; color: {C.ACCENT};"
+                f"  border: 1px solid {C.ACCENT}; border-radius: 6px;"
+                f"  padding: 2px 12px; font-size: {F.SMALL}px; font-weight: bold;"
+                f"}}"
+                f"QPushButton:hover {{ background-color: {C.ACCENT_BG}; }}"
+            )
+            self._status_bar.hide()
+
+        self._refresh()
+
+    def _handle_reorder_tap(self, index: int):
+        """Handle tap in reorder mode: select → swap."""
+        if self._reorder_first is None:
+            # First tap — select this slot
+            self._reorder_first = index
+            self._status_text.setText(
+                f"Selected S{index + 1}. Now tap the slot to swap with."
+            )
+            self._refresh()
+        elif self._reorder_first == index:
+            # Same slot — deselect
+            self._reorder_first = None
+            self._status_text.setText(
+                "REORDER MODE: Tap a slot to select, then tap another to swap"
+            )
+            self._refresh()
+        else:
+            # Second tap — do swap!
+            self._do_swap(self._reorder_first, index)
+
+    def _do_swap(self, idx1: int, idx2: int):
+        """Swap two reader assignments and save."""
+        id1 = f"shelf1_slot{idx1 + 1}"
+        id2 = f"shelf1_slot{idx2 + 1}"
+
+        rfid = self.app.rfid
+        ok = rfid.swap_readers(id1, id2)
+
+        if ok:
+            # Save mapping to DB
+            self._save_reader_mapping()
+            self._status_text.setText(
+                f"Swapped S{idx1 + 1} <-> S{idx2 + 1}. Tap another pair or press DONE."
+            )
+            try:
+                from hal.interfaces import BuzzerPattern
+                self.app.buzzer.play(BuzzerPattern.CONFIRM)
+            except Exception:
+                pass
+            logger.info(f"Reorder: swapped {id1} <-> {id2}")
+        else:
+            self._status_text.setText(
+                f"Swap failed! Readers {id1} / {id2} may not exist."
+            )
+            try:
+                from hal.interfaces import BuzzerPattern
+                self.app.buzzer.play(BuzzerPattern.ERROR)
+            except Exception:
+                pass
+            logger.warning(f"Reorder: swap failed {id1} <-> {id2}")
+
+        self._reorder_first = None
+        self._refresh()
+
+    def _save_reader_mapping(self):
+        """Persist current reader↔port mapping to DB config."""
+        rfid = self.app.rfid
+        if hasattr(rfid, 'get_mapping'):
+            mapping = rfid.get_mapping()
+            try:
+                self.app.db.save_config("rfid_reader_map", json.dumps(mapping))
+                logger.info(f"Reader mapping saved: {mapping}")
+            except Exception as e:
+                logger.warning(f"Failed to save reader mapping: {e}")
+
+    def _get_reader_display_map(self) -> dict:
+        """Get reader info indexed by slot index for display.
+
+        Returns {0: {"port": "USB0", "reader_id": ..., "healthy": ...}, ...}
+        """
+        rfid = self.app.rfid
+        if not hasattr(rfid, 'get_mapping'):
+            return {}
+
+        result = {}
+        mapping = rfid.get_mapping()
+        for m in mapping:
+            rid = m.get("reader_id", "")
+            port = m.get("port", "")
+            try:
+                # Extract slot number from "shelf1_slot3" → 3 → index 2
+                slot_num = int(rid.split("slot")[-1])
+                idx = slot_num - 1
+                # Short port name: "/dev/ttyUSB3" → "USB3", "COM5" → "COM5"
+                short = port.split("/")[-1] if "/" in port else port
+                result[idx] = {
+                    "port": port,
+                    "short_port": short,
+                    "reader_id": rid,
+                }
+            except (ValueError, IndexError):
+                pass
+
+        # Add health info if available
+        if hasattr(rfid, '_readers'):
+            for idx, info in result.items():
+                reader = rfid._readers.get(info["reader_id"])
+                if reader:
+                    info["healthy"] = reader.healthy
+                    info["has_tags"] = bool(reader.tag_cache)
+
+        return result
+
+    # ================================================================
     # SLOT TAP HANDLING
     # ================================================================
 
     def _on_slot_tapped(self, index: int):
         """Handle tap on a slot card."""
+        # Reorder mode: select/swap instead of normal behavior
+        if self._reorder_mode:
+            self._handle_reorder_tap(index)
+            return
+
         # Check if this slot has an assignment
         assignments = {}
         try:
@@ -461,6 +702,19 @@ class ShelfMapScreen(QWidget):
 
     def on_enter(self):
         self._selected_slot = None
+        self._reorder_mode = False
+        self._reorder_first = None
+        self._reorder_btn.setText(f"{Icon.EDIT} REORDER")
+        self._reorder_btn.setStyleSheet(
+            f"QPushButton {{"
+            f"  background-color: {C.BG_CARD}; color: {C.ACCENT};"
+            f"  border: 1px solid {C.ACCENT}; border-radius: 6px;"
+            f"  padding: 2px 12px; font-size: {F.SMALL}px; font-weight: bold;"
+            f"}}"
+            f"QPushButton:hover {{ background-color: {C.ACCENT_BG}; }}"
+        )
+        # Only show reorder button if multi-reader RFID is available
+        self._reorder_btn.setVisible(self._has_multi_reader())
         self._status_bar.hide()
         self._refresh()
         self._timer.start(1500)
@@ -468,4 +722,6 @@ class ShelfMapScreen(QWidget):
     def on_leave(self):
         self._timer.stop()
         self._selected_slot = None
+        self._reorder_mode = False
+        self._reorder_first = None
         self._status_bar.hide()
