@@ -176,11 +176,13 @@ class ShelfMapScreen(QWidget):
             from core.models import SlotStatus
             is_rfid_occupied = slot.status == SlotStatus.OCCUPIED
             rfid_product = slot.current_product_id or ""
+            rfid_tag_uid = slot.current_tag_id or ""
             status_text = slot.status.value.upper()
         else:
             slot_label = slot.get("slot_id", f"S{index + 1}")
             is_rfid_occupied = slot.get("occupied", False)
             rfid_product = slot.get("product_name", "")
+            rfid_tag_uid = slot.get("tag_id", "")
             status_text = slot.get("status_text", "EMPTY")
 
         # Determine display state
@@ -227,10 +229,13 @@ class ShelfMapScreen(QWidget):
         lbl_status.setAlignment(Qt.AlignmentFlag.AlignCenter)
         layout.addWidget(lbl_status)
 
-        # Product name
+        # Product name — resolve from product_id, rfid_tag table, or show UID
         display_name = ""
         if is_rfid_occupied and rfid_product:
             display_name = self._resolve_product_name(rfid_product)
+        elif is_rfid_occupied and rfid_tag_uid:
+            # No product_id but tag detected — try rfid_tag table then show UID
+            display_name = self._resolve_name_from_tag(rfid_tag_uid)
         elif has_assignment:
             display_name = assignment.get("product_name", "")
 
@@ -295,6 +300,24 @@ class ShelfMapScreen(QWidget):
         except Exception:
             pass
         return product_id
+
+    def _resolve_name_from_tag(self, tag_uid: str) -> str:
+        """Try to resolve tag UID to product name via rfid_tag table.
+        Falls back to showing the tag UID if no mapping found."""
+        try:
+            tag_info = self.app.db.get_rfid_tag_info(tag_uid)
+            if tag_info:
+                name = tag_info.get("product_name") or ""
+                if name:
+                    return name
+                pid = tag_info.get("product_id") or ""
+                if pid:
+                    return self._resolve_product_name(pid)
+        except Exception:
+            pass
+        # Fallback: show abbreviated tag UID so user knows something is there
+        short_uid = tag_uid[-8:] if len(tag_uid) > 8 else tag_uid
+        return f"Tag: {short_uid}"
 
     # ════════════════════════════════════════════════
     # SLOT TAP HANDLING

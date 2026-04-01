@@ -1,14 +1,18 @@
 """
 SmartLocker Edge - Main Entry Point
 
-Starts the Kivy touchscreen application by default.
-Use --cli flag for terminal-only mode (no GUI).
+Starts the Qt touchscreen application by default.
+Supports multiple modes including hardware daemon separation.
 
 Usage:
-    python main.py              # Kivy UI (default)
-    python main.py --cli        # Terminal-only mode (no GUI)
-    python main.py --test       # Force TEST mode
-    python main.py --live       # Force LIVE mode
+    python main.py                      # Qt UI (default, direct hardware access)
+    python main.py --daemon             # Start hardware daemon only (no UI)
+    python main.py --daemon-client      # Qt UI connecting to daemon via socket
+    python main.py --cli                # Terminal-only mode (no GUI)
+    python main.py --kivy               # Legacy Kivy UI
+    python main.py --test               # Force TEST mode
+    python main.py --live               # Force LIVE mode
+    python main.py --port 9800          # Custom daemon port (default: 9800)
 """
 
 import sys
@@ -86,10 +90,10 @@ def main_cli():
 
     # ---- RFID Driver (after weight — so Arduino already claimed its port) ----
     if drv_rfid == "real":
-        from config.settings import RFID_MODULE
+        from config.settings import RFID_MODULE, RFID_USB_PORT
         if RFID_MODULE == "pn532_usb":
             from hal.real.real_rfid_pn532_usb import RealRFIDDriverPN532USB
-            rfid = RealRFIDDriverPN532USB()
+            rfid = RealRFIDDriverPN532USB(port=RFID_USB_PORT)
         elif RFID_MODULE == "rc522":
             from hal.real.real_rfid_rc522 import RealRFIDDriverRC522
             rfid = RealRFIDDriverRC522()
@@ -228,8 +232,30 @@ def main_qt():
     run_qt_app()
 
 
+def main_daemon():
+    """Start hardware daemon only (no UI). UI connects via socket."""
+    from hw_daemon import main as daemon_main
+    daemon_main()
+
+
+def main_daemon_client():
+    """Start Qt UI connecting to hardware daemon via socket."""
+    # Parse port from args
+    port = 9800
+    for i, arg in enumerate(sys.argv):
+        if arg == "--port" and i + 1 < len(sys.argv):
+            port = int(sys.argv[i + 1])
+
+    from ui_qt.app import run_qt_app_daemon
+    run_qt_app_daemon(port=port)
+
+
 if __name__ == "__main__":
-    if "--cli" in sys.argv:
+    if "--daemon" in sys.argv and "--daemon-client" not in sys.argv:
+        main_daemon()
+    elif "--daemon-client" in sys.argv:
+        main_daemon_client()
+    elif "--cli" in sys.argv:
         main_cli()
     elif "--kivy" in sys.argv:
         main_ui()  # Legacy Kivy UI

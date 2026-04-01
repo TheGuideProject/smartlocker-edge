@@ -105,10 +105,11 @@ class InventoryEngine:
         self._db = db
         logger.info("InventoryEngine: database reference set")
 
-    def _lookup_tag_info(self, tag_uid: str) -> Dict:
+    def _lookup_tag_info(self, tag_uid: str, reading: Optional[TagReading] = None) -> Dict:
         """Look up product info for a tag from the database.
-        Returns a dict with product_id, product_name, lot_number, can_size_ml
-        or empty values if DB is unavailable or tag not found."""
+        Falls back to reading.product_data (NFC memory) if DB has no mapping.
+        Auto-saves new mappings to rfid_tag table for future lookups.
+        Returns a dict with product_id, product_name, lot_number, can_size_ml."""
         info = {
             "product_id": "",
             "product_name": "",
@@ -117,15 +118,57 @@ class InventoryEngine:
         }
         if not self._db:
             return info
+
+        # Strategy 1: DB lookup (rfid_tag table)
         try:
             tag_data = self._db.get_rfid_tag_info(tag_uid)
-            if tag_data:
+            if tag_data and tag_data.get("product_id"):
                 info["product_id"] = tag_data.get("product_id") or ""
                 info["product_name"] = tag_data.get("product_name") or ""
                 info["lot_number"] = tag_data.get("batch_number") or ""
                 info["can_size_ml"] = tag_data.get("can_size_ml") or 0
+                return info
         except Exception as e:
             logger.warning(f"Failed to look up tag info for {tag_uid}: {e}")
+
+        # Strategy 2: NFC tag memory (fields on TagReading)
+        has_nfc_data = reading and (reading.ppg_code or reading.product_name)
+        if has_nfc_data:
+            ppg_code = reading.ppg_code or ""
+            name = reading.product_name or ""
+            batch = reading.batch_number or ""
+            color = reading.color or ""
+
+            # Try to resolve product_id from ppg_code
+            product_id = ""
+            if ppg_code:
+                try:
+                    product = self._db.get_product_by_ppg_code(ppg_code)
+                    if product:
+                        product_id = product.get("product_id", "")
+                        name = name or product.get("name", "")
+                except Exception:
+                    pass
+
+            if name or ppg_code:
+                info["product_id"] = product_id
+                info["product_name"] = name or ppg_code
+                info["lot_number"] = batch
+                logger.info(f"Tag {tag_uid}: resolved from NFC memory → {name or ppg_code}")
+
+                # Auto-save to rfid_tag table for future lookups
+                if product_id:
+                    try:
+                        self._db.upsert_rfid_tag(
+                            tag_uid=tag_uid,
+                            product_id=product_id,
+                            can_size_ml=0,
+                            batch_number=batch,
+                        )
+                        logger.info(f"Tag {tag_uid}: auto-saved to rfid_tag table")
+                    except Exception as e:
+                        logger.warning(f"Failed to auto-save tag mapping: {e}")
+
         return info
 
     def _persist_slot_state(self, slot: Slot) -> None:
@@ -301,7 +344,7 @@ class InventoryEngine:
 
             # Update previous state
             self._previous_tags = current_tag_ids
-        else:
+        elif do_rfid:
             # RFID down — clear previous tags to avoid stale state
             self._previous_tags = set()
 
@@ -342,8 +385,8 @@ class InventoryEngine:
         except Exception as e:
             logger.warning(f"Weight read failed during tag appeared: {e}")
 
-        # Look up product info from database
-        tag_info = self._lookup_tag_info(reading.tag_id)
+        # Look up product info from database (+ NFC memory fallback)
+        tag_info = self._lookup_tag_info(reading.tag_id, reading=reading)
 
         # Update slot state
         old_tag = slot.current_tag_id

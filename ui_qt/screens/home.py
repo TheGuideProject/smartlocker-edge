@@ -17,6 +17,7 @@ from PyQt6.QtCore import Qt, QTimer
 from PyQt6.QtGui import QFont
 
 from ui_qt.theme import C, F, S
+from ui_qt.animations import PulsingDot
 
 logger = logging.getLogger("smartlocker.ui.home")
 
@@ -78,16 +79,26 @@ class HomeScreen(QWidget):
 
     def _build_status_bar(self) -> QFrame:
         bar = QFrame()
-        bar.setObjectName("status_bar")
+        bar.setObjectName("top_bar")
+        bar.setStyleSheet(
+            f"QFrame#top_bar {{"
+            f"  background: qlineargradient(x1:0, y1:0, x2:1, y2:0,"
+            f"    stop:0 {C.BG_STATUS}, stop:0.7 {C.BG_STATUS}, stop:1 {C.PRIMARY_BG});"
+            f"  border-bottom: 2px solid {C.PRIMARY};"
+            f"  min-height: {S.STATUS_H}px;"
+            f"  max-height: {S.STATUS_H}px;"
+            f"}}"
+        )
 
         layout = QHBoxLayout(bar)
         layout.setContentsMargins(S.PAD, 0, S.PAD, 0)
         layout.setSpacing(S.GAP)
 
-        # Brand name
-        brand = QLabel("PPG SMARTLOCKER")
+        # Brand name with accent
+        brand = QLabel("\u2693  PPG SMARTLOCKER")
         brand.setStyleSheet(
             f"font-size: {F.H3}px; font-weight: bold; color: {C.PRIMARY};"
+            f"letter-spacing: 2px;"
         )
         layout.addWidget(brand)
 
@@ -97,7 +108,9 @@ class HomeScreen(QWidget):
         self._mode_badge = QLabel()
         layout.addWidget(self._mode_badge)
 
-        # Cloud status badge
+        # Cloud status badge with pulsing dot
+        self._cloud_dot = PulsingDot(color=C.TEXT_MUTED, size=10)
+        layout.addWidget(self._cloud_dot)
         self._cloud_badge = QLabel()
         layout.addWidget(self._cloud_badge)
 
@@ -119,34 +132,64 @@ class HomeScreen(QWidget):
 
     def _build_hero_card(self) -> QFrame:
         card = QFrame()
-        card.setObjectName("card")
+        card.setObjectName("hero_card")
         card.setStyleSheet(
-            f"QFrame#card {{ border-top: 3px solid {C.PRIMARY}; }}"
+            f"QFrame#hero_card {{"
+            f"  background: qlineargradient(x1:0, y1:0, x2:1, y2:1,"
+            f"    stop:0 {C.PRIMARY_BG}, stop:0.5 {C.BG_CARD}, stop:1 {C.SECONDARY_BG});"
+            f"  border: 2px solid {C.PRIMARY};"
+            f"  border-radius: {S.RADIUS}px;"
+            f"}}"
         )
 
         layout = QVBoxLayout(card)
-        layout.setContentsMargins(8, 6, 8, 6)
-        layout.setSpacing(4)
+        layout.setContentsMargins(16, 12, 16, 12)
+        layout.setSpacing(6)
 
-        # Title
+        # Icon + Title row
+        title_row = QHBoxLayout()
+        title_row.setSpacing(8)
+
+        icon_lbl = QLabel("\U0001F3A8")  # paint palette emoji
+        icon_lbl.setStyleSheet(f"font-size: 36px;")
+        title_row.addStretch(1)
+        title_row.addWidget(icon_lbl)
+
         title = QLabel("PAINT NOW!")
-        title.setStyleSheet(f"font-size: {F.H1}px; font-weight: bold; color: {C.PRIMARY};")
-        title.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        layout.addWidget(title)
+        title.setStyleSheet(
+            f"font-size: {F.HERO}px; font-weight: bold; color: {C.PRIMARY};"
+            f"letter-spacing: 2px;"
+        )
+        title_row.addWidget(title)
+        title_row.addStretch(1)
+        layout.addLayout(title_row)
 
         # Subtitle
-        sub = QLabel("Start a mixing operation")
-        sub.setObjectName("subtitle")
+        sub = QLabel("Tap to start a guided mixing operation")
+        sub.setStyleSheet(f"font-size: {F.BODY}px; color: {C.TEXT_SEC};")
         sub.setAlignment(Qt.AlignmentFlag.AlignCenter)
         layout.addWidget(sub)
 
-        layout.addSpacerItem(QSpacerItem(0, 2, QSizePolicy.Policy.Minimum, QSizePolicy.Policy.Fixed))
+        layout.addSpacing(4)
 
-        # Big action button
-        btn = QPushButton("START MIXING")
-        btn.setObjectName("primary")
+        # Big glowing action button
+        btn = QPushButton("\u25B6  START MIXING")
         btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        btn.setMinimumHeight(S.BTN_H)
+        btn.setMinimumHeight(S.BTN_H_LG)
+        btn.setStyleSheet(
+            f"QPushButton {{"
+            f"  background: qlineargradient(x1:0, y1:0, x2:1, y2:0,"
+            f"    stop:0 {C.PRIMARY}, stop:1 {C.SECONDARY});"
+            f"  color: {C.BG_DARK};"
+            f"  border: none; border-radius: {S.RADIUS}px;"
+            f"  font-size: {F.H2}px; font-weight: bold;"
+            f"  letter-spacing: 2px;"
+            f"}}"
+            f"QPushButton:hover {{"
+            f"  background: qlineargradient(x1:0, y1:0, x2:1, y2:0,"
+            f"    stop:0 {C.PRIMARY_DIM}, stop:1 {C.SECONDARY});"
+            f"}}"
+        )
         btn.clicked.connect(self._on_paint_now)
         layout.addWidget(btn)
 
@@ -156,16 +199,34 @@ class HomeScreen(QWidget):
 
     def _build_status_panel(self) -> QFrame:
         card = QFrame()
-        card.setObjectName("card")
+        card.setObjectName("status_panel")
+        card.setStyleSheet(
+            f"QFrame#status_panel {{"
+            f"  background-color: {C.BG_CARD};"
+            f"  border: 1px solid {C.BORDER};"
+            f"  border-left: 4px solid {C.SECONDARY};"
+            f"  border-radius: {S.RADIUS}px;"
+            f"  padding: {S.PAD_CARD}px;"
+            f"}}"
+        )
 
         layout = QVBoxLayout(card)
-        layout.setContentsMargins(8, 6, 8, 6)
+        layout.setContentsMargins(12, 8, 8, 8)
         layout.setSpacing(3)
 
-        # Section header
-        header = QLabel("STATUS")
-        header.setObjectName("section")
-        layout.addWidget(header)
+        # Section header with live dot
+        header_row = QHBoxLayout()
+        self._status_dot = PulsingDot(color=C.SECONDARY, size=8)
+        self._status_dot.start()
+        header_row.addWidget(self._status_dot)
+        header = QLabel("  LIVE STATUS")
+        header.setStyleSheet(
+            f"font-size: {F.SMALL}px; font-weight: bold;"
+            f"color: {C.SECONDARY}; letter-spacing: 1px;"
+        )
+        header_row.addWidget(header)
+        header_row.addStretch(1)
+        layout.addLayout(header_row)
 
         # Slot count row
         self._slot_label = self._status_row(layout, "Slots:", "--")
@@ -214,13 +275,13 @@ class HomeScreen(QWidget):
         grid.setSpacing(S.GAP)
 
         tiles = [
-            ("CHECK CHART", "View maintenance\nschedule & paint specs",
+            ("\U0001F4CB  CHECK CHART", "Maintenance\n& paint specs",
              C.SECONDARY, "chart_viewer"),
-            ("INVENTORY", "Browse slot contents\n& stock levels",
+            ("\U0001F4E6  INVENTORY", "Slot contents\n& stock levels",
              C.SUCCESS, "inventory"),
-            ("SENSORS", "Test RFID, weight,\nLED & buzzer",
+            ("\U0001F50C  SENSORS", "Test RFID, weight\nLED & buzzer",
              C.ACCENT, "sensor_test"),
-            ("SETTINGS", "Device config,\npairing & system",
+            ("\u2699\uFE0F  SETTINGS", "Config, pairing\n& system",
              C.TEXT_MUTED, "settings"),
         ]
 
@@ -387,6 +448,8 @@ class HomeScreen(QWidget):
                 f"border: 1px solid {C.SUCCESS}; border-radius: 4px;"
                 f"padding: 2px 8px; font-size: {F.TINY}px; font-weight: bold;"
             )
+            self._cloud_dot.set_color(C.SUCCESS)
+            self._cloud_dot.start()
         else:
             self._cloud_badge.setText("OFFLINE")
             self._cloud_badge.setStyleSheet(
@@ -394,6 +457,8 @@ class HomeScreen(QWidget):
                 f"border: 1px solid {C.DANGER}; border-radius: 4px;"
                 f"padding: 2px 8px; font-size: {F.TINY}px; font-weight: bold;"
             )
+            self._cloud_dot.set_color(C.DANGER)
+            self._cloud_dot.stop()
 
     def _update_status_panel(self):
         # Slot count

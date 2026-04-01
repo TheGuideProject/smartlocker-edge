@@ -17,6 +17,7 @@ from PyQt6.QtWidgets import (
 from PyQt6.QtCore import Qt, QTimer
 
 from ui_qt.theme import C, F, S
+from ui_qt.animations import ProgressRing, PulsingDot
 from core.models import MixingState, ApplicationMethod
 from hal.interfaces import BuzzerPattern
 
@@ -281,19 +282,35 @@ class MixingScreen(QWidget):
         wc_lay.setContentsMargins(_PAD, _PAD, _PAD, _PAD)
         wc_lay.setSpacing(4)
 
+        # Weight display row: ring + text
+        weight_row = QHBoxLayout()
+        weight_row.setSpacing(16)
+
+        # Circular progress ring
+        self._pour_ring = ProgressRing(size=90, thickness=6)
+        self._pour_ring.set_color(C.PRIMARY)
+        weight_row.addWidget(self._pour_ring, alignment=Qt.AlignmentFlag.AlignCenter)
+
+        # Weight text column
+        weight_text = QVBoxLayout()
+        weight_text.setSpacing(2)
+
         self._lbl_weight_current = QLabel("0.00 kg")
         self._lbl_weight_current.setStyleSheet(
             f"font-size: 48px; font-weight: bold; color: {C.PRIMARY};"
         )
         self._lbl_weight_current.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        wc_lay.addWidget(self._lbl_weight_current)
+        weight_text.addWidget(self._lbl_weight_current)
 
         self._lbl_weight_target = QLabel("Target: --- kg")
         self._lbl_weight_target.setStyleSheet(
             f"font-size: {_F_MED}px; color: {C.TEXT_SEC};"
         )
         self._lbl_weight_target.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        wc_lay.addWidget(self._lbl_weight_target)
+        weight_text.addWidget(self._lbl_weight_target)
+
+        weight_row.addLayout(weight_text, stretch=1)
+        wc_lay.addLayout(weight_row)
 
         # Progress bar
         self._progress_weight = QProgressBar()
@@ -924,6 +941,10 @@ class MixingScreen(QWidget):
             f"border-radius: 6px; min-height: 16px; max-height: 16px; }}"
             f"QProgressBar::chunk {{ background-color: {color}; border-radius: 6px; }}"
         )
+
+        # Update circular progress ring
+        self._pour_ring.set_value(progress / 100.0)
+        self._pour_ring.set_color(color)
 
     def _on_confirm_pour(self):
         self._weight_timer.stop()

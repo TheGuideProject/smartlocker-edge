@@ -1,0 +1,15 @@
+[Unit]
+Description=SmartLocker Edge Device
+After=network.target
+
+[Service]
+Type=simple
+User=pi
+WorkingDirectory=/home/pi/smartlocker-edge
+ExecStart=/home/pi/smartlocker-edge/smartlocker.sh
+Restart=on-failure
+RestartSec=5
+Environment=DISPLAY=:0
+
+[Install]
+WantedBy=multi-user.target

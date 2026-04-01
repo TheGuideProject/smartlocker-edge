@@ -18,6 +18,7 @@ from PyQt6.QtCore import Qt, QTimer, QEvent, QObject
 from PyQt6.QtGui import QFont
 
 from ui_qt.theme import STYLESHEET, C, F, S
+from ui_qt.animations import AnimatedStackedWidget, SplashWidget, fade_in
 
 logger = logging.getLogger("smartlocker.qt_app")
 
@@ -85,10 +86,12 @@ class ClickSoundFilter(QObject):
 class SmartLockerWindow(QMainWindow):
     """Main application window."""
 
-    def __init__(self):
+    def __init__(self, daemon_port: int = 0):
         super().__init__()
         self.setWindowTitle("SmartLocker")
         self.setMinimumSize(800, 480)
+        self._daemon_port = daemon_port
+        self._daemon_conn = None  # DaemonConnection when in daemon-client mode
 
         # Initialize system (drivers, engines, DB)
         self._init_system()
@@ -96,16 +99,22 @@ class SmartLockerWindow(QMainWindow):
         # Navigation stack
         self._nav_stack = []
 
-        # Central stacked widget
-        self.stack = QStackedWidget()
+        # Central animated stacked widget (smooth transitions)
+        self.stack = AnimatedStackedWidget()
         self.setCentralWidget(self.stack)
+
+        # Splash screen (shown during startup)
+        self._splash = SplashWidget()
+        self._splash.start()
+
+        self._screens = {}
+        self._add_screen("_splash", self._splash)
 
         # Import and create screens
         from ui_qt.screens.home import HomeScreen
         from ui_qt.screens.sensor_test import SensorTestScreen
         from ui_qt.screens.settings import SettingsScreen
 
-        self._screens = {}
         self._add_screen("home", HomeScreen(self))
         self._add_screen("sensor_test", SensorTestScreen(self))
         self._add_screen("settings", SettingsScreen(self))
@@ -125,14 +134,20 @@ class SmartLockerWindow(QMainWindow):
             "tag_writer": "ui_qt.screens.tag_writer:TagWriterScreen",
         }
 
-        # Start on home (or pairing if not paired)
+        # Show splash, then transition to home after 2s
+        self.go_screen("_splash")
+        self._splash.set_status("Connecting to cloud...")
+
         if self.cloud.is_paired:
-            self.go_screen("home")
             self.sync_engine.start()
+            self._splash.set_status("Cloud connected. Loading...")
             logger.info("Cloud: PAIRED — sync started")
         else:
-            self.go_screen("home")  # Home for now, can switch to pairing
+            self._splash.set_status("Offline mode. Loading...")
             logger.info("Cloud: NOT PAIRED")
+
+        # Transition splash → home after 2 seconds
+        QTimer.singleShot(2000, self._finish_splash)
 
         # Hardware worker thread (polls sensors in background, never blocks UI)
         from core.hardware_worker import HardwareWorker
@@ -161,8 +176,16 @@ class SmartLockerWindow(QMainWindow):
         self._screens[name] = widget
         self.stack.addWidget(widget)
 
-    def go_screen(self, name):
-        """Navigate to a screen by name."""
+    def _finish_splash(self):
+        """Transition from splash to home screen."""
+        self._splash.stop()
+        self.go_screen("home", transition="fade")
+
+    def go_screen(self, name, transition: str = "slide_left"):
+        """Navigate to a screen by name with animated transition.
+
+        Transitions: slide_left, slide_right, slide_up, fade, none.
+        """
         if name not in self._screens:
             # Try lazy loading
             if name in self._lazy_screens:
@@ -171,22 +194,42 @@ class SmartLockerWindow(QMainWindow):
                 logger.warning(f"Screen not found: {name}")
                 return
 
+        # Leave current screen
+        current_name = self._nav_stack[-1] if self._nav_stack else None
+        if current_name and current_name in self._screens:
+            current = self._screens[current_name]
+            if hasattr(current, "on_leave"):
+                current.on_leave()
+
         self._nav_stack.append(name)
         screen = self._screens[name]
-        self.stack.setCurrentWidget(screen)
+        index = self.stack.indexOf(screen)
+
+        if transition == "none" or not hasattr(self.stack, 'slide_to'):
+            self.stack.setCurrentWidget(screen)
+        else:
+            self.stack.slide_to(index, direction=transition)
+
         if hasattr(screen, "on_enter"):
             screen.on_enter()
 
-    def go_back(self):
-        """Navigate to previous screen."""
+    def go_back(self, transition: str = "slide_right"):
+        """Navigate to previous screen with animation."""
         if len(self._nav_stack) > 1:
             current = self._nav_stack.pop()
             if hasattr(self._screens.get(current), "on_leave"):
                 self._screens[current].on_leave()
             target = self._nav_stack[-1]
-            self.stack.setCurrentWidget(self._screens[target])
-            if hasattr(self._screens[target], "on_enter"):
-                self._screens[target].on_enter()
+            screen = self._screens[target]
+            index = self.stack.indexOf(screen)
+
+            if transition == "none" or not hasattr(self.stack, 'slide_to'):
+                self.stack.setCurrentWidget(screen)
+            else:
+                self.stack.slide_to(index, direction=transition)
+
+            if hasattr(screen, "on_enter"):
+                screen.on_enter()
         else:
             self.go_screen("home")
 
@@ -276,64 +319,85 @@ class SmartLockerWindow(QMainWindow):
         else:
             self.mode = "test"
 
-        # ── Weight (FIRST — Arduino must claim serial port before RFID) ──
-        if drv_weight == "real":
-            from config.settings import WEIGHT_MODE
-            if WEIGHT_MODE == "hx711_direct":
-                from hal.real.real_weight_hx711 import RealWeightDriverHX711
-                self.weight = RealWeightDriverHX711()
-            else:
-                # Arduino serial bridge (also provides LED control)
-                from hal.real.real_weight import RealWeightDriver
-                self.weight = RealWeightDriver()
-        else:
-            from hal.fake.fake_weight import FakeWeightDriver
-            self.weight = FakeWeightDriver(channels=["shelf1", "mixing_scale"])
+        # ── DAEMON CLIENT MODE: use socket proxy drivers ──
+        if self._daemon_port:
+            from hal.socket_client import create_socket_drivers
+            try:
+                conn, self.rfid, self.weight, self.led, self.buzzer = \
+                    create_socket_drivers(port=self._daemon_port)
+                self._daemon_conn = conn
+                self.mode = conn.daemon_mode or "daemon"
+                self.driver_status = conn.daemon_drivers or {
+                    "rfid": "socket", "weight": "socket",
+                    "led": "socket", "buzzer": "socket",
+                }
+                logger.info(f"Connected to hardware daemon on port {self._daemon_port}")
+                print(f"  Daemon client mode: connected on port {self._daemon_port}")
+            except ConnectionError as e:
+                logger.error(f"Daemon connection failed: {e}")
+                print(f"  WARNING: Daemon connection failed — falling back to fake drivers")
+                self._daemon_port = 0  # Fall through to direct init
+                self._daemon_conn = None
 
-        # ── RFID (after weight — so Arduino already claimed its port) ──
-        if drv_rfid == "real":
-            from config.settings import RFID_MODULE, RFID_USB_PORT
-            if RFID_MODULE == "pn532_usb":
-                from hal.real.real_rfid_pn532_usb import RealRFIDDriverPN532USB
-                self.rfid = RealRFIDDriverPN532USB(port=RFID_USB_PORT)
-            elif RFID_MODULE == "rc522":
-                from hal.real.real_rfid_rc522 import RealRFIDDriverRC522
-                self.rfid = RealRFIDDriverRC522()
+        # ── DIRECT MODE: initialize drivers locally ──
+        if not self._daemon_port:
+            # Weight (FIRST — Arduino must claim serial port before RFID)
+            if drv_weight == "real":
+                from config.settings import WEIGHT_MODE
+                if WEIGHT_MODE == "hx711_direct":
+                    from hal.real.real_weight_hx711 import RealWeightDriverHX711
+                    self.weight = RealWeightDriverHX711()
+                else:
+                    # Arduino serial bridge (also provides LED control)
+                    from hal.real.real_weight import RealWeightDriver
+                    self.weight = RealWeightDriver()
             else:
-                from hal.real.real_rfid import RealRFIDDriver
-                self.rfid = RealRFIDDriver()
-        else:
-            from hal.fake.fake_rfid import FakeRFIDDriver
-            self.rfid = FakeRFIDDriver()
+                from hal.fake.fake_weight import FakeWeightDriver
+                self.weight = FakeWeightDriver(channels=["shelf1", "mixing_scale"])
 
-        # ── LED ──
-        if drv_led == "real":
-            from config.settings import WEIGHT_MODE
-            if WEIGHT_MODE == "arduino_serial":
-                # Arduino drives both HX711 and WS2812B LEDs on same serial
-                from hal.real.real_led_arduino import RealLEDDriverArduino
-                self.led = RealLEDDriverArduino()
-                self.led.set_weight_driver(self.weight)
+            # RFID (after weight — so Arduino already claimed its port)
+            if drv_rfid == "real":
+                from config.settings import RFID_MODULE, RFID_USB_PORT
+                if RFID_MODULE == "pn532_usb":
+                    from hal.real.real_rfid_pn532_usb import RealRFIDDriverPN532USB
+                    self.rfid = RealRFIDDriverPN532USB(port=RFID_USB_PORT)
+                elif RFID_MODULE == "rc522":
+                    from hal.real.real_rfid_rc522 import RealRFIDDriverRC522
+                    self.rfid = RealRFIDDriverRC522()
+                else:
+                    from hal.real.real_rfid import RealRFIDDriver
+                    self.rfid = RealRFIDDriver()
             else:
-                from hal.real.real_led import RealLEDDriver
-                self.led = RealLEDDriver()
-        else:
-            from hal.fake.fake_led import FakeLEDDriver
-            self.led = FakeLEDDriver()
+                from hal.fake.fake_rfid import FakeRFIDDriver
+                self.rfid = FakeRFIDDriver()
 
-        # ── Buzzer ──
-        if drv_buzzer == "real":
-            from config.settings import WEIGHT_MODE as _bwm
-            if _bwm == "arduino_serial":
-                from hal.real.real_buzzer_arduino import RealBuzzerDriverArduino
-                self.buzzer = RealBuzzerDriverArduino()
-                self.buzzer.set_weight_driver(self.weight)
+            # LED
+            if drv_led == "real":
+                from config.settings import WEIGHT_MODE
+                if WEIGHT_MODE == "arduino_serial":
+                    from hal.real.real_led_arduino import RealLEDDriverArduino
+                    self.led = RealLEDDriverArduino()
+                    self.led.set_weight_driver(self.weight)
+                else:
+                    from hal.real.real_led import RealLEDDriver
+                    self.led = RealLEDDriver()
             else:
-                from hal.real.real_buzzer import RealBuzzerDriver
-                self.buzzer = RealBuzzerDriver()
-        else:
-            from hal.fake.fake_buzzer import FakeBuzzerDriver
-            self.buzzer = FakeBuzzerDriver()
+                from hal.fake.fake_led import FakeLEDDriver
+                self.led = FakeLEDDriver()
+
+            # Buzzer
+            if drv_buzzer == "real":
+                from config.settings import WEIGHT_MODE as _bwm
+                if _bwm == "arduino_serial":
+                    from hal.real.real_buzzer_arduino import RealBuzzerDriverArduino
+                    self.buzzer = RealBuzzerDriverArduino()
+                    self.buzzer.set_weight_driver(self.weight)
+                else:
+                    from hal.real.real_buzzer import RealBuzzerDriver
+                    self.buzzer = RealBuzzerDriver()
+            else:
+                from hal.fake.fake_buzzer import FakeBuzzerDriver
+                self.buzzer = FakeBuzzerDriver()
 
         # Apply buzzer mode filter (mute / alarms_only / all)
         buzzer_mode = admin_cfg.get("buzzer_mode", "all") if admin_cfg else "all"
@@ -674,6 +738,12 @@ class SmartLockerWindow(QMainWindow):
             self.inventory_engine.shutdown()
         except Exception:
             pass
+        # Disconnect daemon client if connected
+        if self._daemon_conn:
+            try:
+                self._daemon_conn.disconnect()
+            except Exception:
+                pass
         try:
             self.db.close()
         except Exception:
@@ -683,11 +753,26 @@ class SmartLockerWindow(QMainWindow):
 
 
 def run_qt_app():
-    """Entry point for PySide6 UI."""
+    """Entry point for PySide6 UI (direct hardware access)."""
     app = QApplication(sys.argv)
     app.setStyleSheet(STYLESHEET)
 
     window = SmartLockerWindow()
     window.showFullScreen()  # Full screen on RPi touch display
+
+    sys.exit(app.exec())
+
+
+def run_qt_app_daemon(port: int = 9800):
+    """Entry point for PySide6 UI connecting to hardware daemon via socket.
+
+    Instead of initializing real/fake HAL drivers directly, uses socket
+    proxy drivers that forward all operations to hw_daemon.py.
+    """
+    app = QApplication(sys.argv)
+    app.setStyleSheet(STYLESHEET)
+
+    window = SmartLockerWindow(daemon_port=port)
+    window.showFullScreen()
 
     sys.exit(app.exec())
