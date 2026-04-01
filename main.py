@@ -154,8 +154,7 @@ def main_cli():
     )
 
     if not inventory_engine.initialize():
-        print("ERROR: Failed to initialize sensors.")
-        sys.exit(1)
+        print("WARNING: Some sensors failed to initialize (continuing with partial drivers)")
 
     cloud = CloudClient()
     sync_engine = SyncEngine(db, cloud)
