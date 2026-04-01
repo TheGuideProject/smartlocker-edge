@@ -201,28 +201,7 @@ class InventoryEngine:
         weight_ok = self.weight.initialize()
         led_ok = self.led.initialize()
         rfid_ok = self.rfid.initialize()
-        buzzer_ok = False
-
-        # Only buzzer uses GPIO directly — retry with cleanup if it fails
-        for attempt in range(1, self.GPIO_MAX_RETRIES + 1):
-            buzzer_ok = self.buzzer.initialize()
-            if buzzer_ok:
-                break
-            if attempt < self.GPIO_MAX_RETRIES:
-                logger.warning(
-                    f"InventoryEngine: Buzzer GPIO init failed (attempt {attempt}/{self.GPIO_MAX_RETRIES}), "
-                    f"cleaning up and retrying in {self.GPIO_RETRY_DELAY_S}s..."
-                )
-                self._cleanup_gpio()
-                import time
-                time.sleep(self.GPIO_RETRY_DELAY_S)
-            else:
-                logger.error(
-                    f"InventoryEngine: Buzzer GPIO failed after {self.GPIO_MAX_RETRIES} attempts. "
-                    f"Auto-rebooting RPi to recover..."
-                )
-                self._auto_reboot()
-                break
+        buzzer_ok = self.buzzer.initialize()
 
         ok = rfid_ok and weight_ok and led_ok and buzzer_ok
 

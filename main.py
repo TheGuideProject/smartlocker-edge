@@ -116,8 +116,14 @@ def main_cli():
 
     # ---- Buzzer Driver ----
     if drv_buzzer == "real":
-        from hal.real.real_buzzer import RealBuzzerDriver
-        buzzer = RealBuzzerDriver()
+        from config.settings import WEIGHT_MODE as _bwm
+        if _bwm == "arduino_serial":
+            from hal.real.real_buzzer_arduino import RealBuzzerDriverArduino
+            buzzer = RealBuzzerDriverArduino()
+            buzzer.set_weight_driver(weight)
+        else:
+            from hal.real.real_buzzer import RealBuzzerDriver
+            buzzer = RealBuzzerDriver()
     else:
         from hal.fake.fake_buzzer import FakeBuzzerDriver
         buzzer = FakeBuzzerDriver()

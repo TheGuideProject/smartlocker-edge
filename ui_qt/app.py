@@ -277,8 +277,14 @@ class SmartLockerWindow(QMainWindow):
 
         # ── Buzzer ──
         if drv_buzzer == "real":
-            from hal.real.real_buzzer import RealBuzzerDriver
-            self.buzzer = RealBuzzerDriver()
+            from config.settings import WEIGHT_MODE as _bwm
+            if _bwm == "arduino_serial":
+                from hal.real.real_buzzer_arduino import RealBuzzerDriverArduino
+                self.buzzer = RealBuzzerDriverArduino()
+                self.buzzer.set_weight_driver(self.weight)
+            else:
+                from hal.real.real_buzzer import RealBuzzerDriver
+                self.buzzer = RealBuzzerDriver()
         else:
             from hal.fake.fake_buzzer import FakeBuzzerDriver
             self.buzzer = FakeBuzzerDriver()

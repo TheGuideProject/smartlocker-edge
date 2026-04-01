@@ -1,52 +1,51 @@
 /*
- * SmartLocker Nano Firmware v1.1
+ * SmartLocker Nano Firmware v1.2
  * ==============================
  * Arduino Nano as bridge for:
  *   - 2x HX711 load cell amplifiers (shelf + mixing scale)
- *   - 1x KYX-B10BGYR-4 LED bar graph (10 segments: green/yellow/red)
+ *   - 1x KYX-B10BGYR LED bar graph (8 segments used)
  *   - 4x Red indicator LEDs (panel mount, one per shelf slot)
+ *   - 1x Piezo buzzer (confirmation beeps, warnings)
+ *
+ * Pin allocation:
+ *   D0,D1  = Serial USB (reserved)
+ *   D2,D3  = HX711 Shelf (DT, SCK)
+ *   D4,D5  = HX711 Mix (DT, SCK)
+ *   D6-D13 = Bar graph segments 0-7 (through 220ohm resistors)
+ *   A0     = Piezo buzzer
+ *   A1     = (free for future use)
+ *   A2-A5  = Shelf slot LEDs (through resistors)
  *
  * Serial protocol (115200 baud, JSON lines):
  *
- *   RPi -> Arduino (commands):
+ *   RPi -> Arduino:
  *     {"cmd":"ping"}
  *     {"cmd":"read","ch":"shelf"}
  *     {"cmd":"read","ch":"mix"}
  *     {"cmd":"tare","ch":"shelf"}
  *     {"cmd":"tare","ch":"mix"}
  *     {"cmd":"tare","ch":"all"}
- *     {"cmd":"bar","pct":75}                // fill bar to 75%
- *     {"cmd":"bar","seg":7}                 // light first 7 segments
- *     {"cmd":"bar_off"}                     // bar all off
- *     {"cmd":"slot","idx":0,"on":1}         // shelf LED 0 on
- *     {"cmd":"slot","idx":2,"on":0}         // shelf LED 2 off
- *     {"cmd":"slot_all","on":0}             // all shelf LEDs off
- *     {"cmd":"led_off"}                     // everything off
+ *     {"cmd":"bar","pct":75}
+ *     {"cmd":"bar","seg":6}
+ *     {"cmd":"bar_off"}
+ *     {"cmd":"slot","idx":0,"on":1}
+ *     {"cmd":"slot_all","on":0}
+ *     {"cmd":"led_off"}
+ *     {"cmd":"buzz","pattern":"confirm"}
+ *     {"cmd":"buzz","freq":1000,"dur":200}
+ *     {"cmd":"buzz_off"}
  *     {"cmd":"cal","ch":"shelf","scale":9.81}
  *     {"cmd":"status"}
  *
- *   Arduino -> RPi (responses):
- *     {"status":"ok","fw":"1.1"}
+ *   Arduino -> RPi:
+ *     {"status":"ok","fw":"1.2"}
  *     {"ch":"shelf","g":1234.5,"raw":8388607,"stable":true}
- *     {"ok":"bar","seg":7}
- *     {"ok":"slot","idx":0}
+ *     {"ok":"bar","seg":6}
+ *     {"ok":"buzz","pattern":"confirm"}
  *     {"err":"unknown command"}
  *
- * Hardware wiring:
- *   HX711 Shelf:  DT=D2, SCK=D3
- *   HX711 Mix:    DT=D4, SCK=D5
- *   Bar graph:    seg0=D6 .. seg7=D13, seg8=A0, seg9=A1
- *                 (each through 220ohm resistor)
- *   Shelf LEDs:   slot0=A2, slot1=A3, slot2=A4, slot3=A5
- *                 (each through appropriate resistor)
- *
- * Bar graph segment colors (KYX-B10BGYR-4):
- *   seg 0-3  = GREEN  (0-40%)
- *   seg 4-6  = YELLOW (40-70%)
- *   seg 7-9  = RED    (70-100%)
- *
  * Libraries required:
- *   - HX711 by Bogdan Necula (or Rob Tillaart)
+ *   - HX711 by Bogdan Necula
  *   - ArduinoJson v7 by Benoit Blanchon
  */
 
@@ -63,12 +62,14 @@
 #define MIX_DT     4
 #define MIX_SCK    5
 
-// LED bar graph (10 segments) - KYX-B10BGYR-4
-// Segment 0 = bottom (green), segment 9 = top (red)
-const int BAR_PINS[10] = {6, 7, 8, 9, 10, 11, 12, 13, A0, A1};
-#define NUM_BAR_SEGS 10
+// LED bar graph (8 segments used of KYX-B10BGYR)
+const int BAR_PINS[8] = {6, 7, 8, 9, 10, 11, 12, 13};
+#define NUM_BAR_SEGS 8
 
-// Shelf indicator LEDs (red, panel mount)
+// Buzzer
+#define BUZZER_PIN A0
+
+// Shelf indicator LEDs
 const int SLOT_PINS[4] = {A2, A3, A4, A5};
 #define NUM_SLOTS 4
 
@@ -78,7 +79,7 @@ const int SLOT_PINS[4] = {A2, A3, A4, A5};
 #define SAMPLES_NORMAL    5
 #define SAMPLES_TARE      15
 #define STABILITY_WINDOW  3
-#define STABILITY_THRESH  15.0  // grams
+#define STABILITY_THRESH  15.0
 
 // ============================================================
 // GLOBALS
@@ -86,13 +87,11 @@ const int SLOT_PINS[4] = {A2, A3, A4, A5};
 HX711 scaleShelf;
 HX711 scaleMix;
 
-// Calibration
 float shelfScale  = 9.81;
 float mixScale    = 20.69;
 long  shelfOffset = 0;
 long  mixOffset   = 0;
 
-// Stability tracking
 float shelfHistory[STABILITY_WINDOW];
 float mixHistory[STABILITY_WINDOW];
 int   shelfHistIdx = 0;
@@ -100,15 +99,55 @@ int   mixHistIdx   = 0;
 bool  shelfStable  = false;
 bool  mixStable    = false;
 
-// Serial buffer
 char serialBuf[256];
 int  serialPos = 0;
 
-// Bar graph current state
-int barSegments = 0;  // how many segments are lit (0-10)
+int barSegments = 0;
 
-// HX711 lazy init flag
 bool hx711_initialized = false;
+
+// Buzzer async state
+unsigned long buzzEndTime = 0;
+bool buzzing = false;
+
+// ============================================================
+// BUZZER PATTERNS
+// ============================================================
+void buzzConfirm() {
+    tone(BUZZER_PIN, 1800, 80);
+    delay(100);
+    tone(BUZZER_PIN, 2400, 80);
+}
+
+void buzzWarning() {
+    tone(BUZZER_PIN, 1200, 150);
+    delay(200);
+    tone(BUZZER_PIN, 1200, 150);
+}
+
+void buzzError() {
+    tone(BUZZER_PIN, 400, 500);
+}
+
+void buzzTick() {
+    tone(BUZZER_PIN, 2000, 30);
+}
+
+void buzzTarget() {
+    for (int f = 1000; f <= 2500; f += 300) {
+        tone(BUZZER_PIN, f, 50);
+        delay(60);
+    }
+}
+
+void buzzAlarm() {
+    for (int i = 0; i < 5; i++) {
+        tone(BUZZER_PIN, 3000, 100);
+        delay(150);
+        tone(BUZZER_PIN, 2000, 100);
+        delay(150);
+    }
+}
 
 // ============================================================
 // SETUP
@@ -118,19 +157,33 @@ void setup() {
     delay(500);
     Serial.println("{\"boot\":\"starting\"}");
 
-    // Initialize bar graph pins
+    // Bar graph pins
     for (int i = 0; i < NUM_BAR_SEGS; i++) {
         pinMode(BAR_PINS[i], OUTPUT);
         digitalWrite(BAR_PINS[i], LOW);
     }
-    Serial.println("{\"boot\":\"bar_ok\"}");
 
-    // Initialize shelf LED pins
+    // Buzzer pin
+    pinMode(BUZZER_PIN, OUTPUT);
+    digitalWrite(BUZZER_PIN, LOW);
+
+    // Shelf LED pins
     for (int i = 0; i < NUM_SLOTS; i++) {
         pinMode(SLOT_PINS[i], OUTPUT);
         digitalWrite(SLOT_PINS[i], LOW);
     }
-    Serial.println("{\"boot\":\"slots_ok\"}");
+
+    // Startup animation
+    for (int i = 0; i < NUM_BAR_SEGS; i++) {
+        digitalWrite(BAR_PINS[i], HIGH);
+        delay(40);
+    }
+    buzzConfirm();
+    delay(150);
+    for (int i = NUM_BAR_SEGS - 1; i >= 0; i--) {
+        digitalWrite(BAR_PINS[i], LOW);
+        delay(40);
+    }
 
     // Init stability history
     for (int i = 0; i < STABILITY_WINDOW; i++) {
@@ -145,6 +198,12 @@ void setup() {
 // MAIN LOOP
 // ============================================================
 void loop() {
+    // Stop buzzer when duration elapsed
+    if (buzzing && millis() >= buzzEndTime) {
+        noTone(BUZZER_PIN);
+        buzzing = false;
+    }
+
     while (Serial.available()) {
         char c = Serial.read();
         if (c == '\n' || c == '\r') {
@@ -157,6 +216,29 @@ void loop() {
             serialBuf[serialPos++] = c;
         }
     }
+}
+
+// ============================================================
+// HX711 LAZY INIT
+// ============================================================
+void initHX711() {
+    if (hx711_initialized) return;
+    Serial.println("{\"info\":\"hx711_init_start\"}");
+
+    scaleShelf.begin(SHELF_DT, SHELF_SCK);
+    scaleMix.begin(MIX_DT, MIX_SCK);
+
+    if (scaleShelf.wait_ready_timeout(2000)) {
+        shelfOffset = scaleShelf.read_average(SAMPLES_TARE);
+        Serial.println("{\"info\":\"shelf_tared\"}");
+    }
+    if (scaleMix.wait_ready_timeout(2000)) {
+        mixOffset = scaleMix.read_average(SAMPLES_TARE);
+        Serial.println("{\"info\":\"mix_tared\"}");
+    }
+
+    hx711_initialized = true;
+    Serial.println("{\"info\":\"hx711_init_done\"}");
 }
 
 // ============================================================
@@ -175,10 +257,10 @@ void processCommand(const char* json) {
 
     // ---- PING ----
     if (strcmp(cmd, "ping") == 0) {
-        Serial.println("{\"status\":\"ok\",\"fw\":\"1.1\"}");
+        Serial.println("{\"status\":\"ok\",\"fw\":\"1.2\"}");
     }
 
-    // ---- INIT HX711 (manual trigger) ----
+    // ---- INIT HX711 ----
     else if (strcmp(cmd, "init_hx") == 0) {
         initHX711();
     }
@@ -226,20 +308,18 @@ void processCommand(const char* json) {
         }
     }
 
-    // ---- BAR GRAPH (percentage or segment count) ----
+    // ---- BAR GRAPH ----
     else if (strcmp(cmd, "bar") == 0) {
         int seg = -1;
-
         if (doc.containsKey("pct")) {
             int pct = doc["pct"] | 0;
             if (pct < 0) pct = 0;
             if (pct > 100) pct = 100;
-            seg = (pct * NUM_BAR_SEGS + 50) / 100;  // round
+            seg = (pct * NUM_BAR_SEGS + 50) / 100;
         }
         else if (doc.containsKey("seg")) {
             seg = doc["seg"] | 0;
         }
-
         if (seg >= 0 && seg <= NUM_BAR_SEGS) {
             setBar(seg);
             char resp[48];
@@ -281,12 +361,52 @@ void processCommand(const char* json) {
         Serial.println(resp);
     }
 
+    // ---- BUZZER (named pattern) ----
+    else if (strcmp(cmd, "buzz") == 0) {
+        if (doc.containsKey("pattern")) {
+            const char* pat = doc["pattern"] | "";
+            if (strcmp(pat, "confirm") == 0)       buzzConfirm();
+            else if (strcmp(pat, "warning") == 0)  buzzWarning();
+            else if (strcmp(pat, "error") == 0)    buzzError();
+            else if (strcmp(pat, "tick") == 0)      buzzTick();
+            else if (strcmp(pat, "target") == 0)    buzzTarget();
+            else if (strcmp(pat, "alarm") == 0)     buzzAlarm();
+            else {
+                Serial.println("{\"err\":\"unknown pattern\"}");
+                return;
+            }
+            char resp[48];
+            snprintf(resp, sizeof(resp), "{\"ok\":\"buzz\",\"pattern\":\"%s\"}", pat);
+            Serial.println(resp);
+        }
+        else if (doc.containsKey("freq")) {
+            int freq = doc["freq"] | 1000;
+            int dur = doc["dur"] | 200;
+            tone(BUZZER_PIN, freq, dur);
+            buzzing = true;
+            buzzEndTime = millis() + dur;
+            Serial.println("{\"ok\":\"buzz\"}");
+        }
+        else {
+            Serial.println("{\"err\":\"buzz_args\"}");
+        }
+    }
+
+    // ---- BUZZER OFF ----
+    else if (strcmp(cmd, "buzz_off") == 0) {
+        noTone(BUZZER_PIN);
+        buzzing = false;
+        Serial.println("{\"ok\":\"buzz_off\"}");
+    }
+
     // ---- EVERYTHING OFF ----
     else if (strcmp(cmd, "led_off") == 0) {
         setBar(0);
         for (int i = 0; i < NUM_SLOTS; i++) {
             digitalWrite(SLOT_PINS[i], LOW);
         }
+        noTone(BUZZER_PIN);
+        buzzing = false;
         Serial.println("{\"ok\":\"led_off\"}");
     }
 
@@ -310,11 +430,11 @@ void processCommand(const char* json) {
 
     // ---- STATUS ----
     else if (strcmp(cmd, "status") == 0) {
-        bool shelf_ok = scaleShelf.is_ready();
-        bool mix_ok = scaleMix.is_ready();
+        bool shelf_ok = hx711_initialized ? scaleShelf.is_ready() : false;
+        bool mix_ok = hx711_initialized ? scaleMix.is_ready() : false;
         char resp[128];
         snprintf(resp, sizeof(resp),
-            "{\"status\":\"ok\",\"shelf_ok\":%s,\"mix_ok\":%s,\"bar\":%d,\"slots\":%d,\"fw\":\"1.1\"}",
+            "{\"status\":\"ok\",\"shelf_ok\":%s,\"mix_ok\":%s,\"bar\":%d,\"slots\":%d,\"buzz\":true,\"fw\":\"1.2\"}",
             shelf_ok ? "true" : "false",
             mix_ok ? "true" : "false",
             NUM_BAR_SEGS, NUM_SLOTS);
@@ -328,37 +448,11 @@ void processCommand(const char* json) {
 }
 
 // ============================================================
-// HX711 LAZY INIT
-// ============================================================
-void initHX711() {
-    if (hx711_initialized) return;
-
-    Serial.println("{\"info\":\"hx711_init_start\"}");
-
-    scaleShelf.begin(SHELF_DT, SHELF_SCK);
-    scaleMix.begin(MIX_DT, MIX_SCK);
-
-    // Tare if ready (with timeout)
-    if (scaleShelf.wait_ready_timeout(2000)) {
-        shelfOffset = scaleShelf.read_average(SAMPLES_TARE);
-        Serial.println("{\"info\":\"shelf_tared\"}");
-    }
-    if (scaleMix.wait_ready_timeout(2000)) {
-        mixOffset = scaleMix.read_average(SAMPLES_TARE);
-        Serial.println("{\"info\":\"mix_tared\"}");
-    }
-
-    hx711_initialized = true;
-    Serial.println("{\"info\":\"hx711_init_done\"}");
-}
-
-// ============================================================
 // BAR GRAPH HELPER
 // ============================================================
 void setBar(int segments) {
     if (segments < 0) segments = 0;
     if (segments > NUM_BAR_SEGS) segments = NUM_BAR_SEGS;
-
     barSegments = segments;
     for (int i = 0; i < NUM_BAR_SEGS; i++) {
         digitalWrite(BAR_PINS[i], (i < segments) ? HIGH : LOW);
@@ -366,7 +460,7 @@ void setBar(int segments) {
 }
 
 // ============================================================
-// READ HX711 AND SEND JSON RESPONSE
+// READ HX711 AND SEND JSON
 // ============================================================
 void readAndSend(HX711* scale, const char* chName,
                  float calScale, long calOffset,
@@ -379,14 +473,10 @@ void readAndSend(HX711* scale, const char* chName,
         return;
     }
 
-    // Read averaged raw value
     long raw = scale->read_average(SAMPLES_NORMAL);
-
-    // Convert to grams (inverted: heavier = lower raw value)
     float grams = (float)(calOffset - raw) / calScale;
     if (grams < 0) grams = 0;
 
-    // Update stability tracking
     history[*histIdx] = grams;
     *histIdx = (*histIdx + 1) % STABILITY_WINDOW;
 
@@ -397,7 +487,6 @@ void readAndSend(HX711* scale, const char* chName,
     }
     *stable = (maxVal - minVal) < STABILITY_THRESH;
 
-    // Send JSON response
     char gramsStr[16];
     dtostrf(grams, 1, 1, gramsStr);
 
