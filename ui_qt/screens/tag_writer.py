@@ -158,10 +158,10 @@ class TagWriterScreen(QWidget):
         self._input_batch = _styled_input("e.g. 80008800")
         left.addWidget(self._input_batch)
 
-        # Color
-        left.addWidget(_label_above("COLOR (optional)"))
-        self._input_color = _styled_input("e.g. WHITE, RED, YELLOWGREEN")
-        left.addWidget(self._input_color)
+        # Color dropdown (populated from product's colors_json)
+        left.addWidget(_label_above("COLOR"))
+        self._combo_color = _styled_combo()
+        left.addWidget(self._combo_color)
 
         # Can size with presets
         left.addWidget(_label_above("CAN SIZE (ml)"))
@@ -425,7 +425,50 @@ class TagWriterScreen(QWidget):
         self._on_product_changed()
 
     def _on_product_changed(self):
+        self._load_colors_for_product()
         self._update_preview()
+
+    def _load_colors_for_product(self):
+        """Populate color dropdown from the selected product's colors_json."""
+        self._combo_color.blockSignals(True)
+        self._combo_color.clear()
+
+        idx = self._combo_product.currentIndex()
+        if idx < 0 or not self._products:
+            self._combo_color.addItem("No product selected")
+            self._combo_color.blockSignals(False)
+            return
+
+        product = self._products[idx]
+        colors_raw = product.get("colors_json", "[]")
+
+        # Parse colors_json (could be string or list)
+        import json as _json
+        colors = []
+        if isinstance(colors_raw, str):
+            try:
+                colors = _json.loads(colors_raw) if colors_raw else []
+            except Exception:
+                colors = []
+        elif isinstance(colors_raw, list):
+            colors = colors_raw
+
+        if colors:
+            for c in colors:
+                if isinstance(c, dict):
+                    name = c.get("name", "")
+                    hex_c = c.get("hex", "")
+                    label = name if name else hex_c
+                    if hex_c and name:
+                        label = f"{name}  ({hex_c})"
+                    self._combo_color.addItem(label, name or hex_c)
+                elif isinstance(c, str):
+                    self._combo_color.addItem(c, c)
+        else:
+            self._combo_color.addItem("NONE (no colors defined)")
+            self._combo_color.setItemData(0, "NONE")
+
+        self._combo_color.blockSignals(False)
 
     # ══════════════════════════════════════════════════════
     # TAG SCANNING (background poll)
@@ -544,7 +587,11 @@ class TagWriterScreen(QWidget):
         ppg_code = product.get("ppg_code", "000000")
         name = product.get("name", "UNKNOWN")
         batch = self._input_batch.text().strip() or "00000000"
-        color = self._input_color.text().strip().upper() or "NONE"
+
+        # Color from dropdown
+        color_idx = self._combo_color.currentIndex()
+        color = (self._combo_color.itemData(color_idx) or "NONE") if color_idx >= 0 else "NONE"
+        color = str(color).strip().upper() or "NONE"
 
         return f"{ppg_code}|{batch}|{name}|{color}"
 
@@ -744,12 +791,12 @@ class TagWriterScreen(QWidget):
     def showEvent(self, event):
         super().showEvent(event)
         self._input_batch.textChanged.connect(self._update_preview)
-        self._input_color.textChanged.connect(self._update_preview)
+        self._combo_color.currentIndexChanged.connect(self._update_preview)
 
     def hideEvent(self, event):
         super().hideEvent(event)
         try:
             self._input_batch.textChanged.disconnect(self._update_preview)
-            self._input_color.textChanged.disconnect(self._update_preview)
+            self._combo_color.currentIndexChanged.disconnect(self._update_preview)
         except Exception:
             pass
