@@ -488,6 +488,23 @@ class SmartLockerWindow(QMainWindow):
         self.cloud = CloudClient()
         self.sync_engine = SyncEngine(self.db, self.cloud)
 
+        # Arduino OTA flash: provide callback to release serial port before avrdude
+        def _release_arduino_serial():
+            """Close Arduino serial connection and return port path for OTA flash."""
+            port = None
+            try:
+                ser = self.weight.get_serial() if hasattr(self.weight, 'get_serial') else None
+                if ser and hasattr(ser, 'port'):
+                    port = ser.port
+                if hasattr(self.weight, 'shutdown'):
+                    self.weight.shutdown()
+                    logger.info(f"Arduino serial released for OTA flash (port={port})")
+            except Exception as e:
+                logger.warning(f"Error releasing Arduino serial: {e}")
+            return port
+
+        self.sync_engine.set_arduino_release(_release_arduino_serial)
+
         # Set monitoring references so heartbeats include sensor health + telemetry
         self.cloud.set_monitoring_refs(
             driver_status=self.driver_status,

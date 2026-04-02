@@ -199,6 +199,21 @@ def main_cli():
     cloud = CloudClient()
     sync_engine = SyncEngine(db, cloud)
 
+    # Arduino OTA flash: release serial before avrdude
+    def _release_arduino_serial():
+        port = None
+        try:
+            ser = weight.get_serial() if hasattr(weight, 'get_serial') else None
+            if ser and hasattr(ser, 'port'):
+                port = ser.port
+            if hasattr(weight, 'shutdown'):
+                weight.shutdown()
+        except Exception:
+            pass
+        return port
+
+    sync_engine.set_arduino_release(_release_arduino_serial)
+
     if cloud.is_paired:
         info = cloud.get_pairing_info()
         print(f"  Cloud: PAIRED — {info.get('vessel_name', 'N/A')}")

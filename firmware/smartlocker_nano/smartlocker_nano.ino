@@ -13,8 +13,9 @@
  *   D4,D5  = HX711 Mix (DT, SCK)
  *   D6-D13 = Bar graph segments 0-7 (through 220ohm resistors)
  *   A0     = Piezo buzzer
- *   A1     = (free for future use)
- *   A2-A5  = Shelf slot LEDs (through resistors)
+ *   A1     = Shelf slot 2 LED (through 220ohm resistor)
+ *   A2     = Shelf slot 1 LED (through 220ohm resistor)
+ *   A3-A5  = Shelf slot 3-4 LEDs (through resistors, future)
  *
  * Serial protocol (115200 baud, JSON lines):
  *
@@ -70,7 +71,7 @@ const int BAR_PINS[8] = {6, 7, 8, 9, 10, 11, 12, 13};
 #define BUZZER_PIN A0
 
 // Shelf indicator LEDs
-const int SLOT_PINS[4] = {A2, A3, A4, A5};
+const int SLOT_PINS[4] = {A2, A1, A4, A5};
 #define NUM_SLOTS 4
 
 // ============================================================

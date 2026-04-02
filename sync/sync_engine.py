@@ -71,6 +71,8 @@ class SyncEngine:
             logger.warning(f"UpdateManager not available: {e}")
             self._update_manager = None
 
+        self._arduino_release_cb = None  # set via set_arduino_release()
+
         # WebSocket real-time client
         self._realtime = None
         if cloud.is_paired and getattr(settings, 'WS_ENABLED', False):
@@ -89,6 +91,16 @@ class SyncEngine:
             except Exception as e:
                 logger.warning(f"WebSocket client not available: {e}")
                 self._realtime = None
+
+    def set_arduino_release(self, callback):
+        """Set callback for releasing Arduino serial before OTA flash.
+
+        callback() should close the Arduino serial and return the port path.
+        """
+        self._arduino_release_cb = callback
+        if self._update_manager:
+            self._update_manager.set_arduino_release(callback)
+        logger.debug("Arduino release callback registered for OTA flash")
 
     def start(self) -> None:
         """Start the background sync thread."""
