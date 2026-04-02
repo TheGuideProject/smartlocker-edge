@@ -60,20 +60,45 @@ DEFAULT_PORT = 9800
 
 def init_drivers(force_mode: Optional[str] = None):
     """Initialize HAL drivers. Returns (rfid, weight, led, buzzer, driver_status, mode)."""
+    import json as _json
     from config.settings import (
         MODE, DRIVER_RFID, DRIVER_WEIGHT, DRIVER_LED, DRIVER_BUZZER,
     )
 
     cfg_mode = force_mode or MODE
+    drv_rfid = DRIVER_RFID
+    drv_weight = DRIVER_WEIGHT
+    drv_led = DRIVER_LED
+    drv_buzzer = DRIVER_BUZZER
+
     if cfg_mode == "test":
         drv_rfid = drv_weight = drv_led = drv_buzzer = "fake"
     elif cfg_mode == "live":
         drv_rfid = drv_weight = drv_led = drv_buzzer = "real"
-    else:
-        drv_rfid = DRIVER_RFID
-        drv_weight = DRIVER_WEIGHT
-        drv_led = DRIVER_LED
-        drv_buzzer = DRIVER_BUZZER
+
+    # Load admin DB overrides (same as direct Qt mode in app.py)
+    db = None
+    try:
+        from persistence.database import Database
+        db = Database()
+        db.connect()
+        admin_cfg = db.get_admin_config()
+        if admin_cfg:
+            drv_rfid = admin_cfg.get("driver_rfid", drv_rfid)
+            drv_weight = admin_cfg.get("driver_weight", drv_weight)
+            drv_led = admin_cfg.get("driver_led", drv_led)
+            drv_buzzer = admin_cfg.get("driver_buzzer", drv_buzzer)
+            import config.settings as _s
+            if "weight_mode" in admin_cfg:
+                _s.WEIGHT_MODE = admin_cfg["weight_mode"]
+            if "weight_serial_port" in admin_cfg:
+                _s.WEIGHT_SERIAL_PORT = admin_cfg["weight_serial_port"]
+                _s.ARDUINO_SERIAL_PORT = admin_cfg["weight_serial_port"]
+            if "rfid_usb_port" in admin_cfg:
+                _s.RFID_USB_PORT = admin_cfg["rfid_usb_port"]
+            logger.info("Daemon: admin DB overrides applied")
+    except Exception as e:
+        logger.warning(f"Daemon: could not load admin DB overrides: {e}")
 
     # Weight FIRST (Arduino must claim serial port before RFID)
     if drv_weight == "real":
@@ -88,14 +113,20 @@ def init_drivers(force_mode: Optional[str] = None):
         from hal.fake.fake_weight import FakeWeightDriver
         weight = FakeWeightDriver(channels=["shelf1", "mixing_scale"])
 
-    # RFID
+    # RFID — pass skip_ports so multi-reader excludes Arduino's port
     if drv_rfid == "real":
         from config.settings import RFID_MODULE, RFID_USB_PORT
         if RFID_MODULE == "pn532_multi_usb":
-            # Multi-reader: N × PN532 via USB hub (demo: 4, production: 40-50)
             from config.settings import RFID_READER_MAP
             from hal.real.real_rfid_multi_pn532 import RealRFIDMultiPN532USB
-            rfid = RealRFIDMultiPN532USB(reader_configs=RFID_READER_MAP or None)
+            skip = set()
+            arduino_port = getattr(weight, '_port', None)
+            if arduino_port:
+                skip.add(arduino_port)
+            rfid = RealRFIDMultiPN532USB(
+                reader_configs=RFID_READER_MAP or None,
+                skip_ports=skip,
+            )
         elif RFID_MODULE == "pn532_usb":
             from hal.real.real_rfid_pn532_usb import RealRFIDDriverPN532USB
             rfid = RealRFIDDriverPN532USB(port=RFID_USB_PORT)
@@ -683,6 +714,23 @@ def main():
     rfid, weight, led, buzzer, driver_status, mode = init_drivers(force_mode)
     print(f"  Mode: {mode.upper()}")
     print(f"  Drivers: {driver_status}")
+
+    # Restore saved reader mapping from DB (same as app.py and main.py)
+    if hasattr(rfid, 'apply_saved_mapping'):
+        try:
+            import json as _json2
+            from persistence.database import Database
+            _db = Database()
+            _db.connect()
+            saved_map_json = _db.get_config("rfid_reader_map")
+            if saved_map_json:
+                saved_map = _json2.loads(saved_map_json)
+                count = rfid.apply_saved_mapping(saved_map)
+                if count:
+                    print(f"  Reader mapping restored: {count} readers remapped")
+            _db.close()
+        except Exception as e:
+            logger.warning(f"Daemon: failed to load saved reader map: {e}")
 
     daemon = HardwareDaemon(rfid, weight, led, buzzer, driver_status, mode, port)
 

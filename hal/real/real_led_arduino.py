@@ -68,9 +68,9 @@ class RealLEDDriverArduino(LEDDriverInterface):
             self._initialized = True
             return True
         else:
-            logger.warning("[ARDUINO LED] No response, marking as initialized anyway")
-            self._initialized = True
-            return True
+            logger.warning("[ARDUINO LED] No response from Arduino — LED init FAILED")
+            self._initialized = False
+            return False
 
     # ============================================================
     # SHELF SLOT LEDs (required by LEDDriverInterface)

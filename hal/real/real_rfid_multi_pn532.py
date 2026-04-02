@@ -37,10 +37,10 @@ except ImportError:
 try:
     from adafruit_pn532.uart import PN532_UART
     HAS_ADAFRUIT = True
-except ImportError:
+except ImportError as _e:
     HAS_ADAFRUIT = False
     PN532_UART = None
-    logger.warning("[MultiPN532] adafruit-circuitpython-pn532 not installed")
+    logger.warning(f"[MultiPN532] Failed to import adafruit_pn532.uart: {_e}")
 
 
 USER_PAGE_START = 4
