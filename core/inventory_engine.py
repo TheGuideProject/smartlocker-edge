@@ -478,11 +478,51 @@ class InventoryEngine:
                 "slot_id": slot.slot_id,
             }
 
-        # Check if can returned to wrong slot
+        # Check if can returned to wrong slot — BUT allow cross-slot moves
         if was_removed and old_tag and reading.tag_id != old_tag:
-            event_type = EventType.CAN_WRONG_SLOT
-            self.led.set_slot(slot.slot_id, LEDColor.RED, LEDPattern.BLINK_FAST)
-            self.buzzer.play(BuzzerPattern.WARNING)
+            # Is this tag tracked as removed from another slot? → it's a MOVE
+            source_slot = self._find_slot_with_removed_tag(reading.tag_id)
+            if source_slot:
+                # Valid cross-slot move (e.g., s3 → s1)
+                event_type = EventType.CAN_MOVED
+                event_data["source_slot"] = source_slot.slot_id
+                event_data["move_type"] = "cross_slot"
+                self.led.set_slot(slot.slot_id, LEDColor.GREEN, LEDPattern.SOLID)
+                self.buzzer.play(BuzzerPattern.CONFIRM)
+                # Clean up the source slot
+                source_slot.status = SlotStatus.EMPTY
+                source_slot.current_tag_id = None
+                source_slot.current_product_id = None
+                self._removal_times.pop(source_slot.slot_id, None)
+                self._persist_slot_state(source_slot)
+                self.led.clear_slot(source_slot.slot_id)
+                logger.info(
+                    f"Can moved: {source_slot.slot_id} → {slot.slot_id} "
+                    f"(tag={reading.tag_id})"
+                )
+            else:
+                # Truly wrong can — no source slot found
+                event_type = EventType.CAN_WRONG_SLOT
+                self.led.set_slot(slot.slot_id, LEDColor.RED, LEDPattern.BLINK_FAST)
+                self.buzzer.play(BuzzerPattern.WARNING)
+
+        # If tag appeared on EMPTY slot but was removed from another → also clean source
+        if not was_removed:
+            source_slot = self._find_slot_with_removed_tag(reading.tag_id)
+            if source_slot and source_slot.slot_id != slot.slot_id:
+                event_type = EventType.CAN_MOVED
+                event_data["source_slot"] = source_slot.slot_id
+                event_data["move_type"] = "cross_slot"
+                source_slot.status = SlotStatus.EMPTY
+                source_slot.current_tag_id = None
+                source_slot.current_product_id = None
+                self._removal_times.pop(source_slot.slot_id, None)
+                self._persist_slot_state(source_slot)
+                self.led.clear_slot(source_slot.slot_id)
+                logger.info(
+                    f"Can moved: {source_slot.slot_id} → {slot.slot_id} "
+                    f"(tag={reading.tag_id})"
+                )
 
         # Persist slot state to database
         self._persist_slot_state(slot)
@@ -570,6 +610,17 @@ class InventoryEngine:
                 else EventConfirmation.UNCONFIRMED.value
             ),
         ))
+
+    def _find_slot_with_removed_tag(self, tag_id: str):
+        """Find a slot that had this tag removed (for cross-slot move detection).
+
+        Returns the source Slot if found, otherwise None.
+        """
+        for slot in self._reader_to_slot.values():
+            if (slot.status in (SlotStatus.REMOVED, SlotStatus.IN_USE_ELSEWHERE)
+                    and slot.current_tag_id == tag_id):
+                return slot
+        return None
 
     def _check_removal_timeouts(self) -> None:
         """Check if any removed cans have been gone too long."""

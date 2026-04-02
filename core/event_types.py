@@ -24,6 +24,7 @@ class EventType(Enum):
     WEIGHT_CHANGED = "weight_changed"
     UNAUTHORIZED_REMOVAL = "unauthorized_removal"
     CAN_WRONG_SLOT = "can_wrong_slot"
+    CAN_MOVED = "can_moved"                 # Can moved from one slot to another
     CAN_CONSUMED = "can_consumed"           # Timeout: can not returned
 
     # Mixing events
