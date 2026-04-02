@@ -112,74 +112,120 @@ class RealWeightDriver(WeightDriverInterface):
     def initialize(self) -> bool:
         """
         Open serial connection to the Arduino Nano.
-        Auto-detects port if configured port fails.
-        Sends a ping to verify communication.
+        Auto-detects port by opening ALL candidate ports at once,
+        waiting once for boot (3.5s), then pinging each.
+        This works regardless of USB port enumeration order.
         """
         if not HAS_SERIAL:
             logger.warning("[ARDUINO WEIGHT] Cannot initialize: pyserial not available.")
             self._initialized = False
             return False
 
-        # Try configured port first, then auto-detect
-        ports_to_try = [self._port]
+        # ── Collect all candidate ports ──
+        ports_to_try = []
+        # Configured port first (if it exists)
         try:
-            available = serial.tools.list_ports.comports()
-            for p in available:
-                # Arduino Nano typically shows as CH340 or FTDI
-                if any(kw in (p.description or "").lower() for kw in ["ch340", "ftdi", "arduino", "usb serial"]):
-                    if p.device not in ports_to_try:
-                        ports_to_try.append(p.device)
-                        logger.info(f"[ARDUINO WEIGHT] Found potential port: {p.device} ({p.description})")
+            import os
+            if os.path.exists(self._port):
+                ports_to_try.append(self._port)
         except Exception:
             pass
 
+        try:
+            available = serial.tools.list_ports.comports()
+            for p in available:
+                if any(kw in (p.description or "").lower()
+                       for kw in ["ch340", "ftdi", "arduino", "usb serial", "usb-serial"]):
+                    if p.device not in ports_to_try:
+                        ports_to_try.append(p.device)
+                        logger.info(f"[ARDUINO WEIGHT] Candidate port: {p.device} ({p.description})")
+        except Exception:
+            pass
+
+        if not ports_to_try:
+            logger.error("[ARDUINO WEIGHT] No USB serial ports found")
+            self._initialized = False
+            return False
+
+        # ── Open ALL ports at once (Arduino resets on open) ──
+        opened = {}  # port -> serial.Serial
         for port in ports_to_try:
-            is_primary = (port == self._port)  # Configured port gets longer boot time
             try:
-                self._serial = serial.Serial(
-                    port=port,
-                    baudrate=self._baud,
-                    timeout=1.0,
-                )
+                s = serial.Serial(port=port, baudrate=self._baud, timeout=1.0)
+                opened[port] = s
+            except Exception as e:
+                logger.debug(f"[ARDUINO WEIGHT] Cannot open {port}: {e}")
 
-                # Arduino resets on serial connect — clone Nanos need 3.5s to boot.
-                # PN532 modules don't need boot time, so use shorter wait for non-primary.
-                boot_wait = 3.5 if is_primary else 1.5
-                time.sleep(boot_wait)
+        if not opened:
+            logger.error("[ARDUINO WEIGHT] Could not open any serial port")
+            self._initialized = False
+            return False
 
+        # ── Single boot wait — Arduino resets on serial open, needs 3.5s ──
+        logger.info(f"[ARDUINO WEIGHT] Opened {len(opened)} ports, waiting 3.5s for Arduino boot...")
+        time.sleep(3.5)
+
+        # ── Read boot data and identify Arduino vs PN532 ──
+        arduino_port = None
+        for port, s in list(opened.items()):
+            try:
                 boot_data = b""
-                if self._serial.in_waiting:
-                    boot_data = self._serial.read(self._serial.in_waiting)
+                if s.in_waiting:
+                    boot_data = s.read(s.in_waiting)
 
                 if boot_data:
-                    logger.info(f"[ARDUINO WEIGHT] Boot data on {port}: {boot_data[:80]!r}")
+                    logger.info(f"[ARDUINO WEIGHT] Boot data on {port}: {boot_data[:100]!r}")
 
-                # Fast reject: if we got binary data with 0x00 bytes, it's likely PN532
-                if boot_data and b'\x00\x55' in boot_data:
-                    logger.info(f"[ARDUINO WEIGHT] Skipping {port} (PN532 binary detected)")
-                    self._serial.close()
-                    self._serial = None
+                # Fast reject: PN532 sends binary with 0x00 bytes
+                if boot_data and (b'\x00\x55' in boot_data or b'\x00\x00' in boot_data):
+                    logger.info(f"[ARDUINO WEIGHT] Skipping {port} (PN532 binary)")
+                    s.close()
+                    del opened[port]
                     continue
 
-                self._serial.reset_input_buffer()
+                # Fast accept: Arduino boot messages
+                if b'"boot"' in boot_data or b'"ready"' in boot_data:
+                    logger.info(f"[ARDUINO WEIGHT] Arduino boot detected on {port}!")
+                    arduino_port = port
+                    break
 
-                # Ping to verify — retry once if first attempt fails (boot timing)
-                self._send({"cmd": "ping"})
-                response = self._recv(timeout=2.0)
+            except Exception as e:
+                logger.debug(f"[ARDUINO WEIGHT] Error reading boot data on {port}: {e}")
 
-                if not response and is_primary:
-                    # Retry: Arduino may need a bit more time
-                    logger.info(f"[ARDUINO WEIGHT] Retrying ping on {port}...")
-                    time.sleep(1.0)
-                    self._serial.reset_input_buffer()
-                    self._send({"cmd": "ping"})
-                    response = self._recv(timeout=2.0)
+        # ── Ping remaining candidates (Arduino first if detected by boot data) ──
+        if arduino_port:
+            ping_order = [arduino_port] + [p for p in opened if p != arduino_port]
+        else:
+            ping_order = list(opened.keys())
+
+        for port in ping_order:
+            s = opened.get(port)
+            if not s or not s.is_open:
+                continue
+            try:
+                s.reset_input_buffer()
+                line = json.dumps({"cmd": "ping"}, separators=(',', ':')) + "\n"
+                s.write(line.encode("utf-8"))
+                s.flush()
+
+                s.timeout = 2.0
+                resp_line = s.readline().decode("utf-8").strip()
+                response = json.loads(resp_line) if resp_line else None
 
                 if response and response.get("status") == "ok":
                     fw = response.get("fw", "?")
                     logger.info(f"[ARDUINO WEIGHT] Connected on {port} (firmware v{fw})")
+                    self._serial = s
                     self._port = port
                     self._initialized = True
+
+                    # Close all other ports
+                    for other_port, other_s in opened.items():
+                        if other_port != port:
+                            try:
+                                other_s.close()
+                            except Exception:
+                                pass
 
                     # Initialize cached readings
                     for name in self._channels:
@@ -195,21 +241,19 @@ class RealWeightDriver(WeightDriverInterface):
                         name="Arduino-weight-reader",
                     )
                     self._reader_thread.start()
-
                     return True
                 else:
                     logger.info(f"[ARDUINO WEIGHT] No ping response on {port} (not Arduino)")
-                    self._serial.close()
-                    self._serial = None
 
             except Exception as e:
-                logger.warning(f"[ARDUINO WEIGHT] Failed on {port}: {e}")
-                if self._serial:
-                    try:
-                        self._serial.close()
-                    except Exception:
-                        pass
-                    self._serial = None
+                logger.debug(f"[ARDUINO WEIGHT] Ping failed on {port}: {e}")
+
+        # ── Cleanup: close all ports if Arduino not found ──
+        for s in opened.values():
+            try:
+                s.close()
+            except Exception:
+                pass
 
         logger.error("[ARDUINO WEIGHT] Could not connect to Arduino on any port")
         self._initialized = False
