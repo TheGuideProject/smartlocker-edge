@@ -88,8 +88,8 @@ const int SLOT_PINS[4] = {A2, A1, A4, A5};
 HX711 scaleShelf;
 HX711 scaleMix;
 
-float shelfScale  = 9.81;
-float mixScale    = 20.69;
+float shelfScale  = 21.58;
+float mixScale    = 22.58;
 long  shelfOffset = 0;
 long  mixOffset   = 0;
 

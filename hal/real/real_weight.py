@@ -234,6 +234,9 @@ class RealWeightDriver(WeightDriverInterface):
                             raw_value=0, timestamp=time.time(),
                         )
 
+                    # Restore saved calibration from DB → Arduino
+                    self._restore_calibration_from_db()
+
                     # Start background reader
                     self._reader_running = True
                     self._reader_thread = threading.Thread(
@@ -258,6 +261,47 @@ class RealWeightDriver(WeightDriverInterface):
         logger.error("[ARDUINO WEIGHT] Could not connect to Arduino on any port")
         self._initialized = False
         return False
+
+    def _restore_calibration_from_db(self):
+        """Restore saved calibration factors from DB and send to Arduino.
+        This ensures correct calibration even after Arduino reboot."""
+        try:
+            from persistence.database import Database
+            db = Database()
+            db.connect()
+            restored = 0
+            for channel in self._channels:
+                cal_json = db.get_config(f"hx711_cal_{channel}")
+                if cal_json:
+                    cal = json.loads(cal_json)
+                    scale = cal.get("scale", 0)
+                    if scale > 0.1:  # Sanity check — reject invalid values
+                        arduino_ch = _to_arduino_ch(channel)
+                        with self._lock:
+                            self._send({"cmd": "cal", "ch": arduino_ch,
+                                        "scale": round(scale, 4)})
+                            resp = self._recv(timeout=2.0)
+                        if resp and "ok" in resp:
+                            logger.info(
+                                f"[ARDUINO WEIGHT] Restored calibration for "
+                                f"{channel}: scale={scale:.4f}"
+                            )
+                            restored += 1
+                        else:
+                            logger.warning(
+                                f"[ARDUINO WEIGHT] Failed to restore cal for "
+                                f"{channel}: {resp}"
+                            )
+                    else:
+                        logger.warning(
+                            f"[ARDUINO WEIGHT] Skipping bad cal for {channel}: "
+                            f"scale={scale}"
+                        )
+            db.close()
+            if restored:
+                logger.info(f"[ARDUINO WEIGHT] Restored {restored} calibration(s) from DB")
+        except Exception as e:
+            logger.warning(f"[ARDUINO WEIGHT] Could not restore calibration: {e}")
 
     def _reader_loop(self):
         """Background thread: continuously polls weight from Arduino."""

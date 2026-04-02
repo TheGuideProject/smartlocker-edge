@@ -127,8 +127,8 @@ HX711_SHELF_DT = 5                    # Shelf scale: GPIO pin for HX711 DOUT
 HX711_SHELF_SCK = 6                   # Shelf scale: GPIO pin for HX711 SCK
 HX711_MIX_DT = 23                     # Mixing scale: GPIO pin for HX711 DOUT
 HX711_MIX_SCK = 24                    # Mixing scale: GPIO pin for HX711 SCK
-HX711_SHELF_SCALE = 9.81              # Shelf: raw units per gram (recalibrated 2026-03-30)
-HX711_MIX_SCALE = 20.69              # Mixing: raw units per gram (recalibrated 2026-03-30)
+HX711_SHELF_SCALE = 21.58             # Shelf: raw units per gram (recalibrated 2026-04-03, post cable swap)
+HX711_MIX_SCALE = 22.58              # Mixing: raw units per gram (recalibrated 2026-04-03)
 HX711_SCALE_FACTOR = HX711_SHELF_SCALE  # Legacy alias
 # Legacy aliases (backward compat)
 HX711_DT_PIN = HX711_SHELF_DT
