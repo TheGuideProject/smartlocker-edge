@@ -141,13 +141,29 @@ WEIGHT_SERIAL_BAUD = 115200           # Baud rate
 ARDUINO_SERIAL_PORT = "/dev/ttyUSB1"  # Legacy alias (backward compat)
 ARDUINO_BAUD_RATE = 115200            # Legacy alias (backward compat)
 
-# LED Strip - WS2812B via SPI/PWM
-# Library: rpi_ws281x (recommended) or adafruit-circuitpython-neopixel
+# LED Mode: "arduino_serial" (via Arduino), "ws2812b" (NeoPixel strip), "gpio" (individual red LEDs)
+# When WEIGHT_MODE is "arduino_serial" AND LED_MODE is not set, LEDs go via Arduino.
+# Set LED_MODE = "gpio" to use individual red LEDs wired directly to RPi GPIO pins.
+LED_MODE = "gpio"   # <-- "gpio" for individual red LEDs, "ws2812b" for NeoPixel strip
+
+# LED Strip - WS2812B via SPI/PWM (only used when LED_MODE = "ws2812b")
 LED_SPI_BUS = 0
 LED_SPI_DEVICE = 0
 LED_COUNT = 12                   # Total LEDs in strip (one per slot)
 LED_GPIO_PIN = 18                # Data pin (must support PWM: 12, 13, 18, 19)
 LED_BRIGHTNESS = 128             # 0-255 brightness level
+
+# Individual Red LED GPIO pins (only used when LED_MODE = "gpio")
+# Wiring: GPIO → 150Ω resistor → LED (+) → LED (−) → GND
+# Add/remove entries to match your slot count.
+LED_GPIO_SLOT_PINS = {
+    "shelf1_slot1": 17,          # Pin 11
+    "shelf1_slot2": 27,          # Pin 13
+    "shelf1_slot3": 22,          # Pin 15
+    "shelf1_slot4": 25,          # Pin 22
+    # "shelf1_slot5": 12,        # Pin 32  (uncomment when wired)
+    # "shelf1_slot6": 16,        # Pin 36  (uncomment when wired)
+}
 
 # Slot Configuration (cloud-configurable; default 4 for dev)
 SLOT_COUNT = 4

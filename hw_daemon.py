@@ -143,7 +143,11 @@ def init_drivers(force_mode: Optional[str] = None):
     # LED
     if drv_led == "real":
         from config.settings import WEIGHT_MODE
-        if WEIGHT_MODE == "arduino_serial":
+        _led_mode = getattr(__import__('config.settings', fromlist=['LED_MODE']), 'LED_MODE', None)
+        if _led_mode == "gpio":
+            from hal.real.real_led_gpio import RealLEDDriverGPIO
+            led = RealLEDDriverGPIO()
+        elif WEIGHT_MODE == "arduino_serial" and _led_mode != "ws2812b":
             from hal.real.real_led_arduino import RealLEDDriverArduino
             led = RealLEDDriverArduino()
             led.set_weight_driver(weight)
