@@ -144,7 +144,7 @@ ARDUINO_BAUD_RATE = 115200            # Legacy alias (backward compat)
 # LED Mode: "arduino_serial" (via Arduino), "ws2812b" (NeoPixel strip), "gpio" (individual red LEDs)
 # When WEIGHT_MODE is "arduino_serial" AND LED_MODE is not set, LEDs go via Arduino.
 # Set LED_MODE = "gpio" to use individual red LEDs wired directly to RPi GPIO pins.
-LED_MODE = "gpio"   # <-- "gpio" for individual red LEDs, "ws2812b" for NeoPixel strip
+LED_MODE = ""        # "" = auto (Arduino if WEIGHT_MODE=arduino_serial), "gpio" = direct RPi GPIO, "ws2812b" = NeoPixel
 
 # LED Strip - WS2812B via SPI/PWM (only used when LED_MODE = "ws2812b")
 LED_SPI_BUS = 0
