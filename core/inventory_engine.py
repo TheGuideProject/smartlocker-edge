@@ -280,6 +280,20 @@ class InventoryEngine:
             logger.info(f"RFID skip_ports updated to actual Arduino port: {actual_arduino_port}")
 
         rfid_ok = self.rfid.initialize()
+
+        # Apply saved reader↔slot mapping AFTER init (readers exist now)
+        if rfid_ok and self._db and hasattr(self.rfid, 'apply_saved_mapping'):
+            try:
+                import json
+                saved_map_json = self._db.get_config("rfid_reader_map")
+                if saved_map_json:
+                    saved_map = json.loads(saved_map_json)
+                    count = self.rfid.apply_saved_mapping(saved_map)
+                    if count:
+                        logger.info(f"RFID reader mapping restored: {count} readers remapped")
+            except Exception as e:
+                logger.warning(f"Failed to apply saved reader mapping: {e}")
+
         buzzer_ok = self.buzzer.initialize()
 
         ok = rfid_ok and weight_ok and led_ok and buzzer_ok

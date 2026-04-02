@@ -421,6 +421,15 @@ class RealRFIDMultiPN532USB(RFIDDriverInterface):
                 )
         return results
 
+    def poll_reader(self, reader_id: str) -> List[TagReading]:
+        """Poll a single specific reader. Much faster than poll_tags() for writes."""
+        if not self._initialized:
+            return []
+        reader = self._readers.get(reader_id)
+        if not reader:
+            return []
+        return self._poll_one_reader(reader)
+
     def get_reader_ids(self) -> List[str]:
         """Return list of all configured reader IDs."""
         return list(self._readers.keys())

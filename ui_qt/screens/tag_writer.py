@@ -140,6 +140,11 @@ class TagWriterScreen(QWidget):
         left_hdr = section_header(Icon.EDIT, "WRITE DATA", C.ACCENT)
         left.addWidget(left_hdr)
 
+        # Reader/Slot selector (which PN532 to write on)
+        left.addWidget(_label_above("WRITE ON READER"))
+        self._combo_reader = _styled_combo()
+        left.addWidget(self._combo_reader)
+
         # Product dropdown
         left.addWidget(_label_above("PRODUCT"))
         self._combo_product = _styled_combo()
@@ -345,17 +350,45 @@ class TagWriterScreen(QWidget):
     # ══════════════════════════════════════════════════════
 
     def on_enter(self):
+        # Pause inventory RFID polling — Tag Writer takes exclusive serial access
+        if hasattr(self.app, 'inventory_engine'):
+            self.app.inventory_engine.rfid_paused = True
+            logger.info("Tag Writer: RFID polling PAUSED (exclusive mode)")
+
+        self._load_readers()
         self._load_products()
         self._update_preview()
         self._scan_timer.start(800)
 
     def on_leave(self):
         self._scan_timer.stop()
-        # Ensure RFID polling resumes if we leave during a write
-        if self._writing:
-            self._writing = False
+        self._writing = False
+        # Resume inventory RFID polling
         if hasattr(self.app, 'inventory_engine'):
             self.app.inventory_engine.rfid_paused = False
+            logger.info("Tag Writer: RFID polling RESUMED")
+
+    def _load_readers(self):
+        """Populate reader selector from multi-reader RFID driver."""
+        self._combo_reader.blockSignals(True)
+        self._combo_reader.clear()
+
+        rfid = self.app.rfid
+        if hasattr(rfid, 'get_mapping'):
+            mapping = rfid.get_mapping()
+            for m in mapping:
+                rid = m.get("reader_id", "")
+                port = m.get("port", "")
+                short_port = port.split("/")[-1] if "/" in port else port
+                # "S1 (USB1)" format
+                slot_num = rid.split("slot")[-1] if "slot" in rid else "?"
+                label = f"S{slot_num}  ({short_port})"
+                self._combo_reader.addItem(label, rid)  # data = reader_id
+        else:
+            # Single reader mode
+            self._combo_reader.addItem("Default reader", "")
+
+        self._combo_reader.blockSignals(False)
 
     # ══════════════════════════════════════════════════════
     # PRODUCT LOADING
@@ -398,13 +431,28 @@ class TagWriterScreen(QWidget):
     # TAG SCANNING (background poll)
     # ══════════════════════════════════════════════════════
 
+    def _get_selected_reader_id(self) -> str:
+        """Get the reader_id from the dropdown selection."""
+        idx = self._combo_reader.currentIndex()
+        if idx >= 0:
+            return self._combo_reader.itemData(idx) or ""
+        return ""
+
     def _scan_for_tag(self):
-        """Quick poll to detect if a tag is on the reader."""
+        """Quick poll to detect if a tag is on the SELECTED reader only."""
         if self._writing:
             return
 
         try:
-            tags = self.app.rfid.poll_tags()
+            selected_rid = self._get_selected_reader_id()
+            rfid = self.app.rfid
+
+            # Poll only the selected reader (fast!) instead of all readers
+            if selected_rid and hasattr(rfid, 'poll_reader'):
+                tags = rfid.poll_reader(selected_rid)
+            else:
+                tags = rfid.poll_tags()
+
             if tags:
                 tag = tags[0]
                 uid = tag.tag_id
@@ -541,9 +589,10 @@ class TagWriterScreen(QWidget):
         )
         QApplication.processEvents()
 
-        # Pause RFID polling to avoid PN532 serial contention during write
-        if hasattr(self.app, 'inventory_engine'):
-            self.app.inventory_engine.rfid_paused = True
+        # RFID polling already paused on screen enter — no extra pause needed
+
+        # Stop scan timer during write to avoid serial contention
+        self._scan_timer.stop()
 
         # Safety timeout: if write hangs > 8s, force-reset UI
         self._write_timeout_timer = QTimer()
@@ -554,9 +603,17 @@ class TagWriterScreen(QWidget):
         self._write_timeout_timer.start(8000)
 
         # Write in a thread to avoid blocking UI
+        selected_rid = self._get_selected_reader_id()
+
         def do_write():
             try:
-                success = self.app.rfid.write_product_data(write_string)
+                # Write on the SELECTED reader only
+                if selected_rid:
+                    success = self.app.rfid.write_product_data(
+                        write_string, reader_id=selected_rid
+                    )
+                else:
+                    success = self.app.rfid.write_product_data(write_string)
                 QTimer.singleShot(0, lambda: self._on_write_complete(
                     success, product, write_string
                 ))
@@ -582,11 +639,9 @@ class TagWriterScreen(QWidget):
         if hasattr(self, '_write_timeout_timer'):
             self._write_timeout_timer.stop()
 
-        # Resume RFID polling
-        if hasattr(self.app, 'inventory_engine'):
-            self.app.inventory_engine.rfid_paused = False
-
         self._writing = False
+        # Restart scan timer (stopped during write)
+        self._scan_timer.start(800)
         self._btn_write.setText(f"{Icon.SAVE}  WRITE TAG")
         self._btn_write.setEnabled(True)
         self._btn_write.setStyleSheet(
