@@ -332,6 +332,23 @@ class InventoryEngine:
         except Exception as e:
             logger.debug(f"GPIO cleanup skipped: {e}")
 
+    def notify_reader_swap(self):
+        """Called after RFID reader swap to force re-detection of all tags.
+
+        Resets slot states and clears tag tracking so the next poll cycle
+        re-detects all tags with the new reader→slot mapping.
+        """
+        self._previous_tags = set()
+        for slot in self._reader_to_slot.values():
+            if slot.status in (SlotStatus.OCCUPIED, SlotStatus.REMOVED,
+                               SlotStatus.IN_USE_ELSEWHERE):
+                slot.status = SlotStatus.EMPTY
+                slot.current_tag_id = None
+                slot.current_product_id = None
+                self._persist_slot_state(slot)
+        self._removal_times.clear()
+        logger.info("Reader swap: tag tracking reset — slots will re-populate on next poll")
+
     @staticmethod
     def _auto_reboot():
         """Reboot the RPi to recover from stuck GPIO state."""

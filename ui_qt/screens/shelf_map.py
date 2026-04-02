@@ -521,6 +521,11 @@ class ShelfMapScreen(QWidget):
         if ok:
             # Save mapping to DB
             self._save_reader_mapping()
+            # Reset inventory tracking so tags re-detect on correct slots
+            try:
+                self.app.inventory_engine.notify_reader_swap()
+            except Exception as e:
+                logger.warning(f"Reorder: notify_reader_swap failed: {e}")
             self._status_text.setText(
                 f"Swapped S{idx1 + 1} <-> S{idx2 + 1}. Tap another pair or press DONE."
             )
