@@ -13,7 +13,7 @@ from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
     QFrame, QScrollArea, QLineEdit, QComboBox, QApplication,
 )
-from PyQt6.QtCore import Qt, QTimer
+from PyQt6.QtCore import Qt, QTimer, pyqtSignal
 
 from ui_qt.theme import C, F, S
 from ui_qt.icons import (
@@ -92,6 +92,10 @@ def _label_above(text: str) -> QLabel:
 class TagWriterScreen(QWidget):
     """Write product data to NFC tags from the product database."""
 
+    # Signals for cross-thread UI updates (safe from background threads)
+    _sig_scan_result = pyqtSignal(list)
+    _sig_write_done = pyqtSignal(bool, object, str, bool)  # success, product, write_str, timed_out
+
     def __init__(self, app):
         super().__init__()
         self.app = app
@@ -100,6 +104,11 @@ class TagWriterScreen(QWidget):
         self._writing = False
         self._scan_busy = False
         self._tags_written = 0
+
+        # Connect signals → slots (runs on main thread)
+        self._sig_scan_result.connect(self._update_scan_ui)
+        self._sig_write_done.connect(self._on_write_complete)
+
         self._build_ui()
 
     # ══════════════════════════════════════════════════════
@@ -497,10 +506,11 @@ class TagWriterScreen(QWidget):
                     tags = rfid.poll_reader(selected_rid)
                 else:
                     tags = rfid.poll_tags()
-                QTimer.singleShot(0, lambda: self._update_scan_ui(tags))
+                # Use signal (thread-safe) instead of QTimer.singleShot
+                self._sig_scan_result.emit(tags if tags else [])
             except Exception as e:
                 logger.debug(f"Tag scan error: {e}")
-                QTimer.singleShot(0, lambda: self._update_scan_ui([]))
+                self._sig_scan_result.emit([])
 
         threading.Thread(target=_do_scan, daemon=True).start()
 
@@ -671,14 +681,11 @@ class TagWriterScreen(QWidget):
                     )
                 else:
                     success = self.app.rfid.write_product_data(write_string)
-                QTimer.singleShot(0, lambda: self._on_write_complete(
-                    success, product, write_string
-                ))
+                # Use signal (thread-safe) to deliver result to main thread
+                self._sig_write_done.emit(success, product, write_string, False)
             except Exception as e:
                 logger.error(f"Tag write error: {e}")
-                QTimer.singleShot(0, lambda: self._on_write_complete(
-                    False, product, write_string
-                ))
+                self._sig_write_done.emit(False, product, write_string, False)
 
         threading.Thread(target=do_write, daemon=True).start()
 
