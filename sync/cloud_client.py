@@ -395,6 +395,32 @@ class CloudClient:
         return success
 
     # ============================================================
+    # DEVICE LOG SYNC (remote debug)
+    # ============================================================
+
+    def upload_device_logs(self, logs: list) -> bool:
+        """
+        Upload application log lines to the cloud for remote debugging.
+
+        Args:
+            logs: List of dicts with keys: timestamp, level, logger_name, message
+
+        Returns:
+            True if upload was successful
+        """
+        if not self.is_paired or not logs:
+            return False
+
+        url = f"{self.cloud_url}/api/devices/{self.device_id}/logs"
+        payload = {"logs": logs}
+
+        success, data = self._http_post(url, payload, auth=True, timeout=10)
+        if success:
+            received = data.get("received", 0)
+            logger.debug(f"Device logs uploaded: {received} lines")
+        return success
+
+    # ============================================================
     # OTA UPDATE STATUS
     # ============================================================
 

@@ -143,6 +143,21 @@ class SmartLockerWindow(QMainWindow):
             self.sync_engine.start()
             self._splash.set_status("Cloud connected. Loading...")
             logger.info("Cloud: PAIRED — sync started")
+
+            # Remote log handler: sends WARNING+ logs to cloud every 60s
+            try:
+                from sync.cloud_log_handler import CloudLogHandler
+                self._cloud_log_handler = CloudLogHandler(
+                    self.cloud, flush_interval=60, max_buffer=200,
+                )
+                self._cloud_log_handler.setFormatter(
+                    logging.Formatter("%(message)s")
+                )
+                logging.getLogger("smartlocker").addHandler(self._cloud_log_handler)
+                self._cloud_log_handler.start()
+                logger.info("Cloud log handler started (WARNING+ → cloud every 60s)")
+            except Exception as e:
+                logger.warning(f"Cloud log handler failed: {e}")
         else:
             self._splash.set_status("Offline mode. Loading...")
             logger.info("Cloud: NOT PAIRED")

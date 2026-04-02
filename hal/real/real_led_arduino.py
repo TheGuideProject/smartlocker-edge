@@ -19,12 +19,17 @@ Commands sent to Arduino:
   {"cmd":"led_off"}               // everything off
 """
 
+import time
 import logging
 from typing import Dict, Optional
 
 from hal.interfaces import LEDDriverInterface, LEDColor, LEDPattern
 
 logger = logging.getLogger("smartlocker.sensor")
+
+# Minimum interval between serial commands per slot (seconds).
+# Prevents UI button spam from flooding Arduino serial buffer.
+_THROTTLE_S = 0.10
 
 
 class RealLEDDriverArduino(LEDDriverInterface):
@@ -34,6 +39,9 @@ class RealLEDDriverArduino(LEDDriverInterface):
     The bar graph has fixed colors per segment (green/yellow/red),
     so LEDColor is mapped to on/off behavior. The shelf LEDs are
     single-color (red) and simply toggle on/off.
+
+    Includes per-slot throttle (100ms) to prevent serial flood when
+    buttons are tapped rapidly on the touchscreen.
     """
 
     def __init__(self):
@@ -50,6 +58,9 @@ class RealLEDDriverArduino(LEDDriverInterface):
 
         # Track slot states for blink animation
         self._slot_states: Dict[str, bool] = {}
+
+        # Per-slot throttle timestamps
+        self._last_cmd: Dict[str, float] = {}
 
     def set_weight_driver(self, weight_driver) -> None:
         """Inject the weight driver that owns the Arduino serial connection."""
@@ -78,17 +89,28 @@ class RealLEDDriverArduino(LEDDriverInterface):
 
     def set_slot(self, slot_id: str, color: LEDColor,
                  pattern: LEDPattern = LEDPattern.SOLID) -> None:
-        """Turn on/off a shelf slot LED. Color is ignored (LEDs are red)."""
+        """Turn on/off a shelf slot LED. Color is ignored (LEDs are red).
+
+        Throttled: commands for the same slot within 100ms are silently dropped
+        to prevent serial buffer overflow from rapid UI taps.
+        """
         if not self._initialized or not self._weight_driver:
             return
 
         led_index = self._slot_map.get(slot_id)
         if led_index is None:
-            logger.warning(f"[ARDUINO LED] Unknown slot '{slot_id}'")
-            return
+            return  # unknown slot — silently ignore
 
         # LED is ON for any color except OFF
         on = 1 if color != LEDColor.OFF else 0
+
+        # Throttle: skip if same slot was commanded less than 100ms ago
+        now = time.monotonic()
+        last = self._last_cmd.get(slot_id, 0.0)
+        if (now - last) < _THROTTLE_S:
+            return
+        self._last_cmd[slot_id] = now
+
         self._slot_states[slot_id] = bool(on)
 
         self._weight_driver.send_command({
@@ -136,6 +158,13 @@ class RealLEDDriverArduino(LEDDriverInterface):
             return
 
         pct = max(0, min(int(percentage), 100))
+
+        # Throttle bar updates (300ms refresh from mixing screen)
+        now = time.monotonic()
+        if (now - self._last_cmd.get("_bar", 0.0)) < _THROTTLE_S:
+            return
+        self._last_cmd["_bar"] = now
+
         self._weight_driver.send_command({"cmd": "bar", "pct": pct})
 
     def set_balance_segments(self, count: int) -> None:
