@@ -200,7 +200,7 @@ class MixingEngine:
         if self._inventory:
             base_slot_id = self._inventory.get_slot_id_for_product(self.session.base_product_id)
             if base_slot_id:
-                self.led.set_slot(base_slot_id, LEDColor.GREEN, LEDPattern.BLINK_SLOW)
+                self.led.set_slot(base_slot_id, LEDColor.RED, LEDPattern.BLINK_SLOW)
                 logger.info(f"LED guidance: base product slot {base_slot_id}")
 
         self.buzzer.play(BuzzerPattern.TICK)
@@ -253,7 +253,7 @@ class MixingEngine:
         if self._inventory:
             hardener_slot_id = self._inventory.get_slot_id_for_product(self.session.hardener_product_id)
             if hardener_slot_id:
-                self.led.set_slot(hardener_slot_id, LEDColor.GREEN, LEDPattern.BLINK_SLOW)
+                self.led.set_slot(hardener_slot_id, LEDColor.RED, LEDPattern.BLINK_SLOW)
                 logger.info(f"LED guidance: hardener product slot {hardener_slot_id}")
 
         self._notify_ui({
@@ -420,12 +420,12 @@ class MixingEngine:
             if self.session.base_tag_id:
                 base_slot_id = self._inventory.get_slot_id_for_tag(self.session.base_tag_id)
                 if base_slot_id:
-                    self.led.set_slot(base_slot_id, LEDColor.BLUE, LEDPattern.BLINK_SLOW)
+                    self.led.set_slot(base_slot_id, LEDColor.RED, LEDPattern.BLINK_SLOW)
                     logger.info(f"LED guidance: return base to slot {base_slot_id}")
             if self.session.hardener_tag_id:
                 hardener_slot_id = self._inventory.get_slot_id_for_tag(self.session.hardener_tag_id)
                 if hardener_slot_id:
-                    self.led.set_slot(hardener_slot_id, LEDColor.BLUE, LEDPattern.BLINK_SLOW)
+                    self.led.set_slot(hardener_slot_id, LEDColor.RED, LEDPattern.BLINK_SLOW)
                     logger.info(f"LED guidance: return hardener to slot {hardener_slot_id}")
         self._notify_ui({"instruction": "Return all cans to their slots"})
 

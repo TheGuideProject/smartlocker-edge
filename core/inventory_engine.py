@@ -475,7 +475,8 @@ class InventoryEngine:
             # Can returned — read weight to estimate usage
             event_type = EventType.CAN_RETURNED
             self.buzzer.play(BuzzerPattern.CONFIRM)
-            self.led.set_slot(slot.slot_id, LEDColor.GREEN, LEDPattern.SOLID)
+            # Product back on shelf → LED OFF (all good)
+            self.led.clear_slot(slot.slot_id)
 
             consumed_g = max(0.0, weight_at_removal_g - current_weight_g)
 
@@ -498,7 +499,8 @@ class InventoryEngine:
             # New can placed
             event_type = EventType.CAN_PLACED
             self.buzzer.play(BuzzerPattern.TICK)
-            self.led.set_slot(slot.slot_id, LEDColor.GREEN, LEDPattern.SOLID)
+            # Product on shelf → LED OFF (all good)
+            self.led.clear_slot(slot.slot_id)
 
             # Store weight at placement
             slot.weight_when_placed_g = current_weight_g
@@ -525,7 +527,8 @@ class InventoryEngine:
                 event_type = EventType.CAN_MOVED
                 event_data["source_slot"] = source_slot.slot_id
                 event_data["move_type"] = "cross_slot"
-                self.led.set_slot(slot.slot_id, LEDColor.GREEN, LEDPattern.SOLID)
+                # Product on shelf → LED OFF
+                self.led.clear_slot(slot.slot_id)
                 self.buzzer.play(BuzzerPattern.CONFIRM)
                 # Clean up the source slot
                 source_slot.status = SlotStatus.EMPTY
@@ -621,9 +624,11 @@ class InventoryEngine:
         # Determine if this is authorized (active session) or unauthorized
         if self.active_session:
             event_type = EventType.CAN_REMOVED
-            self.led.clear_slot(slot.slot_id)
+            # Product removed → LED RED solid (slot empty, needs attention)
+            self.led.set_slot(slot.slot_id, LEDColor.RED, LEDPattern.SOLID)
         else:
             event_type = EventType.UNAUTHORIZED_REMOVAL
+            # Unauthorized removal → LED RED fast blink (alarm!)
             self.led.set_slot(slot.slot_id, LEDColor.RED, LEDPattern.BLINK_FAST)
             self.buzzer.play(BuzzerPattern.ERROR)
 
@@ -904,7 +909,9 @@ class InventoryEngine:
         for shelf in self.shelves.values():
             for slot in shelf.slots:
                 if slot.status == SlotStatus.OCCUPIED:
-                    self.led.set_slot(slot.slot_id, LEDColor.GREEN, LEDPattern.SOLID)
+                    self.led.clear_slot(slot.slot_id)  # ON shelf = LED OFF
+                elif slot.status == SlotStatus.REMOVED:
+                    self.led.set_slot(slot.slot_id, LEDColor.RED, LEDPattern.SOLID)  # Removed = RED
                 else:
                     self.led.clear_slot(slot.slot_id)
 
