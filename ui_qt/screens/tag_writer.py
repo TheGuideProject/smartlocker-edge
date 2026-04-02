@@ -759,15 +759,20 @@ class TagWriterScreen(QWidget):
                 except (ValueError, TypeError):
                     pass
 
+                # Get color from dropdown
+                color_idx = self._combo_color.currentIndex()
+                tag_color = (self._combo_color.itemData(color_idx) or "") if color_idx >= 0 else ""
+
                 self.app.db.upsert_rfid_tag(
                     tag_uid=self._last_uid,
                     product_id=product["product_id"],
                     can_size_ml=can_ml,
                     batch_number=batch,
+                    color=tag_color,
                 )
                 logger.info(
                     f"Tag {self._last_uid} mapped to product "
-                    f"{product['product_id']} ({product_name})"
+                    f"{product['product_id']} ({product_name}) color={tag_color}"
                 )
             except Exception as e:
                 logger.error(f"Failed to save tag mapping: {e}")

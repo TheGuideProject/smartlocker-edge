@@ -92,6 +92,7 @@ CREATE TABLE IF NOT EXISTS rfid_tag (
     can_size_ml INTEGER,
     weight_full_g REAL,
     weight_current_g REAL,
+    color TEXT DEFAULT '',
     assigned_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 

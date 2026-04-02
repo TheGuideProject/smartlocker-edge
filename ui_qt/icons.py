@@ -57,6 +57,10 @@ class Icon:
     HEALTH      = "\u2665"   # ♥
     SHELF       = "\u2592"   # ▒
 
+    # Arrows
+    ARROW_DOWN  = "\u25BC"   # ▼
+    ARROW_UP    = "\u25B2"   # ▲
+
     # Slot states
     OCCUPIED    = "\u25CF"   # ●
     EMPTY       = "\u25CB"   # ○

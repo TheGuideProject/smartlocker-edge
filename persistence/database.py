@@ -126,6 +126,12 @@ class Database:
         except Exception:
             pass  # Column already exists
 
+        # Migration: add color column to rfid_tag for NFC tag color tracking
+        try:
+            self._conn.execute("ALTER TABLE rfid_tag ADD COLUMN color TEXT DEFAULT ''")
+        except Exception:
+            pass  # Column already exists
+
         self._conn.commit()
 
     def close(self) -> None:
@@ -757,13 +763,14 @@ class Database:
 
     def upsert_rfid_tag(self, tag_uid: str, product_id: str,
                         can_size_ml: int = None,
-                        batch_number: str = None) -> None:
-        """Map an RFID tag to a product, with optional batch/lot number."""
+                        batch_number: str = None,
+                        color: str = None) -> None:
+        """Map an RFID tag to a product, with optional batch/lot number and color."""
         self.conn.execute(
             """INSERT OR REPLACE INTO rfid_tag
-               (tag_uid, product_id, can_size_ml, batch_number)
-               VALUES (?, ?, ?, ?)""",
-            (tag_uid, product_id, can_size_ml, batch_number),
+               (tag_uid, product_id, can_size_ml, batch_number, color)
+               VALUES (?, ?, ?, ?, ?)""",
+            (tag_uid, product_id, can_size_ml, batch_number, color or ""),
         )
         self.conn.commit()
 
@@ -779,10 +786,10 @@ class Database:
         return dict(row) if row else None
 
     def get_rfid_tag_info(self, tag_uid: str) -> Optional[Dict[str, Any]]:
-        """Look up RFID tag details including product info, lot number, can size."""
+        """Look up RFID tag details including product info, lot number, can size, color."""
         cursor = self.conn.execute(
             """SELECT t.tag_uid, t.product_id, t.batch_number, t.can_size_ml,
-                      t.weight_full_g, t.weight_current_g,
+                      t.weight_full_g, t.weight_current_g, t.color,
                       p.name as product_name, p.product_type, p.ppg_code
                FROM rfid_tag t
                LEFT JOIN product p ON t.product_id = p.product_id
@@ -818,10 +825,27 @@ class Database:
             SELECT s.slot_id, s.status, s.current_tag_id, s.current_product_id,
                    s.weight_when_placed_g, s.weight_current_g, s.last_change_at,
                    p.name as product_name, p.product_type,
-                   t.batch_number, t.can_size_ml
+                   t.batch_number, t.can_size_ml, t.color
             FROM slot_state s
             LEFT JOIN product p ON s.current_product_id = p.product_id
             LEFT JOIN rfid_tag t ON s.current_tag_id = t.tag_uid
+        ''')
+        return [dict(row) for row in cursor.fetchall()]
+
+    def get_shelf_inventory_details(self) -> List[Dict[str, Any]]:
+        """Get detailed inventory for all occupied slots (for inventory UI).
+        Returns tag info + product info + slot position + color."""
+        cursor = self.conn.execute('''
+            SELECT s.slot_id, s.status, s.current_tag_id,
+                   s.weight_when_placed_g, s.weight_current_g,
+                   p.product_id, p.name as product_name, p.product_type,
+                   p.ppg_code, p.colors_json as product_colors_json,
+                   t.batch_number, t.can_size_ml, t.color as tag_color
+            FROM slot_state s
+            LEFT JOIN product p ON s.current_product_id = p.product_id
+            LEFT JOIN rfid_tag t ON s.current_tag_id = t.tag_uid
+            WHERE s.status = 'occupied' AND s.current_tag_id IS NOT NULL
+            ORDER BY s.slot_id
         ''')
         return [dict(row) for row in cursor.fetchall()]
 

@@ -159,7 +159,7 @@ class InventoryEngine:
                 info["lot_number"] = batch
                 logger.info(f"Tag {tag_uid}: resolved from NFC memory → {name or ppg_code}")
 
-                # Auto-save to rfid_tag table for future lookups
+                # Auto-save to rfid_tag table for future lookups (including color)
                 if product_id:
                     try:
                         self._db.upsert_rfid_tag(
@@ -167,8 +167,9 @@ class InventoryEngine:
                             product_id=product_id,
                             can_size_ml=0,
                             batch_number=batch,
+                            color=color,
                         )
-                        logger.info(f"Tag {tag_uid}: auto-saved to rfid_tag table")
+                        logger.info(f"Tag {tag_uid}: auto-saved to rfid_tag table (color={color})")
                     except Exception as e:
                         logger.warning(f"Failed to auto-save tag mapping: {e}")
 
