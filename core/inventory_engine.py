@@ -272,6 +272,13 @@ class InventoryEngine:
         # Weight FIRST — Arduino must claim serial port before RFID auto-detect
         weight_ok = self.weight.initialize()
         led_ok = self.led.initialize()
+
+        # Update RFID skip_ports with the ACTUAL Arduino port (not the settings default)
+        actual_arduino_port = getattr(self.weight, '_port', None)
+        if actual_arduino_port and hasattr(self.rfid, '_skip_ports'):
+            self.rfid._skip_ports = {actual_arduino_port}
+            logger.info(f"RFID skip_ports updated to actual Arduino port: {actual_arduino_port}")
+
         rfid_ok = self.rfid.initialize()
         buzzer_ok = self.buzzer.initialize()
 

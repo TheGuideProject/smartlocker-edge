@@ -136,9 +136,9 @@ HX711_SCK_PIN = HX711_SHELF_SCK
 
 # Weight - Arduino Nano via Serial (HX711 bridge, for multi-channel setups)
 # Protocol: Arduino sends JSON lines: {"channel":"shelf1","grams":1234.5,"stable":true}
-WEIGHT_SERIAL_PORT = "/dev/ttyUSB1"   # Arduino pinned to ttyUSB1
+WEIGHT_SERIAL_PORT = ""               # Empty = auto-detect Arduino on any ttyUSB port
 WEIGHT_SERIAL_BAUD = 115200           # Baud rate
-ARDUINO_SERIAL_PORT = "/dev/ttyUSB1"  # Legacy alias (backward compat)
+ARDUINO_SERIAL_PORT = ""              # Empty = auto-detect (legacy alias)
 ARDUINO_BAUD_RATE = 115200            # Legacy alias (backward compat)
 
 # LED Mode: "arduino_serial" (via Arduino), "ws2812b" (NeoPixel strip), "gpio" (individual red LEDs)
