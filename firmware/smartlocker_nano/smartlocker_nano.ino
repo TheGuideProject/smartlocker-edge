@@ -57,11 +57,11 @@
 // PIN DEFINITIONS
 // ============================================================
 
-// HX711 load cells
-#define SHELF_DT   2
-#define SHELF_SCK  3
-#define MIX_DT     4
-#define MIX_SCK    5
+// HX711 load cells (swapped: physical shelf on D4/D5, physical mix on D2/D3)
+#define SHELF_DT   4
+#define SHELF_SCK  5
+#define MIX_DT     2
+#define MIX_SCK    3
 
 // LED bar graph (8 segments used of KYX-B10BGYR)
 const int BAR_PINS[8] = {6, 7, 8, 9, 10, 11, 12, 13};
@@ -88,8 +88,8 @@ const int SLOT_PINS[4] = {A2, A1, A4, A5};
 HX711 scaleShelf;
 HX711 scaleMix;
 
-float shelfScale  = 0.1796;
-float mixScale    = 0.0602;
+float shelfScale  = 20.6660;
+float mixScale    = 10.4070;
 long  shelfOffset = 0;
 long  mixOffset   = 0;
 
