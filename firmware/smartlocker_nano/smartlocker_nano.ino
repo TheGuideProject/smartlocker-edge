@@ -88,8 +88,8 @@ const int SLOT_PINS[4] = {A2, A1, A4, A5};
 HX711 scaleShelf;
 HX711 scaleMix;
 
-float shelfScale  = 21.58;
-float mixScale    = 22.58;
+float shelfScale  = 0.1796;
+float mixScale    = 0.0602;
 long  shelfOffset = 0;
 long  mixOffset   = 0;
 
@@ -475,8 +475,11 @@ void readAndSend(HX711* scale, const char* chName,
     }
 
     long raw = scale->read_average(SAMPLES_NORMAL);
-    float grams = (float)(calOffset - raw) / calScale;
-    if (grams < 0) grams = 0;
+    float diff = (float)(calOffset - raw);
+    // Auto-detect load cell polarity: use abs value
+    // Weight is always positive, handles both wiring directions
+    float grams = fabs(diff) / calScale;
+    if (grams < 5.0) grams = 0;  // 5g dead zone for noise
 
     history[*histIdx] = grams;
     *histIdx = (*histIdx + 1) % STABILITY_WINDOW;
