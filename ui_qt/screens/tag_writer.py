@@ -98,6 +98,7 @@ class TagWriterScreen(QWidget):
         self._products = []
         self._last_uid = None
         self._writing = False
+        self._scan_busy = False
         self._tags_written = 0
         self._build_ui()
 
@@ -482,81 +483,90 @@ class TagWriterScreen(QWidget):
         return ""
 
     def _scan_for_tag(self):
-        """Quick poll to detect if a tag is on the SELECTED reader only."""
-        if self._writing:
+        """Quick poll in background thread — never blocks the UI."""
+        if self._writing or self._scan_busy:
             return
 
-        try:
-            selected_rid = self._get_selected_reader_id()
-            rfid = self.app.rfid
+        self._scan_busy = True
+        selected_rid = self._get_selected_reader_id()
 
-            # Poll only the selected reader (fast!) instead of all readers
-            if selected_rid and hasattr(rfid, 'poll_reader'):
-                tags = rfid.poll_reader(selected_rid)
-            else:
-                tags = rfid.poll_tags()
-
-            if tags:
-                tag = tags[0]
-                uid = tag.tag_id
-                product_data = tag.product_data or ""
-
-                self._last_uid = uid
-                self._lbl_tag_status.setText("TAG DETECTED")
-                self._lbl_tag_status.setStyleSheet(
-                    f"font-size: {F.H3}px; font-weight: bold;"
-                    f"color: {C.SUCCESS};"
-                )
-
-                # Update status dot to green
-                self._tag_dot.setStyleSheet(
-                    f"background-color: {C.SUCCESS};"
-                    f"border-radius: 6px; border: none;"
-                )
-
-                self._lbl_tag_uid.setText(f"UID: {uid}")
-
-                if product_data:
-                    self._lbl_tag_current.setText(f"Current: {product_data}")
+        def _do_scan():
+            try:
+                rfid = self.app.rfid
+                if selected_rid and hasattr(rfid, 'poll_reader'):
+                    tags = rfid.poll_reader(selected_rid)
                 else:
-                    self._lbl_tag_current.setText("Empty tag (no data)")
+                    tags = rfid.poll_tags()
+                QTimer.singleShot(0, lambda: self._update_scan_ui(tags))
+            except Exception as e:
+                logger.debug(f"Tag scan error: {e}")
+                QTimer.singleShot(0, lambda: self._update_scan_ui([]))
 
-                # Update header badge
-                self._status_badge.setText("TAG OK")
-                self._status_badge.setStyleSheet(
-                    f"background-color: {C.SUCCESS_BG};"
-                    f"color: {C.SUCCESS};"
-                    f"border: 1px solid {C.SUCCESS}; border-radius: 4px;"
-                    f"padding: 2px 8px; font-size: {F.TINY}px;"
-                    f"font-weight: bold;"
-                )
+        threading.Thread(target=_do_scan, daemon=True).start()
+
+    def _update_scan_ui(self, tags):
+        """Update UI from scan results — always on main thread."""
+        self._scan_busy = False
+
+        if tags:
+            tag = tags[0]
+            uid = tag.tag_id
+            product_data = tag.product_data or ""
+
+            self._last_uid = uid
+            self._lbl_tag_status.setText("TAG DETECTED")
+            self._lbl_tag_status.setStyleSheet(
+                f"font-size: {F.H3}px; font-weight: bold;"
+                f"color: {C.SUCCESS};"
+            )
+
+            # Update status dot to green
+            self._tag_dot.setStyleSheet(
+                f"background-color: {C.SUCCESS};"
+                f"border-radius: 6px; border: none;"
+            )
+
+            self._lbl_tag_uid.setText(f"UID: {uid}")
+
+            if product_data:
+                self._lbl_tag_current.setText(f"Current: {product_data}")
             else:
-                self._last_uid = None
-                self._lbl_tag_status.setText("Place tag on reader")
-                self._lbl_tag_status.setStyleSheet(
-                    f"font-size: {F.H3}px; font-weight: bold;"
-                    f"color: {C.TEXT_MUTED};"
-                )
+                self._lbl_tag_current.setText("Empty tag (no data)")
 
-                # Update status dot to red
-                self._tag_dot.setStyleSheet(
-                    f"background-color: {C.DANGER};"
-                    f"border-radius: 6px; border: none;"
-                )
+            # Update header badge
+            self._status_badge.setText("TAG OK")
+            self._status_badge.setStyleSheet(
+                f"background-color: {C.SUCCESS_BG};"
+                f"color: {C.SUCCESS};"
+                f"border: 1px solid {C.SUCCESS}; border-radius: 4px;"
+                f"padding: 2px 8px; font-size: {F.TINY}px;"
+                f"font-weight: bold;"
+            )
+        else:
+            self._last_uid = None
+            self._lbl_tag_status.setText("Place tag on reader")
+            self._lbl_tag_status.setStyleSheet(
+                f"font-size: {F.H3}px; font-weight: bold;"
+                f"color: {C.TEXT_MUTED};"
+            )
 
-                self._lbl_tag_uid.setText("")
-                self._lbl_tag_current.setText("")
+            # Update status dot to red
+            self._tag_dot.setStyleSheet(
+                f"background-color: {C.DANGER};"
+                f"border-radius: 6px; border: none;"
+            )
 
-                self._status_badge.setText("WAITING")
-                self._status_badge.setStyleSheet(
-                    f"background-color: {C.BG_CARD_ALT};"
-                    f"color: {C.TEXT_MUTED};"
-                    f"border: 1px solid {C.TEXT_MUTED}; border-radius: 4px;"
-                    f"padding: 2px 8px; font-size: {F.TINY}px;"
-                    f"font-weight: bold;"
-                )
-        except Exception as e:
-            logger.debug(f"Tag scan error: {e}")
+            self._lbl_tag_uid.setText("")
+            self._lbl_tag_current.setText("")
+
+            self._status_badge.setText("WAITING")
+            self._status_badge.setStyleSheet(
+                f"background-color: {C.BG_CARD_ALT};"
+                f"color: {C.TEXT_MUTED};"
+                f"border: 1px solid {C.TEXT_MUTED}; border-radius: 4px;"
+                f"padding: 2px 8px; font-size: {F.TINY}px;"
+                f"font-weight: bold;"
+            )
 
     # ══════════════════════════════════════════════════════
     # PREVIEW
@@ -677,6 +687,8 @@ class TagWriterScreen(QWidget):
         if not self._writing:
             return  # Already completed normally
         logger.warning("Tag write TIMEOUT (8s) — force-resetting UI")
+        # The write thread may still be stuck on reader.lock — mark it so
+        # _on_write_complete won't fire again when the thread eventually returns
         self._on_write_complete(False, product, write_string, timed_out=True)
 
     def _on_write_complete(self, success: bool, product: dict,
@@ -686,9 +698,17 @@ class TagWriterScreen(QWidget):
         if hasattr(self, '_write_timeout_timer'):
             self._write_timeout_timer.stop()
 
+        # Guard: if already handled (timeout fired + thread returned later), skip
+        if not self._writing and not timed_out:
+            return
         self._writing = False
-        # Restart scan timer (stopped during write)
-        self._scan_timer.start(800)
+
+        # Restart scan timer — delay 2s after timeout (write thread may still
+        # hold the reader lock), immediate after normal completion
+        if timed_out:
+            QTimer.singleShot(2000, lambda: self._scan_timer.start(800))
+        else:
+            self._scan_timer.start(800)
         self._btn_write.setText(f"{Icon.SAVE}  WRITE TAG")
         self._btn_write.setEnabled(True)
         self._btn_write.setStyleSheet(

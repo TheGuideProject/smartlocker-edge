@@ -438,15 +438,26 @@ class RealRFIDMultiPN532USB(RFIDDriverInterface):
                            reader_id: Optional[str] = None) -> bool:
         """Write product data to NFC tag.
 
-        If reader_id is specified, write via that reader.
+        If reader_id is specified, write via that reader (with 2 retries).
         Otherwise, try all readers and write to the first one with a tag present.
         """
         if not self._initialized:
             return False
 
-        # Specific reader requested
+        # Specific reader requested — retry up to 2 times
         if reader_id and reader_id in self._readers:
-            return self._write_on_reader(self._readers[reader_id], product_string)
+            reader = self._readers[reader_id]
+            for attempt in range(3):
+                result = self._write_on_reader(reader, product_string)
+                if result:
+                    return True
+                if attempt < 2:
+                    logger.info(
+                        f"[MultiPN532] Write attempt {attempt + 1} failed on "
+                        f"'{reader_id}', retrying..."
+                    )
+                    time.sleep(0.3)
+            return False
 
         # Try all readers — find one with a tag present
         for reader in self._readers.values():
@@ -467,9 +478,19 @@ class RealRFIDMultiPN532USB(RFIDDriverInterface):
         return False
 
     def _write_on_reader(self, reader: ReaderInstance, data_str: str) -> bool:
-        """Write to a tag on a specific reader (acquires lock)."""
-        with reader.lock:
+        """Write to a tag on a specific reader (acquires lock with timeout)."""
+        # Acquire lock with 5s timeout — prevents indefinite hang
+        acquired = reader.lock.acquire(timeout=5.0)
+        if not acquired:
+            logger.warning(
+                f"[MultiPN532] Could not acquire lock for '{reader.reader_id}' "
+                f"write (timeout 5s)"
+            )
+            return False
+        try:
             return self._write_on_reader_unlocked(reader, data_str)
+        finally:
+            reader.lock.release()
 
     def _write_on_reader_unlocked(self, reader: ReaderInstance, data_str: str) -> bool:
         """Write to tag — caller must hold reader.lock."""
@@ -477,8 +498,8 @@ class RealRFIDMultiPN532USB(RFIDDriverInterface):
             return False
 
         try:
-            # Ensure tag is present
-            uid = reader.pn532.read_passive_target(timeout=0.1)
+            # Ensure tag is present (slightly longer timeout for write setup)
+            uid = reader.pn532.read_passive_target(timeout=0.3)
             if uid is None:
                 logger.warning(
                     f"[MultiPN532] No tag on '{reader.reader_id}' for write"
@@ -487,23 +508,26 @@ class RealRFIDMultiPN532USB(RFIDDriverInterface):
 
             data = data_str.encode("ascii")
             page = USER_PAGE_START
+            written_pages = 0
             for i in range(0, len(data), 4):
                 chunk = data[i:i + 4]
                 if len(chunk) < 4:
                     chunk = chunk + b"\x00" * (4 - len(chunk))
                 reader.pn532.ntag2xx_write_block(page, chunk)
+                written_pages += 1
                 page += 1
 
             # Null terminator
             reader.pn532.ntag2xx_write_block(page, b"\x00\x00\x00\x00")
+            written_pages += 1
 
             # Clear this reader's tag cache
             reader.tag_cache.clear()
 
             tag_id = ":".join(f"{b:02X}" for b in uid)
             logger.info(
-                f"[MultiPN532] Wrote {len(data)} bytes on '{reader.reader_id}' "
-                f"tag {tag_id}"
+                f"[MultiPN532] Wrote {len(data)} bytes ({written_pages} pages) "
+                f"on '{reader.reader_id}' tag {tag_id}"
             )
             return True
 
