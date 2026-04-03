@@ -97,8 +97,8 @@ const int SLOT_PINS[4] = {A2, A1, A4, A5};
 HX711 scaleShelf;
 HX711 scaleMix;
 
-float shelfScale  = 0.2084;
-float mixScale    = 0.0638;
+float shelfScale  = 0.1857;
+float mixScale    = 0.1095;
 long  shelfOffset = 0;
 long  mixOffset   = 0;
 
@@ -496,8 +496,8 @@ void readAndSend(HX711* scale, const char* chName,
     }
 
     long raw = scale->read_average(SAMPLES_NORMAL);
-    // Weight added -> raw increases -> (raw - offset) is positive
-    float diff = (float)(raw - calOffset);
+    // Weight added -> raw decreases -> (offset - raw) is positive
+    float diff = (float)(calOffset - raw);
     float grams = diff / calScale;
 
     history[*histIdx] = grams;
