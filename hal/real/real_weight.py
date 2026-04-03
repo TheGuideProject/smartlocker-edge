@@ -99,6 +99,8 @@ class RealWeightDriver(WeightDriverInterface):
 
         # Cache of last readings per channel
         self._cached_readings: Dict[str, WeightReading] = {}
+        self._poll_channels: List[str] = list(self._channels)
+        self._cycle_sleep_s = 0.05
 
         # Background reader thread
         self._reader_thread: Optional[threading.Thread] = None
@@ -322,8 +324,10 @@ class RealWeightDriver(WeightDriverInterface):
                         self._cached_readings.pop(tare_ch, None)
                     self._tare_done.set()
 
-                # Read all channels
-                for name in self._channels:
+                poll_channels = list(self._poll_channels or self._channels)
+
+                # Read active channels only
+                for name in poll_channels:
                     if not self._reader_running:
                         break
                     arduino_ch = _to_arduino_ch(name)
@@ -346,7 +350,7 @@ class RealWeightDriver(WeightDriverInterface):
                 logger.error(f"[ARDUINO WEIGHT] Reader error: {e}")
                 time.sleep(1.0)
 
-            time.sleep(0.05)  # Small gap between cycles
+            time.sleep(self._cycle_sleep_s)
 
         logger.info("[ARDUINO WEIGHT] Background reader stopped")
 
@@ -414,6 +418,37 @@ class RealWeightDriver(WeightDriverInterface):
 
     def get_channels(self) -> List[str]:
         return list(self._channels)
+
+    def set_poll_channels(self, channels: Optional[List[str]] = None,
+                          cycle_sleep_s: Optional[float] = None) -> None:
+        """Limit background polling to specific channels.
+
+        Args:
+            channels: Internal channel names to poll. None/empty restores all.
+            cycle_sleep_s: Optional loop delay override.
+        """
+        if channels:
+            valid = [ch for ch in channels if ch in self._channels]
+            self._poll_channels = valid or list(self._channels)
+        else:
+            self._poll_channels = list(self._channels)
+
+        if cycle_sleep_s is not None:
+            self._cycle_sleep_s = max(0.0, cycle_sleep_s)
+        else:
+            self._cycle_sleep_s = 0.05
+
+        logger.info(
+            f"[ARDUINO WEIGHT] Poll channels set to {self._poll_channels} "
+            f"(cycle_sleep={self._cycle_sleep_s:.3f}s)"
+        )
+
+    def focus_mixing_scale(self, enabled: bool) -> None:
+        """Convenience mode: prioritize mixing scale during active mixing."""
+        if enabled:
+            self.set_poll_channels(["mixing_scale"], cycle_sleep_s=0.01)
+        else:
+            self.set_poll_channels(None, cycle_sleep_s=0.05)
 
     def is_healthy(self) -> bool:
         if not self._initialized or not HAS_SERIAL:

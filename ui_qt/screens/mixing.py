@@ -819,6 +819,11 @@ class MixingScreen(QWidget):
         self._stack.setCurrentIndex(0)
         self._set_state_badge("IDLE", "muted")
         self._input_user.clear()
+        try:
+            if hasattr(self.app.weight, "focus_mixing_scale"):
+                self.app.weight.focus_mixing_scale(True)
+        except Exception as e:
+            logger.debug(f"Could not enable mixing weight focus: {e}")
 
         # Check if PaintNow passed pre-calculated quantities
         pending = getattr(self.app, "pending_mix", None)
@@ -829,6 +834,11 @@ class MixingScreen(QWidget):
     def on_leave(self):
         self._weight_timer.stop()
         self._pot_life_timer.stop()
+        try:
+            if hasattr(self.app.weight, "focus_mixing_scale"):
+                self.app.weight.focus_mixing_scale(False)
+        except Exception as e:
+            logger.debug(f"Could not restore default weight polling: {e}")
 
     def _auto_start_from_paint_now(self, pending: dict):
         """Auto-start mixing session with pre-calculated quantities from PaintNow."""
