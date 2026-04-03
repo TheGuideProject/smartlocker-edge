@@ -609,8 +609,8 @@ void readAndSend(HX711* scale, const char* chName,
 
     if (samplesToRead < 1) samplesToRead = 1;
     long raw = scale->read_average(samplesToRead);
-    // Weight added -> raw decreases -> (offset - raw) is positive
-    float diff = (float)(calOffset - raw);
+    // Weight added on the current wiring makes raw increase, so use raw - offset.
+    float diff = (float)(raw - calOffset);
     float grams = diff / calScale;
 
     history[*histIdx] = grams;

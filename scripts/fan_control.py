@@ -39,17 +39,17 @@ POLL_INTERVAL_S = 3       # Check temperature every 3 seconds
 HYSTERESIS_C = 2.0        # Don't flap: need 2C drop to reduce speed
 
 # Aggressive fan curve: (temp_threshold_C, fan_speed_pct)
-# Fan starts at 45C, full speed at 70C
+# Fan starts at 40C, full speed at 70C
 FAN_CURVE = [
     (70, 100),
     (65,  90),
     (60,  80),
     (55,  60),
     (50,  40),
-    (45,  25),
+    (40,  25),
 ]
-# Below 45C (minus hysteresis) → off
-FAN_OFF_TEMP = 43  # 45 - 2 hysteresis
+# Below 40C (minus hysteresis) -> off
+FAN_OFF_TEMP = 38  # 40 - 2 hysteresis
 
 
 def get_cpu_temp() -> float:
