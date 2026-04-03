@@ -288,20 +288,21 @@ void initHX711() {
     bool shelfReady = warmUpScale(&scaleShelf, HX711_WARMUP_READS);
     bool mixReady = warmUpScale(&scaleMix, HX711_WARMUP_READS);
 
-    // DEBUG MODE: no EEPROM, no auto-tare. Offsets stay 0.
-    // This means "g" = raw / scale (raw-proportional, not zeroed).
-    // We use tare command manually when ready.
-    shelfOffset = 0;
-    mixOffset   = 0;
+    // Auto-tare: read current raw as zero reference
+    if (shelfReady) {
+        shelfOffset = scaleShelf.read_average(SAMPLES_TARE);
+    }
+    if (mixReady) {
+        mixOffset = scaleMix.read_average(SAMPLES_TARE);
+    }
     resetHistory(shelfHistory, &shelfHistIdx, &shelfStable);
     resetHistory(mixHistory, &mixHistIdx, &mixStable);
 
     hx711_initialized = true;
-    char resp[96];
+    char resp[128];
     snprintf(resp, sizeof(resp),
-        "{\"info\":\"hx711_ready_debug\",\"shelf_ready\":%s,\"mix_ready\":%s}",
-        shelfReady ? "true" : "false",
-        mixReady ? "true" : "false");
+        "{\"info\":\"hx711_ready\",\"shelf_off\":%ld,\"mix_off\":%ld}",
+        shelfOffset, mixOffset);
     Serial.println(resp);
 }
 
