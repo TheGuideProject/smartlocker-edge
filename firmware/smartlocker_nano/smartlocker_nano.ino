@@ -244,29 +244,14 @@ void initHX711() {
     scaleShelf.begin(SHELF_DT, SHELF_SCK);
     scaleMix.begin(MIX_DT, MIX_SCK);
 
-    // --- Load saved offsets from EEPROM (survive reboot!) ---
-    if (EEPROM.read(EEPROM_MAGIC_ADDR) == EEPROM_MAGIC) {
-        EEPROM.get(EEPROM_SHELF_OFF_ADDR, shelfOffset);
-        EEPROM.get(EEPROM_MIX_OFF_ADDR,   mixOffset);
-        Serial.println(F("{\"info\":\"offsets_from_eeprom\"}"));
-    } else {
-        // First boot ever: auto-tare (user should have empty shelf!)
-        if (scaleShelf.wait_ready_timeout(2000)) {
-            shelfOffset = scaleShelf.read_average(SAMPLES_TARE);
-        }
-        if (scaleMix.wait_ready_timeout(2000)) {
-            mixOffset = scaleMix.read_average(SAMPLES_TARE);
-        }
-        saveOffsetsToEEPROM();
-        Serial.println(F("{\"info\":\"first_boot_tared_and_saved\"}"));
-    }
+    // DEBUG MODE: no EEPROM, no auto-tare. Offsets stay 0.
+    // This means "g" = raw / scale (raw-proportional, not zeroed).
+    // We use tare command manually when ready.
+    shelfOffset = 0;
+    mixOffset   = 0;
 
     hx711_initialized = true;
-
-    char buf[80];
-    snprintf(buf, sizeof(buf), "{\"info\":\"hx711_ready\",\"shelf_off\":%ld,\"mix_off\":%ld}",
-             shelfOffset, mixOffset);
-    Serial.println(buf);
+    Serial.println(F("{\"info\":\"hx711_ready_debug\"}"));
 }
 
 // ============================================================
@@ -328,7 +313,7 @@ void processCommand(const char* json) {
             }
         }
         if (ok) {
-            saveOffsetsToEEPROM();  // Persist — no more bad auto-tare on reboot!
+            // DEBUG: EEPROM save disabled
             char resp[64];
             snprintf(resp, sizeof(resp), "{\"ok\":\"tare\",\"ch\":\"%s\"}", ch);
             Serial.println(resp);
@@ -511,11 +496,11 @@ void readAndSend(HX711* scale, const char* chName,
     }
 
     long raw = scale->read_average(SAMPLES_NORMAL);
+    // DEBUG: signed diff, no fabs, no dead zone
+    // Positive grams = weight added (if polarity correct)
+    // Negative grams = polarity inverted (weight makes raw go opposite direction)
     float diff = (float)(calOffset - raw);
-    // Auto-detect load cell polarity: use abs value
-    // Weight is always positive, handles both wiring directions
-    float grams = fabs(diff) / calScale;
-    if (grams < 5.0) grams = 0;  // 5g dead zone for noise
+    float grams = diff / calScale;
 
     history[*histIdx] = grams;
     *histIdx = (*histIdx + 1) % STABILITY_WINDOW;

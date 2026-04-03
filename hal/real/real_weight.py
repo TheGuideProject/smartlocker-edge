@@ -234,8 +234,8 @@ class RealWeightDriver(WeightDriverInterface):
                             raw_value=0, timestamp=time.time(),
                         )
 
-                    # Restore saved calibration from DB → Arduino
-                    self._restore_calibration_from_db()
+                    # DEBUG: DB calibration restore DISABLED
+                    # self._restore_calibration_from_db()
 
                     # Start background reader
                     self._reader_running = True
