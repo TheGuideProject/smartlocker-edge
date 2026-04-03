@@ -97,8 +97,8 @@ const int SLOT_PINS[4] = {A2, A1, A4, A5};
 HX711 scaleShelf;
 HX711 scaleMix;
 
-float shelfScale  = 20.6660;
-float mixScale    = 10.4070;
+float shelfScale  = 0.2084;
+float mixScale    = 0.0638;
 long  shelfOffset = 0;
 long  mixOffset   = 0;
 
@@ -496,10 +496,8 @@ void readAndSend(HX711* scale, const char* chName,
     }
 
     long raw = scale->read_average(SAMPLES_NORMAL);
-    // DEBUG: signed diff, no fabs, no dead zone
-    // Positive grams = weight added (if polarity correct)
-    // Negative grams = polarity inverted (weight makes raw go opposite direction)
-    float diff = (float)(calOffset - raw);
+    // Weight added -> raw increases -> (raw - offset) is positive
+    float diff = (float)(raw - calOffset);
     float grams = diff / calScale;
 
     history[*histIdx] = grams;

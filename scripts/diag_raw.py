@@ -162,11 +162,9 @@ def main():
     print("\n" + "=" * 60)
     print("SOMMARIO")
     print("=" * 60)
-    print(f"Pin assignment:  SHELF=D{SHELF_DT}/D{SHELF_SCK}  MIX=D{MIX_DT}/D{MIX_SCK}"
-          .replace("SHELF_DT", "4").replace("SHELF_SCK", "5")
-          .replace("MIX_DT", "2").replace("MIX_SCK", "3"))
-    print(f"Firmware pins:   SHELF_DT=4 SHELF_SCK=5  MIX_DT=2 MIX_SCK=3")
-    print(f"Scale factors:   shelf={20.666}  mix={10.407}")
+    print("Firmware pins:   SHELF_DT=4 SHELF_SCK=5  MIX_DT=2 MIX_SCK=3")
+    print("Scale factors:   shelf=0.2084  mix=0.0638")
+    print("Sign formula:    grams = (raw - offset) / scale")
     print()
     print("Copia questo output e mandamelo intero.")
 
