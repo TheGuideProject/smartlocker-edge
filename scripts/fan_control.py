@@ -2,6 +2,9 @@
 """
 SmartLocker Aggressive Fan Control — PWM fan curve for Raspberry Pi 5.
 
+Uses /sys/class/hwmon/hwmonN/pwm1 where name == "pwmfan".
+This is the verified working path on this RPi5 hardware.
+
 Curve:
   < 45C  → OFF (0%)
   45-50C → 25%  (spin-up)
@@ -49,12 +52,6 @@ FAN_CURVE = [
 FAN_OFF_TEMP = 43  # 45 - 2 hysteresis
 
 
-# ── RPi5 PWM Fan via thermal sysfs ───────────────────
-# RPi5 has built-in fan control via:
-#   /sys/class/thermal/cooling_device0/cur_state
-# States: 0=off, 1=low, 2=medium, 3=high, 4=full
-# Or via /sys/class/hwmon/ for finer PWM control
-
 def get_cpu_temp() -> float:
     """Read CPU temperature in Celsius."""
     try:
@@ -76,93 +73,98 @@ def get_cpu_temp() -> float:
     return 0.0
 
 
-def find_pwm_fan():
-    """Find the fan PWM control file on the system."""
-    # RPi5 official fan
-    paths = [
-        # RPi5 active cooler via cooling_device
-        "/sys/class/thermal/cooling_device0/cur_state",
-        # GPIO PWM fan via hwmon
-        "/sys/class/hwmon/hwmon0/pwm1",
-        "/sys/class/hwmon/hwmon1/pwm1",
-        "/sys/class/hwmon/hwmon2/pwm1",
-    ]
-    for p in paths:
-        if os.path.exists(p):
-            return p
+def find_pwmfan_hwmon() -> dict | None:
+    """Find the hwmon device named 'pwmfan' and return its paths.
+
+    Scans /sys/class/hwmon/hwmonN/ for name == 'pwmfan'.
+    Returns dict with pwm1, pwm1_enable, fan1_input paths, or None.
+    """
+    hwmon_base = "/sys/class/hwmon"
+    if not os.path.isdir(hwmon_base):
+        return None
+
+    for entry in sorted(os.listdir(hwmon_base)):
+        hwmon_dir = os.path.join(hwmon_base, entry)
+        name_file = os.path.join(hwmon_dir, "name")
+        if not os.path.isfile(name_file):
+            continue
+        try:
+            with open(name_file, "r") as f:
+                name = f.read().strip()
+        except Exception:
+            continue
+
+        if name == "pwmfan":
+            pwm1 = os.path.join(hwmon_dir, "pwm1")
+            if os.path.exists(pwm1):
+                return {
+                    "dir": hwmon_dir,
+                    "name": name,
+                    "hwmon": entry,
+                    "pwm1": pwm1,
+                    "pwm1_enable": os.path.join(hwmon_dir, "pwm1_enable"),
+                    "fan1_input": os.path.join(hwmon_dir, "fan1_input"),
+                }
     return None
 
 
-def find_max_state():
-    """Find the max cooling state for RPi5 fan."""
+def read_file(path: str) -> str | None:
+    """Read a sysfs file, return stripped content or None."""
     try:
-        with open("/sys/class/thermal/cooling_device0/max_state", "r") as f:
-            return int(f.read().strip())
+        with open(path, "r") as f:
+            return f.read().strip()
     except Exception:
-        return 4  # Default RPi5 has 4 states
+        return None
 
 
-def set_fan_speed_cooling_device(speed_pct: int):
-    """Set fan speed via RPi5 cooling_device (0-4 states)."""
-    max_state = find_max_state()
-
-    if speed_pct <= 0:
-        state = 0
-    elif speed_pct <= 25:
-        state = 1
-    elif speed_pct <= 50:
-        state = 2
-    elif speed_pct <= 75:
-        state = 3
-    else:
-        state = max_state
-
-    try:
-        with open("/sys/class/thermal/cooling_device0/cur_state", "w") as f:
-            f.write(str(state))
-    except PermissionError:
-        log.error("Permission denied — run with sudo!")
-        sys.exit(1)
-    except Exception as e:
-        log.error(f"Failed to set fan state: {e}")
-
-
-def set_fan_speed_pwm(path: str, speed_pct: int):
-    """Set fan speed via PWM file (0-255)."""
-    value = int(speed_pct * 255 / 100)
-    value = max(0, min(255, value))
+def write_file(path: str, value: str) -> bool:
+    """Write a value to a sysfs file. Returns True on success."""
     try:
         with open(path, "w") as f:
-            f.write(str(value))
+            f.write(value)
+        return True
     except PermissionError:
-        log.error("Permission denied — run with sudo!")
-        sys.exit(1)
+        log.error(f"Permission denied writing {path} — run with sudo!")
+        return False
     except Exception as e:
-        log.error(f"Failed to write PWM: {e}")
+        log.error(f"Failed to write {path}: {e}")
+        return False
 
 
-_gpio_fan_error_logged = False
+def enable_manual_pwm(fan: dict) -> bool:
+    """Set pwm1_enable to 1 (manual mode) so we can control pwm1 directly."""
+    enable_path = fan["pwm1_enable"]
+    if not os.path.exists(enable_path):
+        log.warning(f"pwm1_enable not found at {enable_path}")
+        return True  # May work without it
 
-def set_fan_speed_gpio(speed_pct: int):
-    """Set fan speed via GPIO PWM (fallback for HAT fans)."""
-    global _gpio_fan_error_logged
-    try:
-        import lgpio
-        FAN_GPIO = 14  # Common fan control pin
-        h = lgpio.gpiochip_open(0)
-        if speed_pct <= 0:
-            lgpio.gpio_write(h, FAN_GPIO, 0)
+    current = read_file(enable_path)
+    log.info(f"pwm1_enable current value: {current} (path: {enable_path})")
+
+    if current != "1":
+        if write_file(enable_path, "1"):
+            log.info("pwm1_enable set to 1 (manual mode)")
+            return True
         else:
-            freq = 25000  # 25kHz PWM for fan
-            duty = max(0, min(100, speed_pct))
-            lgpio.tx_pwm(h, FAN_GPIO, freq, duty)
-        _gpio_fan_error_logged = False  # Reset on success
-    except ImportError:
-        pass
-    except Exception as e:
-        if not _gpio_fan_error_logged:
-            log.warning(f"GPIO fan control failed: {e} (suppressing further)")
-            _gpio_fan_error_logged = True
+            log.error("Failed to set pwm1_enable to manual mode")
+            return False
+    else:
+        log.info("pwm1_enable already in manual mode (1)")
+        return True
+
+
+def set_fan_speed(fan: dict, speed_pct: int) -> None:
+    """Set fan speed via pwm1 (0-255). Logs path, value, and RPM feedback."""
+    pwm_value = int(speed_pct * 255 / 100)
+    pwm_value = max(0, min(255, pwm_value))
+
+    path = fan["pwm1"]
+    if write_file(path, str(pwm_value)):
+        # Read back RPM if available
+        rpm = read_file(fan["fan1_input"]) if os.path.exists(fan["fan1_input"]) else "N/A"
+        log.info(f"PWM written: {path} = {pwm_value} ({speed_pct}%), fan1_input = {rpm} RPM")
+    else:
+        log.error(f"Failed to write PWM {pwm_value} to {path}")
 
 
 def calculate_fan_speed(temp: float, current_speed: int) -> int:
@@ -194,18 +196,25 @@ class FanController(threading.Thread):
 
     def run(self):
         """Main fan control loop (runs in background thread)."""
-        pwm_path = find_pwm_fan()
-        use_cooling_device = False
-        use_gpio = False
+        fan = find_pwmfan_hwmon()
 
-        if pwm_path and "cooling_device" in pwm_path:
-            use_cooling_device = True
-            log.info(f"Using RPi5 cooling_device: {pwm_path}")
-        elif pwm_path:
-            log.info(f"Using PWM fan control: {pwm_path}")
-        else:
-            use_gpio = True
-            log.info("No sysfs fan found — trying GPIO PWM on pin 14")
+        if not fan:
+            log.error(
+                "No 'pwmfan' hwmon device found! "
+                "Check /sys/class/hwmon/hwmonN/name for 'pwmfan'. "
+                "Fan control disabled."
+            )
+            return
+
+        log.info(f"Found pwmfan: {fan['hwmon']} at {fan['dir']}")
+        log.info(f"  pwm1:        {fan['pwm1']}")
+        log.info(f"  pwm1_enable: {fan['pwm1_enable']}")
+        log.info(f"  fan1_input:  {fan['fan1_input']}")
+
+        # Set manual mode
+        if not enable_manual_pwm(fan):
+            log.error("Cannot set manual PWM mode — fan control disabled.")
+            return
 
         last_temp = 0.0
 
@@ -220,13 +229,7 @@ class FanController(threading.Thread):
             if target_speed != self.current_speed:
                 log.info(f"CPU {temp:.1f}C -> Fan {self.current_speed}% -> {target_speed}%")
                 self.current_speed = target_speed
-
-                if use_cooling_device:
-                    set_fan_speed_cooling_device(self.current_speed)
-                elif use_gpio:
-                    set_fan_speed_gpio(self.current_speed)
-                else:
-                    set_fan_speed_pwm(pwm_path, self.current_speed)
+                set_fan_speed(fan, self.current_speed)
 
             elif abs(temp - last_temp) > 3:
                 log.info(f"CPU {temp:.1f}C (fan at {self.current_speed}%)")
@@ -248,6 +251,11 @@ def run_fan_loop():
 
 
 def main():
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s [%(name)s] %(levelname)s: %(message)s",
+    )
+
     # Handle graceful shutdown
     def signal_handler(sig, frame):
         log.info("Shutting down fan control...")
