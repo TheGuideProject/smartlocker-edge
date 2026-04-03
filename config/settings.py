@@ -35,18 +35,17 @@ MODE = "auto"
 # ============================================================
 DRIVER_RFID = "real"       # "fake" or "real"
 RFID_MODULE = "pn532_multi_usb"  # "pn532_multi_usb" (N readers via USB hub) or "pn532_usb" (single) or "rc522" (SPI) or "pn532" (I2C)
-RFID_USB_PORT = "/dev/ttyUSB0"  # Single-reader mode: PN532 port (legacy)
+RFID_USB_PORT = "/dev/serial/by-path/platform-xhci-hcd.0-usb-0:1.3:1.0-port0"  # PN532 slot1 (stable path)
 
 # Multi-reader config: list of {port, reader_id} pairs.
+# Using /dev/serial/by-path/ symlinks so ports survive reboot.
 # Empty list = auto-detect all CH340/CP210x ports (excluding Arduino).
-# Example for 4 readers via USB hub:
-#   RFID_READER_MAP = [
-#       {"port": "/dev/ttyUSB2", "reader_id": "shelf1_slot1"},
-#       {"port": "/dev/ttyUSB3", "reader_id": "shelf1_slot2"},
-#       {"port": "/dev/ttyUSB4", "reader_id": "shelf1_slot3"},
-#       {"port": "/dev/ttyUSB5", "reader_id": "shelf1_slot4"},
-#   ]
-RFID_READER_MAP = []  # Empty = auto-detect all PN532 modules
+RFID_READER_MAP = [
+    {"port": "/dev/serial/by-path/platform-xhci-hcd.0-usb-0:1.3:1.0-port0",   "reader_id": "shelf1_slot1"},
+    {"port": "/dev/serial/by-path/platform-xhci-hcd.0-usb-0:1.4.1:1.0-port0", "reader_id": "shelf1_slot2"},
+    {"port": "/dev/serial/by-path/platform-xhci-hcd.0-usb-0:1.4.2:1.0-port0", "reader_id": "shelf1_slot3"},
+    {"port": "/dev/serial/by-path/platform-xhci-hcd.0-usb-0:1.4.3:1.0-port0", "reader_id": "shelf1_slot4"},
+]
 DRIVER_WEIGHT = "real"     # "fake" or "real" - Arduino serial bridge
 DRIVER_LED = "real"        # "fake" or "real" - Bar graph + shelf LEDs via Arduino
 DRIVER_BUZZER = "real"     # "fake" or "real" - GPIO PWM buzzer on GPIO 13
@@ -136,7 +135,7 @@ HX711_SCK_PIN = HX711_SHELF_SCK
 
 # Weight - Arduino Nano via Serial (HX711 bridge, for multi-channel setups)
 # Protocol: Arduino sends JSON lines: {"channel":"shelf1","grams":1234.5,"stable":true}
-WEIGHT_SERIAL_PORT = ""               # Empty = auto-detect Arduino on any ttyUSB port
+WEIGHT_SERIAL_PORT = "/dev/serial/by-path/platform-xhci-hcd.1-usb-0:2:1.0-port0"  # Arduino (stable path)
 WEIGHT_SERIAL_BAUD = 115200           # Baud rate
 ARDUINO_SERIAL_PORT = ""              # Empty = auto-detect (legacy alias)
 ARDUINO_BAUD_RATE = 115200            # Legacy alias (backward compat)

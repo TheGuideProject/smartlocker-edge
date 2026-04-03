@@ -121,26 +121,26 @@ class RealWeightDriver(WeightDriverInterface):
             self._initialized = False
             return False
 
-        # ── Collect all candidate ports ──
+        # ── Collect candidate ports ──
         ports_to_try = []
-        # Configured port first (if it exists)
-        try:
-            import os
-            if os.path.exists(self._port):
-                ports_to_try.append(self._port)
-        except Exception:
-            pass
+        import os
 
-        try:
-            available = serial.tools.list_ports.comports()
-            for p in available:
-                if any(kw in (p.description or "").lower()
-                       for kw in ["ch340", "ftdi", "arduino", "usb serial", "usb-serial"]):
-                    if p.device not in ports_to_try:
-                        ports_to_try.append(p.device)
-                        logger.info(f"[ARDUINO WEIGHT] Candidate port: {p.device} ({p.description})")
-        except Exception:
-            pass
+        # If a specific port is configured and exists, use ONLY that (no auto-detect)
+        if self._port and os.path.exists(self._port):
+            ports_to_try = [self._port]
+            logger.info(f"[ARDUINO WEIGHT] Using configured port: {self._port}")
+        else:
+            # Auto-detect: scan all USB serial ports
+            try:
+                available = serial.tools.list_ports.comports()
+                for p in available:
+                    if any(kw in (p.description or "").lower()
+                           for kw in ["ch340", "ftdi", "arduino", "usb serial", "usb-serial"]):
+                        if p.device not in ports_to_try:
+                            ports_to_try.append(p.device)
+                            logger.info(f"[ARDUINO WEIGHT] Candidate port: {p.device} ({p.description})")
+            except Exception:
+                pass
 
         if not ports_to_try:
             logger.error("[ARDUINO WEIGHT] No USB serial ports found")

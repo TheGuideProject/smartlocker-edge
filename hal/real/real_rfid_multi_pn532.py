@@ -135,8 +135,8 @@ class RealRFIDMultiPN532USB(RFIDDriverInterface):
         except Exception as e:
             logger.warning(f"[MultiPN532] Port scan error: {e}")
 
-        # Also check /dev/ttyUSBx that might not appear in comports
-        if not found:
+        # Fallback: check /dev/ttyUSBx only if no comports found AND no explicit config
+        if not found and not self._reader_configs:
             import os
             for i in range(10):
                 path = f"/dev/ttyUSB{i}"

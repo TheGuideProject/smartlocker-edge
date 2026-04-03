@@ -13,7 +13,7 @@ import serial
 import json
 import time
 
-PORT = sys.argv[1] if len(sys.argv) > 1 else "/dev/ttyUSB4"
+PORT = sys.argv[1] if len(sys.argv) > 1 else "/dev/serial/by-path/platform-xhci-hcd.1-usb-0:2:1.0-port0"
 BAUD = 115200
 
 
@@ -80,6 +80,34 @@ def wait_for_tare(s, timeout=15.0):
             print(f"     [scarto] {raw_line}")
 
     print("     TARE TIMEOUT!")
+    drain(s)
+    return False
+
+
+def wait_for_hx_ready(s, timeout=12.0):
+    """Explicitly initialize HX711 and wait for the ready/info response."""
+    drain(s)
+    cmd = json.dumps({"cmd": "init_hx"}, separators=(",", ":")) + "\n"
+    s.write(cmd.encode("utf-8"))
+    s.flush()
+
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        obj, raw_line = read_line_json(s, timeout=2.0)
+        if obj is None:
+            if raw_line:
+                print(f"     [scarto non-JSON] {raw_line}")
+            continue
+        if obj.get("info") == "hx711_ready_debug":
+            print(f"     HX711 READY: {raw_line}")
+            drain(s)
+            return True
+        if "info" in obj:
+            print(f"     [init]  {raw_line}")
+        else:
+            print(f"     [scarto] {raw_line}")
+
+    print("     HX711 INIT TIMEOUT!")
     drain(s)
     return False
 
@@ -163,15 +191,17 @@ def main():
     # === TARE ===
     print("\n" + "=" * 60)
     input(">>> TOGLI TUTTO da entrambe le bilance, poi premi INVIO...")
-    print("\n[4] Tare all (attendo risposta esplicita)...")
+    print("\n[4] Init HX711 (attendo warm-up esplicito)...")
+    wait_for_hx_ready(s)
+    print("\n[5] Tare all (attendo risposta esplicita)...")
     if not wait_for_tare(s):
         print("     ATTENZIONE: tare potrebbe non essere riuscito")
 
     # === LETTURE A VUOTO ===
-    print("\n[5] Letture SHELF a vuoto (10x, 1s intervallo)...")
+    print("\n[6] Letture SHELF a vuoto (10x, 1s intervallo)...")
     shelf_empty = read_stable(s, "shelf", count=10, interval=1.0)
 
-    print("\n[6] Letture MIX a vuoto (10x, 1s intervallo)...")
+    print("\n[7] Letture MIX a vuoto (10x, 1s intervallo)...")
     mix_empty = read_stable(s, "mix", count=10, interval=1.0)
 
     # === PESO SHELF ===
@@ -179,7 +209,7 @@ def main():
     input(">>> METTI 5kg sulla SHELF, aspetta che sia FERMO, poi premi INVIO...")
     print("     Aspetto 5 secondi...")
     time.sleep(5)
-    print("\n[7] Letture SHELF con peso (10x, 1s intervallo)...")
+    print("\n[8] Letture SHELF con peso (10x, 1s intervallo)...")
     shelf_weight = read_stable(s, "shelf", count=10, interval=1.0)
     print("\n     Togli il peso dalla shelf.")
 
@@ -188,7 +218,7 @@ def main():
     input(">>> METTI 5kg sulla MIX, aspetta che sia FERMO, poi premi INVIO...")
     print("     Aspetto 5 secondi...")
     time.sleep(5)
-    print("\n[8] Letture MIX con peso (10x, 1s intervallo)...")
+    print("\n[9] Letture MIX con peso (10x, 1s intervallo)...")
     mix_weight = read_stable(s, "mix", count=10, interval=1.0)
 
     # === ANALISI ===
@@ -232,7 +262,7 @@ def main():
             print(f"  formula:           grams = {sign} / {factor:.4f}")
         else:
             print(f"  SNR:               {abs(delta)/max(noise_e,1):.1f}:1  *** SEGNALE < RUMORE ***")
-            print(f"  SHELF POTREBBE AVERE UN PROBLEMA HARDWARE")
+            print(f"  {label} POTREBBE AVERE UN PROBLEMA HARDWARE")
 
     print("\n" + "=" * 60)
     print("Copia TUTTO questo output e mandamelo.")
