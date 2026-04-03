@@ -1,5 +1,5 @@
 /*
- * SmartLocker Nano Firmware v1.6
+ * SmartLocker Nano Firmware v1.7
  * ==============================
  * Arduino Nano as bridge for:
  *   - 2x HX711 load cell amplifiers (shelf + mixing scale)
@@ -43,7 +43,7 @@
  *     {"cmd":"status"}
  *
  *   Arduino -> RPi:
- *     {"status":"ok","fw":"1.6"}
+ *     {"status":"ok","fw":"1.7"}
  *     {"ch":"shelf","g":1234.5,"raw":8388607,"stable":true}
  *     {"ok":"bar","seg":6}
  *     {"ok":"buzz","pattern":"confirm"}
@@ -70,11 +70,14 @@
 // PIN DEFINITIONS
 // ============================================================
 
-// HX711 load cells (swapped: physical shelf on D4/D5, physical mix on D2/D3)
-#define SHELF_DT   4
-#define SHELF_SCK  5
-#define MIX_DT     2
-#define MIX_SCK    3
+// HX711 load cells
+// Logical mapping expected by app/UI:
+//   shelf  -> D2/D3
+//   mix    -> D4/D5
+#define SHELF_DT   2
+#define SHELF_SCK  3
+#define MIX_DT     4
+#define MIX_SCK    5
 
 // LED bar graph (8 segments used of KYX-B10BGYR)
 const int BAR_PINS[8] = {6, 7, 8, 9, 10, 11, 12, 13};
@@ -105,8 +108,9 @@ const int SLOT_PINS[4] = {A2, A1, A4, A5};
 HX711 scaleShelf;
 HX711 scaleMix;
 
-float shelfScale  = 23.4484;
-float mixScale    = 12.7868;
+// Scale factors aligned with the logical mapping above.
+float shelfScale  = 12.7868;
+float mixScale    = 23.4484;
 long  shelfOffset = 0;
 long  mixOffset   = 0;
 
@@ -334,7 +338,7 @@ void processCommand(const char* json) {
 
     // ---- PING ----
     if (strcmp(cmd, "ping") == 0) {
-        Serial.println(F("{\"status\":\"ok\",\"fw\":\"1.6\"}"));
+        Serial.println(F("{\"status\":\"ok\",\"fw\":\"1.7\"}"));
     }
 
     // ---- INIT HX711 ----
@@ -563,7 +567,7 @@ void processCommand(const char* json) {
         bool mix_ok = hx711_initialized ? scaleMix.is_ready() : false;
         char resp[96];
         snprintf(resp, sizeof(resp),
-            "{\"status\":\"ok\",\"shelf_ok\":%s,\"mix_ok\":%s,\"bar\":%d,\"slots\":%d,\"buzz\":true,\"fw\":\"1.6\"}",
+            "{\"status\":\"ok\",\"shelf_ok\":%s,\"mix_ok\":%s,\"bar\":%d,\"slots\":%d,\"buzz\":true,\"fw\":\"1.7\"}",
             shelf_ok ? "true" : "false",
             mix_ok ? "true" : "false",
             NUM_BAR_SEGS, NUM_SLOTS);
