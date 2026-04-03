@@ -23,6 +23,13 @@ from hal.interfaces import LEDColor, LEDPattern, BuzzerPattern
 logger = logging.getLogger("smartlocker.sensor_test")
 
 
+def _channel_label(channel: str) -> str:
+    return {
+        "shelf1": "Shelf",
+        "mixing_scale": "Mixing",
+    }.get(channel, channel)
+
+
 # ================================================================
 # WEIGHT CHART
 # ================================================================
@@ -267,7 +274,7 @@ class SensorTestScreen(QWidget):
         except Exception:
             channels = ["shelf1", "mixing_scale"]
         for ch in channels:
-            b = _toggle_btn(ch)
+            b = _toggle_btn(_channel_label(ch))
             b.clicked.connect(lambda checked, c=ch: self._select_channel(c))
             chan_row.addWidget(b)
             self._channel_btns[ch] = b

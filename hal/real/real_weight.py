@@ -100,6 +100,7 @@ class RealWeightDriver(WeightDriverInterface):
         # Cache of last readings per channel
         self._cached_readings: Dict[str, WeightReading] = {}
         self._poll_channels: List[str] = list(self._channels)
+        self._fast_read_channels = set()
         self._cycle_sleep_s = 0.05
 
         # Background reader thread
@@ -484,8 +485,9 @@ class RealWeightDriver(WeightDriverInterface):
                     if not self._reader_running:
                         break
                     arduino_ch = _to_arduino_ch(name)
+                    cmd_name = "read_fast" if name in self._fast_read_channels else "read"
                     with self._lock:
-                        self._send({"cmd": "read", "ch": arduino_ch})
+                        self._send({"cmd": cmd_name, "ch": arduino_ch})
                         resp = self._recv(timeout=5.0, expect_ch=arduino_ch)
 
                     if resp and "g" in resp:
@@ -599,8 +601,10 @@ class RealWeightDriver(WeightDriverInterface):
     def focus_mixing_scale(self, enabled: bool) -> None:
         """Convenience mode: prioritize mixing scale during active mixing."""
         if enabled:
+            self._fast_read_channels = {"mixing_scale"}
             self.set_poll_channels(["mixing_scale"], cycle_sleep_s=0.01)
         else:
+            self._fast_read_channels = set()
             self.set_poll_channels(None, cycle_sleep_s=0.05)
 
     def is_healthy(self) -> bool:

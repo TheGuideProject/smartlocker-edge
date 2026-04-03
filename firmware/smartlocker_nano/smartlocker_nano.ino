@@ -1,5 +1,5 @@
 /*
- * SmartLocker Nano Firmware v1.5
+ * SmartLocker Nano Firmware v1.6
  * ==============================
  * Arduino Nano as bridge for:
  *   - 2x HX711 load cell amplifiers (shelf + mixing scale)
@@ -23,6 +23,7 @@
  *     {"cmd":"ping"}
  *     {"cmd":"read","ch":"shelf"}
  *     {"cmd":"read","ch":"mix"}
+ *     {"cmd":"read_fast","ch":"mix"}
  *     {"cmd":"tare","ch":"shelf"}
  *     {"cmd":"tare","ch":"mix"}
  *     {"cmd":"tare","ch":"all"}
@@ -42,7 +43,7 @@
  *     {"cmd":"status"}
  *
  *   Arduino -> RPi:
- *     {"status":"ok","fw":"1.2"}
+ *     {"status":"ok","fw":"1.6"}
  *     {"ch":"shelf","g":1234.5,"raw":8388607,"stable":true}
  *     {"ok":"bar","seg":6}
  *     {"ok":"buzz","pattern":"confirm"}
@@ -90,6 +91,7 @@ const int SLOT_PINS[4] = {A2, A1, A4, A5};
 // HX711 CONFIGURATION
 // ============================================================
 #define SAMPLES_NORMAL       20
+#define SAMPLES_FAST         4
 #define SAMPLES_TARE         30
 #define STABILITY_WINDOW     5
 #define STABILITY_THRESH     300.0
@@ -332,7 +334,7 @@ void processCommand(const char* json) {
 
     // ---- PING ----
     if (strcmp(cmd, "ping") == 0) {
-        Serial.println(F("{\"status\":\"ok\",\"fw\":\"1.5\"}"));
+        Serial.println(F("{\"status\":\"ok\",\"fw\":\"1.6\"}"));
     }
 
     // ---- INIT HX711 ----
@@ -341,16 +343,17 @@ void processCommand(const char* json) {
     }
 
     // ---- READ WEIGHT ----
-    else if (strcmp(cmd, "read") == 0) {
+    else if (strcmp(cmd, "read") == 0 || strcmp(cmd, "read_fast") == 0) {
         if (!hx711_initialized) initHX711();
         const char* ch = doc["ch"] | "";
+        int samplesToRead = (strcmp(cmd, "read_fast") == 0) ? SAMPLES_FAST : SAMPLES_NORMAL;
         if (strcmp(ch, "shelf") == 0 || strcmp(ch, "shelf1") == 0) {
             readAndSend(&scaleShelf, "shelf", shelfScale, shelfOffset,
-                        shelfHistory, &shelfHistIdx, &shelfStable);
+                        shelfHistory, &shelfHistIdx, &shelfStable, samplesToRead);
         }
         else if (strcmp(ch, "mix") == 0 || strcmp(ch, "mixing_scale") == 0) {
             readAndSend(&scaleMix, "mix", mixScale, mixOffset,
-                        mixHistory, &mixHistIdx, &mixStable);
+                        mixHistory, &mixHistIdx, &mixStable, samplesToRead);
         }
         else {
             Serial.println(F("{\"err\":\"unknown channel\"}"));
@@ -560,7 +563,7 @@ void processCommand(const char* json) {
         bool mix_ok = hx711_initialized ? scaleMix.is_ready() : false;
         char resp[96];
         snprintf(resp, sizeof(resp),
-            "{\"status\":\"ok\",\"shelf_ok\":%s,\"mix_ok\":%s,\"bar\":%d,\"slots\":%d,\"buzz\":true,\"fw\":\"1.5\"}",
+            "{\"status\":\"ok\",\"shelf_ok\":%s,\"mix_ok\":%s,\"bar\":%d,\"slots\":%d,\"buzz\":true,\"fw\":\"1.6\"}",
             shelf_ok ? "true" : "false",
             mix_ok ? "true" : "false",
             NUM_BAR_SEGS, NUM_SLOTS);
@@ -590,7 +593,8 @@ void setBar(int segments) {
 // ============================================================
 void readAndSend(HX711* scale, const char* chName,
                  float calScale, long calOffset,
-                 float* history, int* histIdx, bool* stable) {
+                 float* history, int* histIdx, bool* stable,
+                 int samplesToRead) {
 
     if (!scale->wait_ready_timeout(500)) {
         char resp[64];
@@ -599,7 +603,8 @@ void readAndSend(HX711* scale, const char* chName,
         return;
     }
 
-    long raw = scale->read_average(SAMPLES_NORMAL);
+    if (samplesToRead < 1) samplesToRead = 1;
+    long raw = scale->read_average(samplesToRead);
     // Weight added -> raw decreases -> (offset - raw) is positive
     float diff = (float)(calOffset - raw);
     float grams = diff / calScale;
