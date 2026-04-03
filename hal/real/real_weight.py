@@ -315,7 +315,7 @@ class RealWeightDriver(WeightDriverInterface):
                     arduino_ch = _to_arduino_ch(tare_ch)
                     with self._lock:
                         self._send({"cmd": "tare", "ch": arduino_ch})
-                        resp = self._recv(timeout=3.0)
+                        resp = self._recv(timeout=10.0)
                     self._tare_result = resp is not None and "ok" in resp
                     if self._tare_result:
                         logger.info(f"[ARDUINO WEIGHT] Tared '{tare_ch}'")
@@ -329,7 +329,7 @@ class RealWeightDriver(WeightDriverInterface):
                     arduino_ch = _to_arduino_ch(name)
                     with self._lock:
                         self._send({"cmd": "read", "ch": arduino_ch})
-                        resp = self._recv(timeout=1.5)
+                        resp = self._recv(timeout=5.0, expect_ch=arduino_ch)
 
                     if resp and "g" in resp:
                         self._cached_readings[name] = WeightReading(
@@ -362,14 +362,15 @@ class RealWeightDriver(WeightDriverInterface):
         return WeightReading(grams=0.0, channel=channel, stable=False)
 
     def tare(self, channel: str) -> bool:
-        """Request tare via background thread. Blocks up to 5s for result."""
+        """Request tare via background thread. Blocks up to 15s for result.
+        SAMPLES_TARE=30 at 10Hz = 3s/channel, tare all = ~6s + overhead."""
         if not self._initialized or not HAS_SERIAL:
             return False
 
         self._tare_done.clear()
         self._tare_result = False
         self._tare_request = channel
-        if self._tare_done.wait(timeout=5.0):
+        if self._tare_done.wait(timeout=15.0):
             return self._tare_result
         return False
 
@@ -418,10 +419,11 @@ class RealWeightDriver(WeightDriverInterface):
         if not self._initialized or not HAS_SERIAL:
             return False
         # Check if we have recent readings
+        # With SAMPLES_NORMAL=20 each read takes ~2s, full cycle ~5s
         now = time.time()
         for name in self._channels:
             r = self._cached_readings.get(name)
-            if not r or (now - r.timestamp) > 5.0:
+            if not r or (now - r.timestamp) > 15.0:
                 return False
         return True
 
@@ -460,25 +462,62 @@ class RealWeightDriver(WeightDriverInterface):
     # ---- Internal serial helpers ----
 
     def _send(self, cmd: dict) -> None:
-        """Send JSON command to Arduino (caller must hold lock)."""
+        """Send JSON command to Arduino (caller must hold lock).
+        Drains any stale data in the buffer before sending."""
         if self._serial and self._serial.is_open:
+            # Drain stale responses from previous commands
+            if self._serial.in_waiting:
+                stale = self._serial.read(self._serial.in_waiting)
+                logger.debug(f"[ARDUINO WEIGHT] Drained {len(stale)} stale bytes")
             line = json.dumps(cmd, separators=(',', ':')) + "\n"
             self._serial.write(line.encode("utf-8"))
             self._serial.flush()
 
-    def _recv(self, timeout: float = 1.0) -> Optional[dict]:
-        """Read JSON response from Arduino (caller must hold lock)."""
+    def _recv(self, timeout: float = 5.0, expect_ch: str = None) -> Optional[dict]:
+        """Read JSON response from Arduino (caller must hold lock).
+
+        If expect_ch is set, reads lines in a loop until a response with
+        matching 'ch' field is found, discarding non-matching lines.
+        If expect_ch is None, returns the first valid JSON object.
+        """
         if not self._serial or not self._serial.is_open:
             return None
 
         old_timeout = self._serial.timeout
-        self._serial.timeout = timeout
+        self._serial.timeout = min(timeout, 1.0)  # readline granularity
+        deadline = time.time() + timeout
+
         try:
-            line = self._serial.readline().decode("utf-8").strip()
-            if line:
-                return json.loads(line)
-        except (json.JSONDecodeError, UnicodeDecodeError) as e:
-            logger.warning(f"[ARDUINO WEIGHT] Bad response: {e}")
+            while time.time() < deadline:
+                line = self._serial.readline().decode("utf-8", errors="replace").strip()
+                if not line:
+                    continue
+
+                try:
+                    obj = json.loads(line)
+                except (json.JSONDecodeError, UnicodeDecodeError):
+                    logger.debug(f"[ARDUINO WEIGHT] Non-JSON line: {line[:80]}")
+                    continue
+
+                # No channel filter — return first valid JSON
+                if expect_ch is None:
+                    return obj
+
+                # Check channel match
+                resp_ch = obj.get("ch", "")
+                if resp_ch == expect_ch:
+                    return obj
+
+                # Discard with appropriate log
+                if "info" in obj or "boot" in obj:
+                    logger.debug(f"[ARDUINO WEIGHT] Skipped init msg: {line[:60]}")
+                elif resp_ch:
+                    logger.debug(
+                        f"[ARDUINO WEIGHT] Skipped wrong ch "
+                        f"(want={expect_ch}, got={resp_ch})")
+                else:
+                    logger.debug(f"[ARDUINO WEIGHT] Skipped non-weight: {line[:60]}")
+
         except Exception as e:
             logger.error(f"[ARDUINO WEIGHT] Serial read error: {e}")
         finally:
