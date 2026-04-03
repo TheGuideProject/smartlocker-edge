@@ -110,6 +110,7 @@ class RealWeightDriver(WeightDriverInterface):
         self._tare_request: Optional[str] = None
         self._tare_done = threading.Event()
         self._tare_result = False
+        self._fw_version = "?"  # Populated after ping
 
     def initialize(self) -> bool:
         """
@@ -216,6 +217,7 @@ class RealWeightDriver(WeightDriverInterface):
 
                 if response and response.get("status") == "ok":
                     fw = response.get("fw", "?")
+                    self._fw_version = fw
                     logger.info(f"[ARDUINO WEIGHT] Connected on {port} (firmware v{fw})")
                     self._serial = s
                     self._port = port
@@ -236,8 +238,8 @@ class RealWeightDriver(WeightDriverInterface):
                             raw_value=0, timestamp=time.time(),
                         )
 
-                    # DEBUG: DB calibration restore DISABLED
-                    # self._restore_calibration_from_db()
+                    # Trigger HX711 init and check tare source
+                    self._init_hx_and_maybe_restore_tare()
 
                     # Start background reader
                     self._reader_running = True
@@ -263,6 +265,46 @@ class RealWeightDriver(WeightDriverInterface):
         logger.error("[ARDUINO WEIGHT] Could not connect to Arduino on any port")
         self._initialized = False
         return False
+
+    def _init_hx_and_maybe_restore_tare(self) -> None:
+        """Send init_hx to Arduino, read the hx711_ready response to check
+        the tare source. If Arduino auto-tared (EEPROM was empty/invalid),
+        attempt to restore tare offsets from DB backup."""
+        try:
+            with self._lock:
+                self._send({"cmd": "init_hx"})
+                # Wait for hx711_ready (or hx711_init_start + hx711_ready)
+                deadline = time.time() + 20.0
+                source = None
+                while time.time() < deadline:
+                    resp = self._recv(timeout=5.0)
+                    if resp is None:
+                        continue
+                    if resp.get("info") == "hx711_ready" or resp.get("info") == "hx711_ready_debug":
+                        source = resp.get("source", "unknown")
+                        shelf_off = resp.get("shelf_off", 0)
+                        mix_off = resp.get("mix_off", 0)
+                        logger.info(
+                            f"[ARDUINO WEIGHT] HX711 ready: source={source}, "
+                            f"shelf_off={shelf_off}, mix_off={mix_off}"
+                        )
+                        break
+                    elif resp.get("info") == "hx711_init_start":
+                        logger.info("[ARDUINO WEIGHT] HX711 init started, waiting for ready...")
+                        continue
+                    else:
+                        logger.debug(f"[ARDUINO WEIGHT] init_hx skipped msg: {resp}")
+
+            if source == "auto_tare":
+                logger.info("[ARDUINO WEIGHT] EEPROM was empty — checking DB for tare backup...")
+                self._try_restore_tare_from_db()
+            elif source == "eeprom":
+                logger.info("[ARDUINO WEIGHT] Tare loaded from EEPROM (good)")
+            else:
+                logger.info(f"[ARDUINO WEIGHT] Tare source: {source}")
+
+        except Exception as e:
+            logger.warning(f"[ARDUINO WEIGHT] init_hx sequence failed: {e}")
 
     def _restore_calibration_from_db(self):
         """Restore saved calibration factors from DB and send to Arduino.
@@ -305,6 +347,114 @@ class RealWeightDriver(WeightDriverInterface):
         except Exception as e:
             logger.warning(f"[ARDUINO WEIGHT] Could not restore calibration: {e}")
 
+    # ---- Tare backup: DB as fallback for EEPROM ----
+
+    def _save_tare_to_db(self, tare_resp: dict) -> None:
+        """Save tare offsets to DB after a successful tare command.
+
+        DB keys: hx711_tare_shelf, hx711_tare_mix
+        Value: JSON with offset, timestamp, source, fw, channel
+        """
+        try:
+            from persistence.database import Database
+            db = Database()
+            db.connect()
+
+            shelf_off = tare_resp.get("shelf_off")
+            mix_off = tare_resp.get("mix_off")
+            now = time.time()
+
+            if shelf_off is not None and shelf_off != 0:
+                db.save_config("hx711_tare_shelf", json.dumps({
+                    "offset": shelf_off,
+                    "timestamp": now,
+                    "source": "tare_command",
+                    "fw": self._fw_version,
+                    "channel": "shelf",
+                }))
+                logger.info(f"[ARDUINO WEIGHT] Tare backup saved to DB: shelf offset={shelf_off}")
+
+            if mix_off is not None and mix_off != 0:
+                db.save_config("hx711_tare_mix", json.dumps({
+                    "offset": mix_off,
+                    "timestamp": now,
+                    "source": "tare_command",
+                    "fw": self._fw_version,
+                    "channel": "mix",
+                }))
+                logger.info(f"[ARDUINO WEIGHT] Tare backup saved to DB: mix offset={mix_off}")
+
+            db.close()
+        except Exception as e:
+            logger.warning(f"[ARDUINO WEIGHT] Could not save tare to DB: {e}")
+
+    def _try_restore_tare_from_db(self) -> None:
+        """If Arduino booted with auto_tare (EEPROM was empty), try to restore
+        offsets from DB backup via set_offset command.
+
+        Priority: EEPROM (already loaded by Arduino) > DB backup > auto_tare.
+        This method is only called when Arduino reports source='auto_tare'.
+        """
+        try:
+            from persistence.database import Database
+            db = Database()
+            db.connect()
+
+            shelf_json = db.get_config("hx711_tare_shelf")
+            mix_json = db.get_config("hx711_tare_mix")
+            db.close()
+
+            if not shelf_json and not mix_json:
+                logger.info("[ARDUINO WEIGHT] No tare backup in DB — keeping auto_tare offsets")
+                return
+
+            # Parse and validate
+            shelf_off = 0
+            mix_off = 0
+            if shelf_json:
+                shelf_data = json.loads(shelf_json)
+                shelf_off = shelf_data.get("offset", 0)
+                shelf_age_h = (time.time() - shelf_data.get("timestamp", 0)) / 3600
+                logger.info(
+                    f"[ARDUINO WEIGHT] DB tare backup found: shelf offset={shelf_off} "
+                    f"(age={shelf_age_h:.1f}h, source={shelf_data.get('source', '?')})"
+                )
+            if mix_json:
+                mix_data = json.loads(mix_json)
+                mix_off = mix_data.get("offset", 0)
+                mix_age_h = (time.time() - mix_data.get("timestamp", 0)) / 3600
+                logger.info(
+                    f"[ARDUINO WEIGHT] DB tare backup found: mix offset={mix_off} "
+                    f"(age={mix_age_h:.1f}h, source={mix_data.get('source', '?')})"
+                )
+
+            # Sanity: offsets must be non-zero
+            if shelf_off == 0 and mix_off == 0:
+                logger.warning("[ARDUINO WEIGHT] DB tare offsets are zero — skipping restore")
+                return
+
+            # Send set_offset to Arduino (restores offsets + saves to EEPROM)
+            with self._lock:
+                if shelf_off and mix_off:
+                    self._send({"cmd": "set_offset", "ch": "all",
+                                "shelf_off": shelf_off, "mix_off": mix_off})
+                elif shelf_off:
+                    self._send({"cmd": "set_offset", "ch": "shelf", "offset": shelf_off})
+                elif mix_off:
+                    self._send({"cmd": "set_offset", "ch": "mix", "offset": mix_off})
+                resp = self._recv(timeout=5.0)
+
+            if resp and "ok" in resp:
+                logger.info(
+                    f"[ARDUINO WEIGHT] Tare restored from DB backup! "
+                    f"shelf_off={resp.get('shelf_off')}, mix_off={resp.get('mix_off')}"
+                )
+            else:
+                logger.warning(f"[ARDUINO WEIGHT] set_offset failed: {resp}")
+
+        except Exception as e:
+            logger.warning(f"[ARDUINO WEIGHT] Could not restore tare from DB: {e}")
+
     def _reader_loop(self):
         """Background thread: continuously polls weight from Arduino."""
         logger.info("[ARDUINO WEIGHT] Background reader started")
@@ -322,6 +472,9 @@ class RealWeightDriver(WeightDriverInterface):
                     if self._tare_result:
                         logger.info(f"[ARDUINO WEIGHT] Tared '{tare_ch}'")
                         self._cached_readings.pop(tare_ch, None)
+                        # Save tare offsets to DB as backup
+                        if resp:
+                            self._save_tare_to_db(resp)
                     self._tare_done.set()
 
                 poll_channels = list(self._poll_channels or self._channels)

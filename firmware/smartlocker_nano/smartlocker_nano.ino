@@ -1,5 +1,5 @@
 /*
- * SmartLocker Nano Firmware v1.4
+ * SmartLocker Nano Firmware v1.5
  * ==============================
  * Arduino Nano as bridge for:
  *   - 2x HX711 load cell amplifiers (shelf + mixing scale)
@@ -36,6 +36,9 @@
  *     {"cmd":"buzz","freq":1000,"dur":200}
  *     {"cmd":"buzz_off"}
  *     {"cmd":"cal","ch":"shelf","scale":9.81}
+ *     {"cmd":"set_offset","ch":"shelf","offset":123456}
+ *     {"cmd":"set_offset","ch":"all","shelf_off":123,"mix_off":456}
+ *     {"cmd":"reset_tare"}
  *     {"cmd":"status"}
  *
  *   Arduino -> RPi:
@@ -287,22 +290,29 @@ void initHX711() {
     delay(HX711_INIT_SETTLE_MS);
     bool shelfReady = warmUpScale(&scaleShelf, HX711_WARMUP_READS);
     bool mixReady = warmUpScale(&scaleMix, HX711_WARMUP_READS);
+    bool loadedFromEEPROM = (EEPROM.read(EEPROM_MAGIC_ADDR) == EEPROM_MAGIC);
 
-    // Auto-tare: read current raw as zero reference
-    if (shelfReady) {
-        shelfOffset = scaleShelf.read_average(SAMPLES_TARE);
-    }
-    if (mixReady) {
-        mixOffset = scaleMix.read_average(SAMPLES_TARE);
+    if (loadedFromEEPROM) {
+        EEPROM.get(EEPROM_SHELF_OFF_ADDR, shelfOffset);
+        EEPROM.get(EEPROM_MIX_OFF_ADDR, mixOffset);
+    } else {
+        // First boot / reset_tare: read current raw as zero reference
+        if (shelfReady) {
+            shelfOffset = scaleShelf.read_average(SAMPLES_TARE);
+        }
+        if (mixReady) {
+            mixOffset = scaleMix.read_average(SAMPLES_TARE);
+        }
+        saveOffsetsToEEPROM();
     }
     resetHistory(shelfHistory, &shelfHistIdx, &shelfStable);
     resetHistory(mixHistory, &mixHistIdx, &mixStable);
 
     hx711_initialized = true;
-    char resp[128];
+    char resp[160];
     snprintf(resp, sizeof(resp),
-        "{\"info\":\"hx711_ready\",\"shelf_off\":%ld,\"mix_off\":%ld}",
-        shelfOffset, mixOffset);
+        "{\"info\":\"hx711_ready\",\"shelf_off\":%ld,\"mix_off\":%ld,\"source\":\"%s\"}",
+        shelfOffset, mixOffset, loadedFromEEPROM ? "eeprom" : "auto_tare");
     Serial.println(resp);
 }
 
@@ -322,7 +332,7 @@ void processCommand(const char* json) {
 
     // ---- PING ----
     if (strcmp(cmd, "ping") == 0) {
-        Serial.println(F("{\"status\":\"ok\",\"fw\":\"1.4\"}"));
+        Serial.println(F("{\"status\":\"ok\",\"fw\":\"1.5\"}"));
     }
 
     // ---- INIT HX711 ----
@@ -365,7 +375,7 @@ void processCommand(const char* json) {
             }
         }
         if (ok) {
-            // DEBUG: EEPROM save disabled
+            saveOffsetsToEEPROM();
             char resp[120];
             snprintf(resp, sizeof(resp),
                 "{\"ok\":\"tare\",\"ch\":\"%s\",\"shelf_off\":%ld,\"mix_off\":%ld}",
@@ -496,6 +506,46 @@ void processCommand(const char* json) {
         }
     }
 
+    // ---- SET OFFSET (restore tare from external source, e.g. DB backup) ----
+    else if (strcmp(cmd, "set_offset") == 0) {
+        if (!hx711_initialized) initHX711();
+        const char* ch = doc["ch"] | "";
+        long offset = doc["offset"] | 0L;
+        bool ok = false;
+        if (offset != 0) {
+            if (strcmp(ch, "shelf") == 0 || strcmp(ch, "shelf1") == 0) {
+                shelfOffset = offset;
+                resetHistory(shelfHistory, &shelfHistIdx, &shelfStable);
+                ok = true;
+            }
+            else if (strcmp(ch, "mix") == 0 || strcmp(ch, "mixing_scale") == 0) {
+                mixOffset = offset;
+                resetHistory(mixHistory, &mixHistIdx, &mixStable);
+                ok = true;
+            }
+            else if (strcmp(ch, "all") == 0) {
+                // Requires both offsets via shelf_off / mix_off keys
+                long soff = doc["shelf_off"] | 0L;
+                long moff = doc["mix_off"] | 0L;
+                if (soff != 0) { shelfOffset = soff; resetHistory(shelfHistory, &shelfHistIdx, &shelfStable); }
+                if (moff != 0) { mixOffset = moff; resetHistory(mixHistory, &mixHistIdx, &mixStable); }
+                ok = (soff != 0 || moff != 0);
+            }
+            if (ok) {
+                saveOffsetsToEEPROM();
+                char resp[120];
+                snprintf(resp, sizeof(resp),
+                    "{\"ok\":\"set_offset\",\"ch\":\"%s\",\"shelf_off\":%ld,\"mix_off\":%ld}",
+                    ch, shelfOffset, mixOffset);
+                Serial.println(resp);
+            } else {
+                Serial.println(F("{\"err\":\"set_offset_bad_ch\"}"));
+            }
+        } else {
+            Serial.println(F("{\"err\":\"set_offset_zero\"}"));
+        }
+    }
+
     // ---- RESET TARE (clear EEPROM, force fresh tare) ----
     else if (strcmp(cmd, "reset_tare") == 0) {
         EEPROM.write(EEPROM_MAGIC_ADDR, 0xFF);  // Invalidate
@@ -510,7 +560,7 @@ void processCommand(const char* json) {
         bool mix_ok = hx711_initialized ? scaleMix.is_ready() : false;
         char resp[96];
         snprintf(resp, sizeof(resp),
-            "{\"status\":\"ok\",\"shelf_ok\":%s,\"mix_ok\":%s,\"bar\":%d,\"slots\":%d,\"buzz\":true,\"fw\":\"1.4\"}",
+            "{\"status\":\"ok\",\"shelf_ok\":%s,\"mix_ok\":%s,\"bar\":%d,\"slots\":%d,\"buzz\":true,\"fw\":\"1.5\"}",
             shelf_ok ? "true" : "false",
             mix_ok ? "true" : "false",
             NUM_BAR_SEGS, NUM_SLOTS);

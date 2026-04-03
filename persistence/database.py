@@ -81,6 +81,23 @@ class Database:
             'ON sensor_health_log(sensor)'
         )
 
+        self._conn.execute('''
+            CREATE TABLE IF NOT EXISTS weight_snapshot (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                shelf_id TEXT NOT NULL,
+                channel TEXT NOT NULL,
+                grams REAL DEFAULT 0,
+                raw_value INTEGER DEFAULT 0,
+                stable INTEGER DEFAULT 0,
+                source TEXT DEFAULT 'periodic',
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        ''')
+        self._conn.execute(
+            'CREATE INDEX IF NOT EXISTS idx_weight_snapshot_shelf_time '
+            'ON weight_snapshot(shelf_id, created_at DESC)'
+        )
+
         # Create vessel_stock table (cloud-synced vessel inventory)
         self._conn.execute('''
             CREATE TABLE IF NOT EXISTS vessel_stock (
@@ -295,6 +312,18 @@ class Database:
                (timestamp, sensor, status, message, value, synced)
                VALUES (?, ?, ?, ?, ?, 0)""",
             (now, sensor, status, message, value),
+        )
+        self.conn.commit()
+
+    def save_weight_snapshot(self, shelf_id: str, channel: str, grams: float,
+                             raw_value: int = 0, stable: bool = False,
+                             source: str = "periodic") -> None:
+        """Persist a local weight snapshot for later inventory/usage analysis."""
+        self.conn.execute(
+            """INSERT INTO weight_snapshot
+               (shelf_id, channel, grams, raw_value, stable, source)
+               VALUES (?, ?, ?, ?, ?, ?)""",
+            (shelf_id, channel, grams, raw_value, 1 if stable else 0, source),
         )
         self.conn.commit()
 

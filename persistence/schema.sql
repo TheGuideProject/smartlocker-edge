@@ -85,6 +85,20 @@ CREATE TABLE IF NOT EXISTS slot_state (
     last_change_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
+CREATE TABLE IF NOT EXISTS weight_snapshot (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    shelf_id TEXT NOT NULL,
+    channel TEXT NOT NULL,
+    grams REAL DEFAULT 0,
+    raw_value INTEGER DEFAULT 0,
+    stable INTEGER DEFAULT 0,
+    source TEXT DEFAULT 'periodic',
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX IF NOT EXISTS idx_weight_snapshot_shelf_time
+ON weight_snapshot(shelf_id, created_at DESC);
+
 CREATE TABLE IF NOT EXISTS rfid_tag (
     tag_uid TEXT PRIMARY KEY,
     product_id TEXT REFERENCES product(product_id),

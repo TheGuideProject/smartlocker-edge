@@ -91,6 +91,7 @@ class InventoryEngine:
         self._weight_alarm_time = 0.0  # When alarm was triggered
         self._weight_alarm_data: Dict = {}  # Alarm context data
         self.BARCODE_SCAN_TIMEOUT_S = 30  # Seconds to scan barcode after alarm
+        self._last_weight_snapshot_at: Dict[str, float] = {}
 
         # Sustained weight change detection: must persist for 10+ seconds
         self._weight_change_detected_at: Dict[str, float] = {}  # shelf_id -> first detection time
@@ -432,6 +433,7 @@ class InventoryEngine:
             try:
                 reading = self.weight.read_weight(shelf.weight_channel)
                 self._process_weight_reading(shelf, reading)
+                self._maybe_save_weight_snapshot(shelf, reading)
             except Exception as e:
                 logger.warning(f"Weight read failed for {shelf.shelf_id}: {e}")
 
@@ -806,6 +808,34 @@ class InventoryEngine:
                 self.on_weight_alarm(self._weight_alarm_data)
             except Exception as e:
                 logger.error(f"Weight alarm callback failed: {e}")
+
+    def _maybe_save_weight_snapshot(self, shelf: Shelf, reading: WeightReading) -> None:
+        """Persist a local shelf-weight snapshot on a slow interval for inventory history."""
+        if not self._db or not reading.stable:
+            return
+
+        interval_s = getattr(settings, "WEIGHT_SNAPSHOT_INTERVAL_S", 3600)
+        now = time.time()
+        last_saved = self._last_weight_snapshot_at.get(shelf.shelf_id, 0.0)
+        if (now - last_saved) < interval_s:
+            return
+
+        try:
+            self._db.save_weight_snapshot(
+                shelf_id=shelf.shelf_id,
+                channel=shelf.weight_channel,
+                grams=reading.grams,
+                raw_value=reading.raw_value,
+                stable=reading.stable,
+                source="inventory_poll",
+            )
+            self._last_weight_snapshot_at[shelf.shelf_id] = now
+            logger.info(
+                f"Weight snapshot saved: {shelf.shelf_id} "
+                f"{reading.grams:.1f}g raw={reading.raw_value}"
+            )
+        except Exception as e:
+            logger.warning(f"Failed to save weight snapshot for {shelf.shelf_id}: {e}")
 
     def resolve_weight_alarm(self, product_info: dict) -> None:
         """Called when user scans barcode to resolve weight alarm.
