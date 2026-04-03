@@ -1,5 +1,5 @@
 /*
- * SmartLocker Nano Firmware v1.2
+ * SmartLocker Nano Firmware v1.4
  * ==============================
  * Arduino Nano as bridge for:
  *   - 2x HX711 load cell amplifiers (shelf + mixing scale)
@@ -86,10 +86,13 @@ const int SLOT_PINS[4] = {A2, A1, A4, A5};
 // ============================================================
 // HX711 CONFIGURATION
 // ============================================================
-#define SAMPLES_NORMAL    20
-#define SAMPLES_TARE      30
-#define STABILITY_WINDOW  5
-#define STABILITY_THRESH  300.0
+#define SAMPLES_NORMAL       20
+#define SAMPLES_TARE         30
+#define STABILITY_WINDOW     5
+#define STABILITY_THRESH     300.0
+#define HX711_INIT_SETTLE_MS 1200
+#define HX711_TARE_SETTLE_MS 400
+#define HX711_WARMUP_READS   8
 
 // ============================================================
 // GLOBALS
@@ -97,8 +100,8 @@ const int SLOT_PINS[4] = {A2, A1, A4, A5};
 HX711 scaleShelf;
 HX711 scaleMix;
 
-float shelfScale  = 0.1857;
-float mixScale    = 0.1095;
+float shelfScale  = 23.4484;
+float mixScale    = 12.7868;
 long  shelfOffset = 0;
 long  mixOffset   = 0;
 
@@ -119,6 +122,43 @@ bool hx711_initialized = false;
 // Buzzer async state
 unsigned long buzzEndTime = 0;
 bool buzzing = false;
+
+// ============================================================
+// HX711 HELPERS
+// ============================================================
+void resetHistory(float* history, int* histIdx, bool* stable) {
+    for (int i = 0; i < STABILITY_WINDOW; i++) {
+        history[i] = 0;
+    }
+    *histIdx = 0;
+    *stable = false;
+}
+
+bool warmUpScale(HX711* scale, uint8_t readsToDiscard) {
+    if (!scale->wait_ready_timeout(2000)) {
+        return false;
+    }
+    for (uint8_t i = 0; i < readsToDiscard; i++) {
+        if (!scale->wait_ready_timeout(1000)) {
+            return false;
+        }
+        scale->read();
+        delay(5);
+    }
+    return true;
+}
+
+bool tareScale(HX711* scale, long* offsetOut) {
+    if (!warmUpScale(scale, HX711_WARMUP_READS)) {
+        return false;
+    }
+    delay(HX711_TARE_SETTLE_MS);
+    if (!scale->wait_ready_timeout(2000)) {
+        return false;
+    }
+    *offsetOut = scale->read_average(SAMPLES_TARE);
+    return true;
+}
 
 // ============================================================
 // BUZZER PATTERNS
@@ -244,14 +284,25 @@ void initHX711() {
     scaleShelf.begin(SHELF_DT, SHELF_SCK);
     scaleMix.begin(MIX_DT, MIX_SCK);
 
+    delay(HX711_INIT_SETTLE_MS);
+    bool shelfReady = warmUpScale(&scaleShelf, HX711_WARMUP_READS);
+    bool mixReady = warmUpScale(&scaleMix, HX711_WARMUP_READS);
+
     // DEBUG MODE: no EEPROM, no auto-tare. Offsets stay 0.
     // This means "g" = raw / scale (raw-proportional, not zeroed).
     // We use tare command manually when ready.
     shelfOffset = 0;
     mixOffset   = 0;
+    resetHistory(shelfHistory, &shelfHistIdx, &shelfStable);
+    resetHistory(mixHistory, &mixHistIdx, &mixStable);
 
     hx711_initialized = true;
-    Serial.println(F("{\"info\":\"hx711_ready_debug\"}"));
+    char resp[96];
+    snprintf(resp, sizeof(resp),
+        "{\"info\":\"hx711_ready_debug\",\"shelf_ready\":%s,\"mix_ready\":%s}",
+        shelfReady ? "true" : "false",
+        mixReady ? "true" : "false");
+    Serial.println(resp);
 }
 
 // ============================================================
@@ -270,7 +321,7 @@ void processCommand(const char* json) {
 
     // ---- PING ----
     if (strcmp(cmd, "ping") == 0) {
-        Serial.println(F("{\"status\":\"ok\",\"fw\":\"1.3\"}"));
+        Serial.println(F("{\"status\":\"ok\",\"fw\":\"1.4\"}"));
     }
 
     // ---- INIT HX711 ----
@@ -301,21 +352,23 @@ void processCommand(const char* json) {
         const char* ch = doc["ch"] | "";
         bool ok = false;
         if (strcmp(ch, "shelf") == 0 || strcmp(ch, "shelf1") == 0 || strcmp(ch, "all") == 0) {
-            if (scaleShelf.wait_ready_timeout(1000)) {
-                shelfOffset = scaleShelf.read_average(SAMPLES_TARE);
+            if (tareScale(&scaleShelf, &shelfOffset)) {
+                resetHistory(shelfHistory, &shelfHistIdx, &shelfStable);
                 ok = true;
             }
         }
         if (strcmp(ch, "mix") == 0 || strcmp(ch, "mixing_scale") == 0 || strcmp(ch, "all") == 0) {
-            if (scaleMix.wait_ready_timeout(1000)) {
-                mixOffset = scaleMix.read_average(SAMPLES_TARE);
+            if (tareScale(&scaleMix, &mixOffset)) {
+                resetHistory(mixHistory, &mixHistIdx, &mixStable);
                 ok = true;
             }
         }
         if (ok) {
             // DEBUG: EEPROM save disabled
-            char resp[64];
-            snprintf(resp, sizeof(resp), "{\"ok\":\"tare\",\"ch\":\"%s\"}", ch);
+            char resp[120];
+            snprintf(resp, sizeof(resp),
+                "{\"ok\":\"tare\",\"ch\":\"%s\",\"shelf_off\":%ld,\"mix_off\":%ld}",
+                ch, shelfOffset, mixOffset);
             Serial.println(resp);
         } else {
             Serial.println(F("{\"err\":\"tare_failed\"}"));
@@ -456,7 +509,7 @@ void processCommand(const char* json) {
         bool mix_ok = hx711_initialized ? scaleMix.is_ready() : false;
         char resp[96];
         snprintf(resp, sizeof(resp),
-            "{\"status\":\"ok\",\"shelf_ok\":%s,\"mix_ok\":%s,\"bar\":%d,\"slots\":%d,\"buzz\":true,\"fw\":\"1.3\"}",
+            "{\"status\":\"ok\",\"shelf_ok\":%s,\"mix_ok\":%s,\"bar\":%d,\"slots\":%d,\"buzz\":true,\"fw\":\"1.4\"}",
             shelf_ok ? "true" : "false",
             mix_ok ? "true" : "false",
             NUM_BAR_SEGS, NUM_SLOTS);
