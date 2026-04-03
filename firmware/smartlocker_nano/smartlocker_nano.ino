@@ -86,10 +86,10 @@ const int SLOT_PINS[4] = {A2, A1, A4, A5};
 // ============================================================
 // HX711 CONFIGURATION
 // ============================================================
-#define SAMPLES_NORMAL    5
-#define SAMPLES_TARE      15
-#define STABILITY_WINDOW  3
-#define STABILITY_THRESH  15.0
+#define SAMPLES_NORMAL    20
+#define SAMPLES_TARE      30
+#define STABILITY_WINDOW  5
+#define STABILITY_THRESH  300.0
 
 // ============================================================
 // GLOBALS
