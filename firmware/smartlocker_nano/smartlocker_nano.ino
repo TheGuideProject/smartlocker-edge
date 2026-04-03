@@ -52,6 +52,15 @@
 
 #include <HX711.h>
 #include <ArduinoJson.h>
+#include <EEPROM.h>
+
+// ============================================================
+// EEPROM LAYOUT  (offsets survive reboot)
+// ============================================================
+#define EEPROM_MAGIC_ADDR      0   // 1 byte  – 0xAB = valid data
+#define EEPROM_SHELF_OFF_ADDR  1   // 4 bytes – long shelfOffset
+#define EEPROM_MIX_OFF_ADDR    5   // 4 bytes – long mixOffset
+#define EEPROM_MAGIC           0xAB
 
 // ============================================================
 // PIN DEFINITIONS
@@ -222,6 +231,12 @@ void loop() {
 // ============================================================
 // HX711 LAZY INIT
 // ============================================================
+void saveOffsetsToEEPROM() {
+    EEPROM.put(EEPROM_SHELF_OFF_ADDR, shelfOffset);
+    EEPROM.put(EEPROM_MIX_OFF_ADDR,   mixOffset);
+    EEPROM.write(EEPROM_MAGIC_ADDR,    EEPROM_MAGIC);
+}
+
 void initHX711() {
     if (hx711_initialized) return;
     Serial.println(F("{\"info\":\"hx711_init_start\"}"));
@@ -229,17 +244,29 @@ void initHX711() {
     scaleShelf.begin(SHELF_DT, SHELF_SCK);
     scaleMix.begin(MIX_DT, MIX_SCK);
 
-    if (scaleShelf.wait_ready_timeout(2000)) {
-        shelfOffset = scaleShelf.read_average(SAMPLES_TARE);
-        Serial.println(F("{\"info\":\"shelf_tared\"}"));
-    }
-    if (scaleMix.wait_ready_timeout(2000)) {
-        mixOffset = scaleMix.read_average(SAMPLES_TARE);
-        Serial.println(F("{\"info\":\"mix_tared\"}"));
+    // --- Load saved offsets from EEPROM (survive reboot!) ---
+    if (EEPROM.read(EEPROM_MAGIC_ADDR) == EEPROM_MAGIC) {
+        EEPROM.get(EEPROM_SHELF_OFF_ADDR, shelfOffset);
+        EEPROM.get(EEPROM_MIX_OFF_ADDR,   mixOffset);
+        Serial.println(F("{\"info\":\"offsets_from_eeprom\"}"));
+    } else {
+        // First boot ever: auto-tare (user should have empty shelf!)
+        if (scaleShelf.wait_ready_timeout(2000)) {
+            shelfOffset = scaleShelf.read_average(SAMPLES_TARE);
+        }
+        if (scaleMix.wait_ready_timeout(2000)) {
+            mixOffset = scaleMix.read_average(SAMPLES_TARE);
+        }
+        saveOffsetsToEEPROM();
+        Serial.println(F("{\"info\":\"first_boot_tared_and_saved\"}"));
     }
 
     hx711_initialized = true;
-    Serial.println(F("{\"info\":\"hx711_init_done\"}"));
+
+    char buf[80];
+    snprintf(buf, sizeof(buf), "{\"info\":\"hx711_ready\",\"shelf_off\":%ld,\"mix_off\":%ld}",
+             shelfOffset, mixOffset);
+    Serial.println(buf);
 }
 
 // ============================================================
@@ -258,7 +285,7 @@ void processCommand(const char* json) {
 
     // ---- PING ----
     if (strcmp(cmd, "ping") == 0) {
-        Serial.println(F("{\"status\":\"ok\",\"fw\":\"1.2\"}"));
+        Serial.println(F("{\"status\":\"ok\",\"fw\":\"1.3\"}"));
     }
 
     // ---- INIT HX711 ----
@@ -283,7 +310,7 @@ void processCommand(const char* json) {
         }
     }
 
-    // ---- TARE ----
+    // ---- TARE (saves to EEPROM — survives reboot) ----
     else if (strcmp(cmd, "tare") == 0) {
         if (!hx711_initialized) initHX711();
         const char* ch = doc["ch"] | "";
@@ -301,6 +328,7 @@ void processCommand(const char* json) {
             }
         }
         if (ok) {
+            saveOffsetsToEEPROM();  // Persist — no more bad auto-tare on reboot!
             char resp[64];
             snprintf(resp, sizeof(resp), "{\"ok\":\"tare\",\"ch\":\"%s\"}", ch);
             Serial.println(resp);
@@ -429,13 +457,21 @@ void processCommand(const char* json) {
         }
     }
 
+    // ---- RESET TARE (clear EEPROM, force fresh tare) ----
+    else if (strcmp(cmd, "reset_tare") == 0) {
+        EEPROM.write(EEPROM_MAGIC_ADDR, 0xFF);  // Invalidate
+        hx711_initialized = false;
+        initHX711();  // Will auto-tare since EEPROM invalid
+        Serial.println(F("{\"ok\":\"reset_tare\"}"));
+    }
+
     // ---- STATUS ----
     else if (strcmp(cmd, "status") == 0) {
         bool shelf_ok = hx711_initialized ? scaleShelf.is_ready() : false;
         bool mix_ok = hx711_initialized ? scaleMix.is_ready() : false;
         char resp[96];
         snprintf(resp, sizeof(resp),
-            "{\"status\":\"ok\",\"shelf_ok\":%s,\"mix_ok\":%s,\"bar\":%d,\"slots\":%d,\"buzz\":true,\"fw\":\"1.2\"}",
+            "{\"status\":\"ok\",\"shelf_ok\":%s,\"mix_ok\":%s,\"bar\":%d,\"slots\":%d,\"buzz\":true,\"fw\":\"1.3\"}",
             shelf_ok ? "true" : "false",
             mix_ok ? "true" : "false",
             NUM_BAR_SEGS, NUM_SLOTS);
