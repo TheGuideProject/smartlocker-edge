@@ -510,12 +510,14 @@ void readAndSend(HX711* scale, const char* chName,
     }
     *stable = (maxVal - minVal) < STABILITY_THRESH;
 
-    char gramsStr[16];
+    char gramsStr[16], diffStr[16], sclStr[16];
     dtostrf(grams, 1, 1, gramsStr);
+    dtostrf(diff, 1, 0, diffStr);
+    dtostrf(calScale, 1, 4, sclStr);
 
-    char resp[96];
+    char resp[160];
     snprintf(resp, sizeof(resp),
-        "{\"ch\":\"%s\",\"g\":%s,\"raw\":%ld,\"stable\":%s}",
-        chName, gramsStr, raw, *stable ? "true" : "false");
+        "{\"ch\":\"%s\",\"g\":%s,\"raw\":%ld,\"off\":%ld,\"diff\":%s,\"scl\":%s,\"stable\":%s}",
+        chName, gramsStr, raw, calOffset, diffStr, sclStr, *stable ? "true" : "false");
     Serial.println(resp);
 }
