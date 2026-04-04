@@ -120,7 +120,8 @@ class MixingEngine:
 
     def _on_can_removed(self, event: Event) -> None:
         """Auto-detect when crew picks up a can during PICK_BASE / PICK_HARDENER.
-        If the removed tag matches the expected product, auto-advance."""
+        If the removed tag matches the expected product, auto-advance.
+        If WRONG product is picked, play alarm and notify UI."""
         if not self.session:
             return
 
@@ -131,11 +132,36 @@ class MixingEngine:
             if product_id == self.session.base_product_id:
                 logger.info(f"RFID auto-detect: base can picked (tag={tag_id})")
                 self.confirm_base_picked(tag_id)
+            elif product_id:
+                # Wrong product picked!
+                logger.warning(
+                    f"RFID: WRONG product picked during PICK_BASE! "
+                    f"expected={self.session.base_product_id}, got={product_id}"
+                )
+                self.buzzer.play(BuzzerPattern.ERROR)
+                self._notify_ui({
+                    "warning": "wrong_product",
+                    "picked_product_id": product_id,
+                    "expected_product_id": self.session.base_product_id,
+                    "instruction": "WRONG PRODUCT! Put it back.",
+                })
 
         elif self.session.state == MixingState.PICK_HARDENER:
             if product_id == self.session.hardener_product_id:
                 logger.info(f"RFID auto-detect: hardener can picked (tag={tag_id})")
                 self.confirm_hardener_picked(tag_id)
+            elif product_id:
+                logger.warning(
+                    f"RFID: WRONG product picked during PICK_HARDENER! "
+                    f"expected={self.session.hardener_product_id}, got={product_id}"
+                )
+                self.buzzer.play(BuzzerPattern.ERROR)
+                self._notify_ui({
+                    "warning": "wrong_product",
+                    "picked_product_id": product_id,
+                    "expected_product_id": self.session.hardener_product_id,
+                    "instruction": "WRONG PRODUCT! Put it back.",
+                })
 
     def _on_can_returned(self, event: Event) -> None:
         """Auto-detect when crew returns a can during RETURN_BASE / RETURN_HARDENER.
