@@ -139,6 +139,7 @@ class SmartLockerWindow(QMainWindow):
             "alarm": "ui_qt.screens.alarm:AlarmScreen",
             "demo": "ui_qt.screens.demo:DemoScreen",
             "tag_writer": "ui_qt.screens.tag_writer:TagWriterScreen",
+            "stock_loading": "ui_qt.screens.stock_loading:StockLoadingScreen",
         }
 
         # Show splash, then transition to home after 2s

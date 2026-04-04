@@ -310,6 +310,8 @@ class HomeScreen(QWidget):
              C.SECONDARY, "chart_viewer"),
             (Icon.INVENTORY, "INVENTORY", "Slot contents\n& stock levels",
              C.SUCCESS, "inventory"),
+            (Icon.ADD, "CARICO", "Carica latte\nsullo scaffale",
+             C.PRIMARY, "stock_loading"),
             (Icon.SENSORS, "SENSORS", "Test RFID, weight\nLED & buzzer",
              C.ACCENT, "sensor_test"),
             (Icon.SETTINGS, "SETTINGS", "Config, pairing\n& system",
@@ -321,7 +323,7 @@ class HomeScreen(QWidget):
             grid.addWidget(tile, 0, col)
 
         # Equal column stretch
-        for col in range(4):
+        for col in range(5):
             grid.setColumnStretch(col, 1)
 
         return container

@@ -82,6 +82,14 @@ class InventoryEngine:
         # Whether there's an active touchscreen session (set by mixing engine)
         self.active_session = False
 
+        # Stock loading mode — set by StockLoadingScreen to suppress
+        # normal CAN_PLACED processing (event, buzzer, LED, weight assignment).
+        # The stock loading screen handles its own event after stabilization.
+        self.stock_loading_mode = False
+
+        # Callback for stock loading screen (set by screen, called from HW thread)
+        self.on_stock_can_detected = None  # Callable(event_data_dict)
+
         # ── Shelf weight monitoring (RFID fallback) ──
         self._last_shelf_weights: Dict[str, float] = {}  # shelf_id -> last stable weight
         self._weight_drop_threshold_g = 5000.0  # 5kg min drop to detect can removal
@@ -500,6 +508,37 @@ class InventoryEngine:
             slot.weight_when_placed_g = current_weight_g
         else:
             # New can placed
+
+            # ── Stock loading mode: notify UI, skip normal processing ──
+            if self.stock_loading_mode:
+                notify_data = {
+                    "reader_id": reading.reader_id,
+                    "tag_uid": reading.tag_id,
+                    "product_id": tag_info["product_id"],
+                    "product_name": tag_info["product_name"],
+                    "lot_number": tag_info["lot_number"],
+                    "can_size_ml": tag_info["can_size_ml"],
+                    "slot_id": slot.slot_id,
+                    "shelf_id": slot.shelf_id,
+                }
+                # Update slot state so tag is tracked, but don't assign weight
+                slot.status = SlotStatus.OCCUPIED
+                slot.current_tag_id = reading.tag_id
+                slot.current_product_id = tag_info["product_id"]
+                slot.last_change_time = time.time()
+                self._persist_slot_state(slot)
+                # Notify stock loading screen (no event published, no buzzer/LED)
+                if self.on_stock_can_detected:
+                    try:
+                        self.on_stock_can_detected(notify_data)
+                    except Exception as e:
+                        logger.error(f"Stock loading callback error: {e}")
+                logger.info(
+                    f"Stock loading mode: tag {reading.tag_id} detected, "
+                    f"product={tag_info['product_name']}, deferred to UI"
+                )
+                return
+
             event_type = EventType.CAN_PLACED
             self.buzzer.play(BuzzerPattern.TICK)
             # Product on shelf → LED OFF (all good)
@@ -727,7 +766,7 @@ class InventoryEngine:
         diff = current_g - last_g
 
         # Only trigger alarm if RFID is NOT healthy and we're not already alarming
-        if not self._rfid_healthy and not self._pending_weight_alarm:
+        if not self._rfid_healthy and not self._pending_weight_alarm and not self.stock_loading_mode:
             significant_change = (
                 abs(diff) > self._weight_drop_threshold_g
             )
@@ -951,6 +990,20 @@ class InventoryEngine:
     def get_slot(self, slot_id: str) -> Optional[Slot]:
         """Get a slot by ID."""
         return self._reader_to_slot.get(slot_id)
+
+    def get_shelf_weight_baseline(self, shelf_id: str = "shelf1") -> float:
+        """Return last known shelf weight (grams) for net-can-weight calculation."""
+        return self._last_shelf_weights.get(shelf_id, 0.0)
+
+    def get_shelf_id_for_reader(self, reader_id: str) -> Optional[str]:
+        """Return the shelf_id that owns a given RFID reader_id."""
+        slot = self._reader_to_slot.get(reader_id)
+        return slot.shelf_id if slot else None
+
+    def get_weight_channel_for_shelf(self, shelf_id: str) -> Optional[str]:
+        """Return the weight channel for a shelf."""
+        shelf = self.shelves.get(shelf_id)
+        return shelf.weight_channel if shelf else None
 
     def get_all_slots(self) -> List[Slot]:
         """Get all slots across all shelves."""
