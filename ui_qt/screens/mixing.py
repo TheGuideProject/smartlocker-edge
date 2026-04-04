@@ -951,15 +951,22 @@ class MixingScreen(QWidget):
 
             # ── Wrong product alarm ──
             if warning == "wrong_product":
+                picked_name = data.get("picked_product_name", "")
+                picked_id = data.get("picked_product_id", "")
+                display = picked_name or picked_id or "?"
+                self._lbl_pour_title.setText(f"{Icon.ERROR}  WRONG PRODUCT!")
+                self._lbl_pour_title.setStyleSheet(
+                    f"font-size: {F.H2}px; font-weight: bold; color: {C.DANGER};"
+                )
                 self._lbl_weight_zone.setText(
-                    f"{Icon.ERROR}  WRONG PRODUCT! Put it back!"
+                    f"You picked: {display}\nPut it back and pick the correct one!"
                 )
                 self._lbl_weight_zone.setStyleSheet(
-                    f"font-size: {F.H3}px; font-weight: bold; color: {C.DANGER};"
+                    f"font-size: {F.BODY}px; font-weight: bold; color: {C.DANGER};"
                 )
                 self._set_state_badge("WRONG CAN!", "danger")
                 logger.warning(
-                    f"Wrong product: got={data.get('picked_product_id')}, "
+                    f"Wrong product: got_name={picked_name}, got_id={picked_id}, "
                     f"expected={data.get('expected_product_id')}"
                 )
                 return

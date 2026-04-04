@@ -118,6 +118,52 @@ class MixingEngine:
     # RFID AUTO-DETECT: CAN REMOVED / RETURNED
     # ============================================================
 
+    def _is_matching_product(self, event_pid: str, event_pname: str,
+                              expected_pid: str) -> bool:
+        """Flexible product matching — handles ID, name, ppg_code mismatches.
+
+        The expected_pid might be a real product_id (UUID) or a product name
+        (fallback from PaintNow when DB lookup fails). The event may have
+        product_id from rfid_tag table and product_name from product table.
+        """
+        if not expected_pid:
+            return False
+
+        # Strategy 1: exact product_id match
+        if event_pid and event_pid == expected_pid:
+            return True
+
+        # Strategy 2: event product_name matches expected_pid
+        # (handles case where expected_pid is actually a product name)
+        if event_pname and event_pname.upper() == expected_pid.upper():
+            return True
+
+        # Strategy 3: DB lookup — resolve expected product and compare by name/ppg
+        if self._db:
+            # Look up the expected product by ID first, then by name
+            exp = self._db.get_product_by_id(expected_pid)
+            if not exp:
+                exp = self._db.get_product_by_name(expected_pid)
+
+            if exp:
+                exp_name = (exp.get("name") or "").upper()
+                exp_ppg = (exp.get("ppg_code") or "").upper()
+
+                # Compare event product_name vs expected name
+                if event_pname and exp_name and event_pname.upper() == exp_name:
+                    return True
+
+                # Compare event product_id vs expected ppg_code
+                if event_pid and exp_ppg and event_pid.upper() == exp_ppg:
+                    return True
+
+                # Compare event product_id vs expected product_id from DB
+                exp_id = exp.get("product_id", "")
+                if event_pid and exp_id and event_pid == exp_id:
+                    return True
+
+        return False
+
     def _on_can_removed(self, event: Event) -> None:
         """Auto-detect when crew picks up a can during PICK_BASE / PICK_HARDENER.
         If the removed tag matches the expected product, auto-advance.
@@ -127,39 +173,49 @@ class MixingEngine:
 
         tag_id = event.tag_id
         product_id = event.data.get("product_id", "")
+        product_name = event.data.get("product_name", "")
+
+        logger.info(
+            f"[MIXING] CAN_REMOVED: tag={tag_id}, pid={product_id}, "
+            f"pname={product_name}, state={self.session.state.value}"
+        )
 
         if self.session.state == MixingState.PICK_BASE:
-            if product_id == self.session.base_product_id:
+            expected = self.session.base_product_id
+            if self._is_matching_product(product_id, product_name, expected):
                 logger.info(f"RFID auto-detect: base can picked (tag={tag_id})")
                 self.confirm_base_picked(tag_id)
-            elif product_id:
+            elif product_id or product_name:
                 # Wrong product picked!
                 logger.warning(
-                    f"RFID: WRONG product picked during PICK_BASE! "
-                    f"expected={self.session.base_product_id}, got={product_id}"
+                    f"RFID: WRONG product during PICK_BASE! "
+                    f"expected={expected}, got_id={product_id}, got_name={product_name}"
                 )
                 self.buzzer.play(BuzzerPattern.ERROR)
                 self._notify_ui({
                     "warning": "wrong_product",
                     "picked_product_id": product_id,
-                    "expected_product_id": self.session.base_product_id,
+                    "picked_product_name": product_name,
+                    "expected_product_id": expected,
                     "instruction": "WRONG PRODUCT! Put it back.",
                 })
 
         elif self.session.state == MixingState.PICK_HARDENER:
-            if product_id == self.session.hardener_product_id:
+            expected = self.session.hardener_product_id
+            if self._is_matching_product(product_id, product_name, expected):
                 logger.info(f"RFID auto-detect: hardener can picked (tag={tag_id})")
                 self.confirm_hardener_picked(tag_id)
-            elif product_id:
+            elif product_id or product_name:
                 logger.warning(
-                    f"RFID: WRONG product picked during PICK_HARDENER! "
-                    f"expected={self.session.hardener_product_id}, got={product_id}"
+                    f"RFID: WRONG product during PICK_HARDENER! "
+                    f"expected={expected}, got_id={product_id}, got_name={product_name}"
                 )
                 self.buzzer.play(BuzzerPattern.ERROR)
                 self._notify_ui({
                     "warning": "wrong_product",
                     "picked_product_id": product_id,
-                    "expected_product_id": self.session.hardener_product_id,
+                    "picked_product_name": product_name,
+                    "expected_product_id": expected,
                     "instruction": "WRONG PRODUCT! Put it back.",
                 })
 
@@ -170,28 +226,33 @@ class MixingEngine:
             return
 
         tag_id = event.tag_id
+        product_id = event.data.get("product_id", "")
+        product_name = event.data.get("product_name", "")
+
+        logger.info(
+            f"[MIXING] CAN_RETURNED: tag={tag_id}, pid={product_id}, "
+            f"pname={product_name}, state={self.session.state.value}"
+        )
 
         if self.session.state == MixingState.RETURN_BASE:
-            # Check if the returned tag is the base product
+            # Check by tag_id first (exact match)
             if tag_id == self.session.base_tag_id:
                 logger.info(f"RFID auto-detect: base can returned (tag={tag_id})")
                 self.confirm_base_returned()
-            else:
-                # Also match by product_id if tag_id wasn't captured during pick
-                product_id = event.data.get("product_id", "")
-                if product_id == self.session.base_product_id:
-                    logger.info(f"RFID auto-detect: base product returned (product={product_id})")
-                    self.confirm_base_returned()
+            # Fallback: match by product
+            elif self._is_matching_product(product_id, product_name,
+                                           self.session.base_product_id):
+                logger.info(f"RFID auto-detect: base product returned (name={product_name})")
+                self.confirm_base_returned()
 
         elif self.session.state == MixingState.RETURN_HARDENER:
             if tag_id == self.session.hardener_tag_id:
                 logger.info(f"RFID auto-detect: hardener can returned (tag={tag_id})")
                 self.confirm_hardener_returned()
-            else:
-                product_id = event.data.get("product_id", "")
-                if product_id == self.session.hardener_product_id:
-                    logger.info(f"RFID auto-detect: hardener product returned (product={product_id})")
-                    self.confirm_hardener_returned()
+            elif self._is_matching_product(product_id, product_name,
+                                           self.session.hardener_product_id):
+                logger.info(f"RFID auto-detect: hardener product returned (name={product_name})")
+                self.confirm_hardener_returned()
 
     # ============================================================
     # STATE TRANSITIONS
