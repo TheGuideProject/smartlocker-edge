@@ -457,12 +457,36 @@ class SyncEngine:
                     )
                 logger.info(f"Barcodes synced from cloud: {len(barcodes)}")
 
-            # Save vessel inventory from cloud (upsert, don't clear —
-            # local barcode scans add to vessel_stock too)
+            # Save vessel inventory from cloud (upsert, then remove
+            # products that the cloud no longer reports)
             vessel_inv = config.get("vessel_inventory")
             if vessel_inv is not None:
+                cloud_pids = set()
                 for item in vessel_inv:
                     self.db.upsert_vessel_stock(item)
+                    pid = item.get("product_id", "")
+                    if pid:
+                        cloud_pids.add(pid)
+
+                # Delete local stock entries NOT present in cloud response
+                # (admin deleted them from cloud inventory)
+                try:
+                    local_stock = self.db.get_vessel_stock()
+                    removed_count = 0
+                    for local_item in local_stock:
+                        local_pid = local_item.get("product_id", "")
+                        if local_pid and local_pid not in cloud_pids:
+                            self.db.delete_vessel_stock_item(local_pid)
+                            removed_count += 1
+                            logger.info(
+                                f"Removed from local stock (deleted on cloud): "
+                                f"{local_item.get('product_name', local_pid)}"
+                            )
+                    if removed_count:
+                        logger.info(f"Synced {removed_count} cloud deletions to local stock")
+                except Exception as e:
+                    logger.warning(f"Cloud deletion sync error: {e}")
+
                 logger.info(f"Vessel inventory synced: {len(vessel_inv)} products")
 
             # Clean up orphan vessel_stock entries (e.g., from old barcode scans
