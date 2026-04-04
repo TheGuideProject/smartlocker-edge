@@ -850,6 +850,71 @@ class MixingScreen(QWidget):
         except Exception as e:
             logger.debug(f"Could not restore default weight polling: {e}")
 
+    def _do_tare_async(self, callback_phase: str = "base"):
+        """Run tare_scale() in a background thread so UI stays responsive.
+        When tare completes, schedules _on_tare_complete on the Qt event loop."""
+        def _tare_worker():
+            success = self.app.mixing_engine.tare_scale()
+            # Schedule UI update on main thread via QTimer.singleShot
+            from PyQt6.QtCore import QTimer
+            QTimer.singleShot(0, lambda: self._on_tare_complete(success, callback_phase))
+
+        t = threading.Thread(target=_tare_worker, daemon=True, name="tare-async")
+        t.start()
+
+    def _on_tare_complete(self, success: bool, phase: str):
+        """Called on UI thread when background tare finishes."""
+        if not success:
+            self._lbl_weight_zone.setText("Tare failed! Try again.")
+            self._set_state_badge("TARE FAILED", "danger")
+            logger.warning("[MIXING] Tare failed")
+            return
+
+        engine = self.app.mixing_engine
+        session = engine.session
+        if not session:
+            return
+
+        if phase in ("base", "base_paintnow"):
+            session.state = MixingState.WEIGH_BASE
+            title = getattr(self, '_paintnow_pour_title', "POUR BASE")
+            self._lbl_pour_title.setText(title if phase == "base_paintnow" else "POUR BASE")
+            self._lbl_weight_current.setText("0.00 kg")
+            self._lbl_weight_zone.setText("Start pouring...")
+            self._set_state_badge("WEIGHING BASE", "primary")
+            self._barcode_banner.setVisible(False)
+            self._current_zone = None
+
+            rfid_down = self._is_rfid_down()
+            if rfid_down:
+                self._show_barcode_required("BASE")
+            else:
+                self._weight_timer.start(300)
+
+        elif phase == "hardener":
+            session.state = MixingState.WEIGH_HARDENER
+            hardener_target = session.hardener_weight_target_g
+            self._weighing_phase = "hardener"
+            self._weight_target = hardener_target
+            self._last_buzzer_zone = ""
+            self._tick_counter = 0
+            self._current_zone = None
+            self._lbl_pour_title.setText("POUR HARDENER")
+            self._lbl_weight_target.setText(
+                f"Target: {hardener_target / 1000:.2f} kg"
+            )
+            self._lbl_weight_current.setText("0.00 kg")
+            self._progress_weight.setValue(0)
+            self._lbl_weight_zone.setText("Pour hardener...")
+            self._btn_confirm_pour.setText("CONFIRM POUR")
+            self._set_state_badge("WEIGHING HARDENER", "accent")
+            self._barcode_banner.setVisible(False)
+
+            if self._is_rfid_down():
+                self._show_barcode_required("HARDENER")
+            else:
+                self._weight_timer.start(300)
+
     def _on_engine_state_change(self, state, data: dict):
         """Callback from mixing engine when state changes (e.g. RFID auto-detect).
         Updates UI to reflect the new state without user pressing a button."""
@@ -860,31 +925,12 @@ class MixingScreen(QWidget):
             if state == MixingState.PICK_HARDENER:
                 # Base was returned via RFID — engine auto-advanced to PICK_HARDENER
                 if self._weighing_phase == "return_base":
-                    self._lbl_pour_title.setText("PICK HARDENER")
-                    self._lbl_weight_zone.setText("Pick the hardener can from the lit shelf slot")
-                    self._btn_confirm_pour.setText("CONFIRM POUR")
-                    self._set_state_badge("PICK HARDENER", "accent")
-                    # Auto-tare and advance to weighing
-                    session = self.app.mixing_engine.session
-                    if session:
-                        self.app.mixing_engine.tare_scale()
-                        session.state = MixingState.WEIGH_HARDENER
-                        hardener_target = session.hardener_weight_target_g
-                        self._weighing_phase = "hardener"
-                        self._weight_target = hardener_target
-                        self._last_buzzer_zone = ""
-                        self._tick_counter = 0
-                        self._current_zone = None
-                        self._lbl_pour_title.setText("POUR HARDENER")
-                        self._lbl_weight_target.setText(
-                            f"Target: {hardener_target / 1000:.2f} kg"
-                        )
-                        self._lbl_weight_current.setText("0.00 kg")
-                        self._progress_weight.setValue(0)
-                        self._lbl_weight_zone.setText("Pour hardener...")
-                        self._btn_confirm_pour.setText("CONFIRM POUR")
-                        self._set_state_badge("WEIGHING HARDENER", "accent")
-                        self._weight_timer.start(300)
+                    self._weighing_phase = "hardener"
+                    self._lbl_pour_title.setText("TARING...")
+                    self._lbl_weight_zone.setText("Calibrating scale for hardener...")
+                    self._set_state_badge("TARING", "muted")
+                    # Tare in background, then advance to hardener weighing
+                    self._do_tare_async(callback_phase="hardener")
 
             elif state == MixingState.CONFIRM_MIX:
                 # Hardener was returned via RFID — engine auto-advanced to CONFIRM_MIX
@@ -972,42 +1018,32 @@ class MixingScreen(QWidget):
         # LED guidance: light up base product slot
         self.app.mixing_engine.advance_to_pick_base()
 
-        self.app.mixing_engine.tare_scale()
-
-        session = self.app.mixing_engine.session
-        if session:
-            session.state = MixingState.WEIGH_BASE
-
         self._current_recipe = mr
         self._weighing_phase = "base"
         self._weight_target = base_grams
         self._last_buzzer_zone = ""
         self._tick_counter = 0
 
-        # Update weigh page labels
+        # Show taring feedback, jump to weigh page
         m2 = pending.get("m2", 0)
         liters = pending.get("base_liters", 0)
-        info_text = f"POUR BASE - {product_name}"
+        self._paintnow_pour_title = f"POUR BASE - {product_name}"
         if m2 > 0:
-            info_text = f"POUR BASE ({m2:.0f}m2 = {liters:.1f}L)"
-        self._lbl_pour_title.setText(info_text)
+            self._paintnow_pour_title = f"POUR BASE ({m2:.0f}m2 = {liters:.1f}L)"
+
+        self._stack.setCurrentIndex(2)
+        self._lbl_pour_title.setText("TARING...")
+        self._lbl_weight_zone.setText("Calibrating scale, please wait...")
+        self._lbl_weight_current.setText("")
         self._lbl_weight_target.setText(f"Target: {base_grams / 1000:.2f} kg")
-        self._lbl_weight_current.setText("0.00 kg")
         self._progress_weight.setValue(0)
-        self._lbl_weight_zone.setText("Place container, then pour...")
+        self._set_state_badge("TARING", "muted")
 
         self._barcode_verified_base = False
         self._barcode_verified_hardener = False
 
-        # Jump directly to weigh page (page 2)
-        self._stack.setCurrentIndex(2)
-        self._set_state_badge("WEIGHING BASE", "primary")
-        self._barcode_banner.setVisible(False)
-
-        rfid_down = self._is_rfid_down()
-        print(f"[MIXING] PaintNow auto-start: RFID down={rfid_down}")
-        if rfid_down:
-            self._show_barcode_required("BASE")
+        # Tare in background — don't freeze UI
+        self._do_tare_async(callback_phase="base_paintnow")
         else:
             self._weight_timer.start(300)
 
@@ -1136,32 +1172,22 @@ class MixingScreen(QWidget):
         # LED guidance: light up base product slot before tare
         engine.advance_to_pick_base()
 
-        engine.tare_scale()
-
-        session = engine.session
-        if session:
-            session.state = MixingState.WEIGH_BASE
+        # Show taring feedback immediately, then tare in background
+        self._stack.setCurrentIndex(2)
+        self._lbl_pour_title.setText("TARING...")
+        self._lbl_weight_zone.setText("Calibrating scale, please wait...")
+        self._lbl_weight_current.setText("")
+        self._lbl_weight_target.setText(f"Target: {base_g / 1000:.2f} kg")
+        self._progress_weight.setValue(0)
+        self._set_state_badge("TARING", "muted")
 
         self._barcode_verified_base = False
         self._barcode_verified_hardener = False
-
         self._weighing_phase = "base"
         self._weight_target = base_g
-        self._lbl_pour_title.setText("POUR BASE")
-        self._lbl_weight_target.setText(f"Target: {base_g / 1000:.2f} kg")
-        self._lbl_weight_current.setText("0.00 kg")
-        self._progress_weight.setValue(0)
 
-        self._stack.setCurrentIndex(2)
-        self._set_state_badge("WEIGHING BASE", "primary")
-        self._barcode_banner.setVisible(False)
-
-        rfid_down = self._is_rfid_down()
-        print(f"[MIXING] RFID down={rfid_down}, requiring barcode={rfid_down}")
-        if rfid_down:
-            self._show_barcode_required("BASE")
-        else:
-            self._weight_timer.start(300)
+        # Tare in background thread — don't freeze UI
+        self._do_tare_async(callback_phase="base")
 
     def _show_barcode_required(self, component: str):
         """Show barcode scan requirement banner and pause weighing."""
@@ -1288,39 +1314,14 @@ class MixingScreen(QWidget):
             self._weighing_phase = "return_base"
 
         elif self._weighing_phase == "return_base":
-            # Base returned — advance to pick hardener, then weigh
+            # Base returned (manual confirm) — advance to pick hardener
             engine.confirm_base_returned()
-
-            session = engine.session
-            if session:
-                hardener_target = session.hardener_weight_target_g
-
-                # Tare scale for hardener (base weight already recorded)
-                engine.tare_scale()
-                session.state = MixingState.WEIGH_HARDENER
-
-                self._weighing_phase = "hardener"
-                self._weight_target = hardener_target
-                self._last_buzzer_zone = ""
-                self._tick_counter = 0
-                self._current_zone = None
-                self._lbl_pour_title.setText("POUR HARDENER")
-                self._lbl_weight_target.setText(
-                    f"Target: {hardener_target / 1000:.2f} kg"
-                )
-                self._lbl_weight_current.setText("0.00 kg")
-                self._progress_weight.setValue(0)
-                self._lbl_weight_zone.setText("Pour hardener...")
-                self._btn_confirm_pour.setText("CONFIRM POUR")
-
-                self._set_state_badge("WEIGHING HARDENER", "accent")
-                self._barcode_banner.setVisible(False)
-
-                if self._is_rfid_down():
-                    self._show_barcode_required("HARDENER")
-                else:
-                    self._barcode_verified_hardener = True
-                    self._weight_timer.start(300)
+            self._weighing_phase = "hardener"
+            # Tare in background, then advance to hardener weighing
+            self._lbl_pour_title.setText("TARING...")
+            self._lbl_weight_zone.setText("Calibrating scale for hardener...")
+            self._set_state_badge("TARING", "muted")
+            self._do_tare_async(callback_phase="hardener")
 
         elif self._weighing_phase == "hardener":
             engine.confirm_hardener_weighed()
