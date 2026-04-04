@@ -245,20 +245,41 @@ class MixingEngine:
             },
         ))
 
-        self.session.state = MixingState.PICK_HARDENER
+        # Guide crew to return the base can before picking hardener
+        self.session.state = MixingState.RETURN_BASE
         self.buzzer.play(BuzzerPattern.CONFIRM)
 
-        # Light up hardener slot
+        # Light up base slot with BLINK_FAST = "put it back here!"
         self.led.clear_all()
+        if self._inventory:
+            base_slot_id = self._inventory.get_slot_id_for_product(self.session.base_product_id)
+            if base_slot_id:
+                self.led.set_slot(base_slot_id, LEDColor.RED, LEDPattern.BLINK_FAST)
+                logger.info(f"LED guidance: return base to slot {base_slot_id}")
+
+        self._notify_ui({
+            "instruction": "Return the BASE can to the lit shelf slot",
+            "base_actual_g": reading.grams,
+        })
+
+    def confirm_base_returned(self) -> None:
+        """Base can returned to shelf. Advance to pick hardener."""
+        if not self.session or self.session.state != MixingState.RETURN_BASE:
+            return
+
+        self.led.clear_all()
+        self.buzzer.play(BuzzerPattern.TICK)
+
+        # Now guide to pick the hardener
+        self.session.state = MixingState.PICK_HARDENER
         if self._inventory:
             hardener_slot_id = self._inventory.get_slot_id_for_product(self.session.hardener_product_id)
             if hardener_slot_id:
                 self.led.set_slot(hardener_slot_id, LEDColor.RED, LEDPattern.BLINK_SLOW)
-                logger.info(f"LED guidance: hardener product slot {hardener_slot_id}")
+                logger.info(f"LED guidance: pick hardener from slot {hardener_slot_id}")
 
         self._notify_ui({
             "instruction": "Pick the HARDENER can from the lit shelf slot",
-            "base_actual_g": reading.grams,
         })
 
     def confirm_hardener_picked(self, tag_id: str) -> None:
@@ -311,7 +332,8 @@ class MixingEngine:
             },
         ))
 
-        self.session.state = MixingState.CONFIRM_MIX
+        # Guide crew to return hardener can before confirming mix
+        self.session.state = MixingState.RETURN_HARDENER
 
         if self.session.ratio_in_spec:
             self.buzzer.play(BuzzerPattern.TARGET_REACHED)
@@ -327,11 +349,35 @@ class MixingEngine:
                 },
             ))
 
+        # Light up hardener slot with BLINK_FAST = "put it back!"
+        self.led.clear_all()
+        if self._inventory:
+            hardener_slot_id = self._inventory.get_slot_id_for_product(self.session.hardener_product_id)
+            if hardener_slot_id:
+                self.led.set_slot(hardener_slot_id, LEDColor.RED, LEDPattern.BLINK_FAST)
+                logger.info(f"LED guidance: return hardener to slot {hardener_slot_id}")
+
+        self._notify_ui({
+            "ratio_achieved": round(self.session.ratio_achieved, 2),
+            "in_spec": self.session.ratio_in_spec,
+            "instruction": "Return HARDENER can, then confirm mix",
+        })
+
+    def confirm_hardener_returned(self) -> None:
+        """Hardener can returned to shelf. Advance to confirm mix."""
+        if not self.session or self.session.state != MixingState.RETURN_HARDENER:
+            return
+
+        self.led.clear_all()
+        self.buzzer.play(BuzzerPattern.CONFIRM)
+        self.session.state = MixingState.CONFIRM_MIX
+
         self._notify_ui({
             "ratio_achieved": round(self.session.ratio_achieved, 2),
             "in_spec": self.session.ratio_in_spec,
             "instruction": "MIX OK" if self.session.ratio_in_spec else "MIX OUT OF SPEC",
         })
+        logger.info("Hardener returned — advancing to CONFIRM_MIX")
 
     def confirm_mix(self, override_reason: str = "") -> None:
         """Crew confirms the mix (even if out of spec with a reason)."""

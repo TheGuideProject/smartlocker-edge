@@ -834,6 +834,11 @@ class MixingScreen(QWidget):
     def on_leave(self):
         self._weight_timer.stop()
         self._pot_life_timer.stop()
+        # Clear all LEDs on exit (no guidance LEDs should remain)
+        try:
+            self.app.led.clear_all()
+        except Exception:
+            pass
         try:
             if hasattr(self.app.weight, "focus_mixing_scale"):
                 self.app.weight.focus_mixing_scale(False)
@@ -1072,6 +1077,10 @@ class MixingScreen(QWidget):
 
         engine = self.app.mixing_engine
         engine.show_recipe(base_g)
+
+        # LED guidance: light up base product slot before tare
+        engine.advance_to_pick_base()
+
         engine.tare_scale()
 
         session = engine.session
@@ -1213,28 +1222,41 @@ class MixingScreen(QWidget):
 
         if self._weighing_phase == "base":
             engine.confirm_base_weighed()
+            # Engine is now in RETURN_BASE — show return guidance
+            self._lbl_pour_title.setText("RETURN BASE CAN")
+            self._lbl_weight_zone.setText("Put the base can back on the lit shelf slot")
+            self._lbl_weight_current.setText("")
+            self._lbl_weight_target.setText("")
+            self._progress_weight.setValue(0)
+            self._btn_confirm_pour.setText("BASE RETURNED")
+            self._set_state_badge("RETURN BASE", "accent")
+            self._weighing_phase = "return_base"
+
+        elif self._weighing_phase == "return_base":
+            # Base returned — advance to pick hardener, then weigh
+            engine.confirm_base_returned()
 
             session = engine.session
             if session:
-                session.state = MixingState.WEIGH_HARDENER
                 hardener_target = session.hardener_weight_target_g
 
+                # Tare scale for hardener (base weight already recorded)
+                engine.tare_scale()
+                session.state = MixingState.WEIGH_HARDENER
+
                 self._weighing_phase = "hardener"
-                self._weight_target = (
-                    session.base_weight_actual_g + hardener_target
-                )
+                self._weight_target = hardener_target
                 self._last_buzzer_zone = ""
                 self._tick_counter = 0
+                self._current_zone = None
                 self._lbl_pour_title.setText("POUR HARDENER")
                 self._lbl_weight_target.setText(
-                    f"Target: +{hardener_target / 1000:.2f} kg "
-                    f"(total {self._weight_target / 1000:.2f} kg)"
+                    f"Target: {hardener_target / 1000:.2f} kg"
                 )
-                self._lbl_weight_current.setText(
-                    f"{session.base_weight_actual_g / 1000:.2f} kg"
-                )
+                self._lbl_weight_current.setText("0.00 kg")
                 self._progress_weight.setValue(0)
                 self._lbl_weight_zone.setText("Pour hardener...")
+                self._btn_confirm_pour.setText("CONFIRM POUR")
 
                 self._set_state_badge("WEIGHING HARDENER", "accent")
                 self._barcode_banner.setVisible(False)
@@ -1247,6 +1269,18 @@ class MixingScreen(QWidget):
 
         elif self._weighing_phase == "hardener":
             engine.confirm_hardener_weighed()
+            # Engine is now in RETURN_HARDENER — show return guidance
+            self._lbl_pour_title.setText("RETURN HARDENER CAN")
+            self._lbl_weight_zone.setText("Put the hardener can back on the lit shelf slot")
+            self._lbl_weight_current.setText("")
+            self._lbl_weight_target.setText("")
+            self._progress_weight.setValue(0)
+            self._btn_confirm_pour.setText("HARDENER RETURNED")
+            self._set_state_badge("RETURN HARDENER", "accent")
+            self._weighing_phase = "return_hardener"
+
+        elif self._weighing_phase == "return_hardener":
+            engine.confirm_hardener_returned()
 
             session = engine.session
             if session:
