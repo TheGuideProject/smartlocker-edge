@@ -825,6 +825,9 @@ class MixingScreen(QWidget):
         except Exception as e:
             logger.debug(f"Could not enable mixing weight focus: {e}")
 
+        # Register state change callback for RFID auto-detect updates
+        self.app.mixing_engine.set_state_change_callback(self._on_engine_state_change)
+
         # Check if PaintNow passed pre-calculated quantities
         pending = getattr(self.app, "pending_mix", None)
         if pending:
@@ -834,6 +837,8 @@ class MixingScreen(QWidget):
     def on_leave(self):
         self._weight_timer.stop()
         self._pot_life_timer.stop()
+        # Clear state change callback
+        self.app.mixing_engine.set_state_change_callback(None)
         # Clear all LEDs on exit (no guidance LEDs should remain)
         try:
             self.app.led.clear_all()
@@ -844,6 +849,52 @@ class MixingScreen(QWidget):
                 self.app.weight.focus_mixing_scale(False)
         except Exception as e:
             logger.debug(f"Could not restore default weight polling: {e}")
+
+    def _on_engine_state_change(self, state, data: dict):
+        """Callback from mixing engine when state changes (e.g. RFID auto-detect).
+        Updates UI to reflect the new state without user pressing a button."""
+        try:
+            instruction = data.get("instruction", "")
+            logger.info(f"[MIXING UI] Engine state -> {state.value}: {instruction}")
+
+            if state == MixingState.PICK_HARDENER:
+                # Base was returned via RFID — engine auto-advanced to PICK_HARDENER
+                if self._weighing_phase == "return_base":
+                    self._lbl_pour_title.setText("PICK HARDENER")
+                    self._lbl_weight_zone.setText("Pick the hardener can from the lit shelf slot")
+                    self._btn_confirm_pour.setText("CONFIRM POUR")
+                    self._set_state_badge("PICK HARDENER", "accent")
+                    # Auto-tare and advance to weighing
+                    session = self.app.mixing_engine.session
+                    if session:
+                        self.app.mixing_engine.tare_scale()
+                        session.state = MixingState.WEIGH_HARDENER
+                        hardener_target = session.hardener_weight_target_g
+                        self._weighing_phase = "hardener"
+                        self._weight_target = hardener_target
+                        self._last_buzzer_zone = ""
+                        self._tick_counter = 0
+                        self._current_zone = None
+                        self._lbl_pour_title.setText("POUR HARDENER")
+                        self._lbl_weight_target.setText(
+                            f"Target: {hardener_target / 1000:.2f} kg"
+                        )
+                        self._lbl_weight_current.setText("0.00 kg")
+                        self._progress_weight.setValue(0)
+                        self._lbl_weight_zone.setText("Pour hardener...")
+                        self._btn_confirm_pour.setText("CONFIRM POUR")
+                        self._set_state_badge("WEIGHING HARDENER", "accent")
+                        self._weight_timer.start(300)
+
+            elif state == MixingState.CONFIRM_MIX:
+                # Hardener was returned via RFID — engine auto-advanced to CONFIRM_MIX
+                if self._weighing_phase == "return_hardener":
+                    session = self.app.mixing_engine.session
+                    if session:
+                        self._show_mix_results(session)
+
+        except Exception as e:
+            logger.error(f"[MIXING UI] Engine state callback error: {e}")
 
     def _auto_start_from_paint_now(self, pending: dict):
         """Auto-start mixing session with pre-calculated quantities from PaintNow."""
@@ -917,6 +968,10 @@ class MixingScreen(QWidget):
         self.app.mixing_engine.load_recipes({recipe_id: mr})
         self.app.mixing_engine.start_session(recipe_id, user_name="Crew")
         self.app.mixing_engine.show_recipe(base_grams)
+
+        # LED guidance: light up base product slot
+        self.app.mixing_engine.advance_to_pick_base()
+
         self.app.mixing_engine.tare_scale()
 
         session = self.app.mixing_engine.session
@@ -1281,48 +1336,51 @@ class MixingScreen(QWidget):
 
         elif self._weighing_phase == "return_hardener":
             engine.confirm_hardener_returned()
-
             session = engine.session
             if session:
-                self._lbl_result_base.setText(
-                    f"{Icon.WEIGHT}  Base: {session.base_weight_actual_g:.0f}g "
-                    f"(target: {session.base_weight_target_g:.0f}g)"
-                )
-                self._lbl_result_hardener.setText(
-                    f"{Icon.WEIGHT}  Hardener: {session.hardener_weight_actual_g:.0f}g "
-                    f"(target: {session.hardener_weight_target_g:.0f}g)"
-                )
-                self._lbl_result_ratio.setText(
-                    f"Ratio: {session.ratio_achieved:.2f}"
-                )
+                self._show_mix_results(session)
 
-                if session.ratio_in_spec:
-                    self._lbl_result_spec.setText("IN SPEC")
-                    self._lbl_result_spec.setStyleSheet(
-                        f"background-color: {C.SUCCESS_BG}; color: {C.SUCCESS};"
-                        f"border: 1px solid {C.SUCCESS}; border-radius: 4px;"
-                        f"padding: 2px 8px; font-size: {F.TINY}px;"
-                        f"font-weight: bold;"
-                    )
-                    self._lbl_result_ratio.setStyleSheet(
-                        f"font-size: {F.H2}px; font-weight: bold;"
-                        f"color: {C.SUCCESS};"
-                    )
-                else:
-                    self._lbl_result_spec.setText("OUT OF SPEC!")
-                    self._lbl_result_spec.setStyleSheet(
-                        f"background-color: {C.DANGER_BG}; color: {C.DANGER};"
-                        f"border: 1px solid {C.DANGER}; border-radius: 4px;"
-                        f"padding: 2px 8px; font-size: {F.TINY}px;"
-                        f"font-weight: bold;"
-                    )
-                    self._lbl_result_ratio.setStyleSheet(
-                        f"font-size: {F.H2}px; font-weight: bold;"
-                        f"color: {C.DANGER};"
-                    )
+    def _show_mix_results(self, session):
+        """Display mix results page (called from manual confirm or RFID auto-return)."""
+        self._lbl_result_base.setText(
+            f"{Icon.WEIGHT}  Base: {session.base_weight_actual_g:.0f}g "
+            f"(target: {session.base_weight_target_g:.0f}g)"
+        )
+        self._lbl_result_hardener.setText(
+            f"{Icon.WEIGHT}  Hardener: {session.hardener_weight_actual_g:.0f}g "
+            f"(target: {session.hardener_weight_target_g:.0f}g)"
+        )
+        self._lbl_result_ratio.setText(
+            f"Ratio: {session.ratio_achieved:.2f}"
+        )
 
-                self._stack.setCurrentIndex(3)
-                self._set_state_badge("CONFIRM MIX", "success")
+        if session.ratio_in_spec:
+            self._lbl_result_spec.setText("IN SPEC")
+            self._lbl_result_spec.setStyleSheet(
+                f"background-color: {C.SUCCESS_BG}; color: {C.SUCCESS};"
+                f"border: 1px solid {C.SUCCESS}; border-radius: 4px;"
+                f"padding: 2px 8px; font-size: {F.TINY}px;"
+                f"font-weight: bold;"
+            )
+            self._lbl_result_ratio.setStyleSheet(
+                f"font-size: {F.H2}px; font-weight: bold;"
+                f"color: {C.SUCCESS};"
+            )
+        else:
+            self._lbl_result_spec.setText("OUT OF SPEC!")
+            self._lbl_result_spec.setStyleSheet(
+                f"background-color: {C.DANGER_BG}; color: {C.DANGER};"
+                f"border: 1px solid {C.DANGER}; border-radius: 4px;"
+                f"padding: 2px 8px; font-size: {F.TINY}px;"
+                f"font-weight: bold;"
+            )
+            self._lbl_result_ratio.setStyleSheet(
+                f"font-size: {F.H2}px; font-weight: bold;"
+                f"color: {C.DANGER};"
+            )
+
+        self._stack.setCurrentIndex(3)
+        self._set_state_badge("CONFIRM MIX", "success")
 
     def _on_confirm_mix(self):
         self.app.mixing_engine.confirm_mix()

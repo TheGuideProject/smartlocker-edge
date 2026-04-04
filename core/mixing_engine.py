@@ -87,6 +87,11 @@ class MixingEngine:
         self._last_weight_reading: Optional[WeightReading] = None
         self._weight_stable_since: float = 0.0
 
+        # Subscribe to CAN_RETURNED for auto-detecting can returns via RFID
+        self.event_bus.subscribe(EventType.CAN_RETURNED, self._on_can_returned)
+        # Subscribe to CAN_REMOVED for auto-detecting can picks via RFID
+        self.event_bus.subscribe(EventType.CAN_REMOVED, self._on_can_removed)
+
     def set_inventory(self, inv: 'InventoryEngine') -> None:
         """Set the inventory engine reference for LED slot guidance."""
         self._inventory = inv
@@ -108,6 +113,59 @@ class MixingEngine:
     def load_products(self, products: Dict[str, Product]):
         """Load product catalog."""
         self._products = products
+
+    # ============================================================
+    # RFID AUTO-DETECT: CAN REMOVED / RETURNED
+    # ============================================================
+
+    def _on_can_removed(self, event: Event) -> None:
+        """Auto-detect when crew picks up a can during PICK_BASE / PICK_HARDENER.
+        If the removed tag matches the expected product, auto-advance."""
+        if not self.session:
+            return
+
+        tag_id = event.tag_id
+        product_id = event.data.get("product_id", "")
+
+        if self.session.state == MixingState.PICK_BASE:
+            if product_id == self.session.base_product_id:
+                logger.info(f"RFID auto-detect: base can picked (tag={tag_id})")
+                self.confirm_base_picked(tag_id)
+
+        elif self.session.state == MixingState.PICK_HARDENER:
+            if product_id == self.session.hardener_product_id:
+                logger.info(f"RFID auto-detect: hardener can picked (tag={tag_id})")
+                self.confirm_hardener_picked(tag_id)
+
+    def _on_can_returned(self, event: Event) -> None:
+        """Auto-detect when crew returns a can during RETURN_BASE / RETURN_HARDENER.
+        If the returned tag matches the base/hardener, auto-advance the workflow."""
+        if not self.session:
+            return
+
+        tag_id = event.tag_id
+
+        if self.session.state == MixingState.RETURN_BASE:
+            # Check if the returned tag is the base product
+            if tag_id == self.session.base_tag_id:
+                logger.info(f"RFID auto-detect: base can returned (tag={tag_id})")
+                self.confirm_base_returned()
+            else:
+                # Also match by product_id if tag_id wasn't captured during pick
+                product_id = event.data.get("product_id", "")
+                if product_id == self.session.base_product_id:
+                    logger.info(f"RFID auto-detect: base product returned (product={product_id})")
+                    self.confirm_base_returned()
+
+        elif self.session.state == MixingState.RETURN_HARDENER:
+            if tag_id == self.session.hardener_tag_id:
+                logger.info(f"RFID auto-detect: hardener can returned (tag={tag_id})")
+                self.confirm_hardener_returned()
+            else:
+                product_id = event.data.get("product_id", "")
+                if product_id == self.session.hardener_product_id:
+                    logger.info(f"RFID auto-detect: hardener product returned (product={product_id})")
+                    self.confirm_hardener_returned()
 
     # ============================================================
     # STATE TRANSITIONS
