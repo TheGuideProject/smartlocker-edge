@@ -217,6 +217,10 @@ class SmartLockerWindow(QMainWindow):
             else:
                 logger.warning(f"Screen not found: {name}")
                 return
+            # Check if lazy load actually succeeded
+            if name not in self._screens:
+                logger.error(f"Screen '{name}' failed to load — staying on current screen")
+                return
 
         # Leave current screen
         current_name = self._nav_stack[-1] if self._nav_stack else None

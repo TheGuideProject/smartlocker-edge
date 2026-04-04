@@ -1054,13 +1054,12 @@ class MixingScreen(QWidget):
         self._barcode_verified_hardener = False
 
         # Tare in background — don't freeze UI
+        # (RFID check happens later in _on_tare_complete)
         self._do_tare_async(callback_phase="base_paintnow")
-        else:
-            self._weight_timer.start(300)
 
         logger.info(
             f"Auto-started mixing from PaintNow: {recipe_name} "
-            f"base={base_grams:.0f}g target (rfid_down={rfid_down})"
+            f"base={base_grams:.0f}g target"
         )
 
     # ══════════════════════════════════════════════════════

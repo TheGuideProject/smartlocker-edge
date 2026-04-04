@@ -11,6 +11,7 @@ about the UI or the sync queue. It just publishes an event.
 """
 
 import logging
+import threading
 from typing import Callable, Dict, List, Optional
 from core.event_types import Event, EventType
 
@@ -44,25 +45,30 @@ class EventBus:
         self._global_handlers: List[EventHandler] = []
         # Auto-incrementing sequence number
         self._sequence_counter = 0
+        # Thread safety: protects handler lists + sequence counter
+        self._lock = threading.Lock()
 
     def subscribe(self, event_type: EventType, handler: EventHandler) -> None:
         """Register a handler for a specific event type."""
-        if event_type not in self._handlers:
-            self._handlers[event_type] = []
-        self._handlers[event_type].append(handler)
+        with self._lock:
+            if event_type not in self._handlers:
+                self._handlers[event_type] = []
+            self._handlers[event_type].append(handler)
         logger.debug(f"EventBus: subscribed {handler.__name__} to {event_type.value}")
 
     def subscribe_all(self, handler: EventHandler) -> None:
         """Register a handler that receives ALL events."""
-        self._global_handlers.append(handler)
+        with self._lock:
+            self._global_handlers.append(handler)
         logger.debug(f"EventBus: subscribed {handler.__name__} to ALL events")
 
     def unsubscribe(self, event_type: EventType, handler: EventHandler) -> None:
         """Remove a handler from a specific event type."""
-        if event_type in self._handlers:
-            self._handlers[event_type] = [
-                h for h in self._handlers[event_type] if h != handler
-            ]
+        with self._lock:
+            if event_type in self._handlers:
+                self._handlers[event_type] = [
+                    h for h in self._handlers[event_type] if h != handler
+                ]
 
     def publish(self, event: Event) -> None:
         """
@@ -70,18 +76,21 @@ class EventBus:
 
         Assigns a sequence number and calls all handlers.
         Handlers are called synchronously (in order of registration).
+        Thread-safe: snapshot handler lists under lock, then call outside lock.
         """
-        # Assign sequence number
-        self._sequence_counter += 1
-        event.sequence_num = self._sequence_counter
+        # Snapshot handler lists under lock (prevents modification during iteration)
+        with self._lock:
+            self._sequence_counter += 1
+            event.sequence_num = self._sequence_counter
+            handlers = list(self._handlers.get(event.event_type, []))
+            global_handlers = list(self._global_handlers)
 
         logger.info(
             f"Event #{event.sequence_num}: {event.event_type.value} "
             f"[slot={event.slot_id}, tag={event.tag_id}]"
         )
 
-        # Call type-specific handlers
-        handlers = self._handlers.get(event.event_type, [])
+        # Call type-specific handlers (outside lock to avoid deadlock)
         for handler in handlers:
             try:
                 handler(event)
@@ -92,7 +101,7 @@ class EventBus:
                 )
 
         # Call global handlers
-        for handler in self._global_handlers:
+        for handler in global_handlers:
             try:
                 handler(event)
             except Exception as e:
