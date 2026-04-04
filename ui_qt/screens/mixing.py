@@ -23,7 +23,7 @@ from PyQt6.QtWidgets import (
     QFrame, QComboBox, QLineEdit, QProgressBar, QApplication,
     QStackedWidget, QGridLayout, QSizePolicy,
 )
-from PyQt6.QtCore import Qt, QTimer
+from PyQt6.QtCore import Qt, QTimer, pyqtSignal
 
 from ui_qt.theme import C, F, S
 from ui_qt.animations import ProgressRing, PulsingDot
@@ -117,9 +117,17 @@ def _gradient_btn(text: str, color1: str = C.PRIMARY,
 class MixingScreen(QWidget):
     """Mixing workflow wizard -- 7-page stacked widget."""
 
+    # Thread-safe signals for cross-thread UI updates
+    _tare_finished = pyqtSignal(bool, str)         # (success, phase)
+    _engine_state_changed = pyqtSignal(object, dict)  # (state, data)
+
     def __init__(self, app):
         super().__init__()
         self.app = app
+
+        # Connect thread-safe signals
+        self._tare_finished.connect(self._on_tare_complete)
+        self._engine_state_changed.connect(self._on_engine_state_change)
 
         # Timers
         self._weight_timer = QTimer()
@@ -825,8 +833,8 @@ class MixingScreen(QWidget):
         except Exception as e:
             logger.debug(f"Could not enable mixing weight focus: {e}")
 
-        # Register state change callback for RFID auto-detect updates
-        self.app.mixing_engine.set_state_change_callback(self._on_engine_state_change)
+        # Register state change callback via thread-safe signal wrapper
+        self.app.mixing_engine.set_state_change_callback(self._forward_engine_state_change)
 
         # Check if PaintNow passed pre-calculated quantities
         pending = getattr(self.app, "pending_mix", None)
@@ -852,12 +860,10 @@ class MixingScreen(QWidget):
 
     def _do_tare_async(self, callback_phase: str = "base"):
         """Run tare_scale() in a background thread so UI stays responsive.
-        When tare completes, schedules _on_tare_complete on the Qt event loop."""
+        When tare completes, emits _tare_finished signal (thread-safe)."""
         def _tare_worker():
             success = self.app.mixing_engine.tare_scale()
-            # Schedule UI update on main thread via QTimer.singleShot
-            from PyQt6.QtCore import QTimer
-            QTimer.singleShot(0, lambda: self._on_tare_complete(success, callback_phase))
+            self._tare_finished.emit(success, callback_phase)
 
         t = threading.Thread(target=_tare_worker, daemon=True, name="tare-async")
         t.start()
@@ -915,8 +921,13 @@ class MixingScreen(QWidget):
             else:
                 self._weight_timer.start(300)
 
+    def _forward_engine_state_change(self, state, data: dict):
+        """Thread-safe wrapper: forwards engine state changes to Qt signal.
+        Called from hw_worker/event_bus thread — must NOT touch widgets directly."""
+        self._engine_state_changed.emit(state, data)
+
     def _on_engine_state_change(self, state, data: dict):
-        """Callback from mixing engine when state changes (e.g. RFID auto-detect).
+        """Slot connected to _engine_state_changed signal (runs on UI thread).
         Updates UI to reflect the new state without user pressing a button."""
         try:
             instruction = data.get("instruction", "")
