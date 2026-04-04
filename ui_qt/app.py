@@ -15,7 +15,7 @@ from PyQt6.QtWidgets import (
     QApplication, QMainWindow, QStackedWidget, QWidget,
     QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QFrame, QComboBox,
 )
-from PyQt6.QtCore import Qt, QTimer, QEvent, QObject
+from PyQt6.QtCore import Qt, QTimer, QEvent, QObject, pyqtSignal
 from PyQt6.QtGui import QFont
 
 from ui_qt.theme import STYLESHEET, C, F, S
@@ -87,12 +87,18 @@ class ClickSoundFilter(QObject):
 class SmartLockerWindow(QMainWindow):
     """Main application window."""
 
+    # Thread-safe signal for weight alarm from hw_worker thread
+    _weight_alarm_requested = pyqtSignal(dict)
+
     def __init__(self, daemon_port: int = 0):
         super().__init__()
         self.setWindowTitle("SmartLocker")
         self.setMinimumSize(800, 480)
         self._daemon_port = daemon_port
         self._daemon_conn = None  # DaemonConnection when in daemon-client mode
+
+        # Connect thread-safe weight alarm signal
+        self._weight_alarm_requested.connect(self._on_weight_alarm)
 
         # Initialize system (drivers, engines, DB)
         self._init_system()
@@ -185,8 +191,10 @@ class SmartLockerWindow(QMainWindow):
         # Weight alarm popup tracker (for RFID-down barcode fallback)
         self._weight_alarm_popup = None
 
-        # Connect inventory engine weight alarm to UI
-        self.inventory_engine.on_weight_alarm = self._on_weight_alarm
+        # Connect inventory engine weight alarm via thread-safe signal
+        self.inventory_engine.on_weight_alarm = (
+            lambda alarm_data: self._weight_alarm_requested.emit(alarm_data)
+        )
 
     def _add_screen(self, name, widget):
         self._screens[name] = widget
@@ -552,12 +560,9 @@ class SmartLockerWindow(QMainWindow):
             print(f"    Fake: {', '.join(fake)}")
 
     def _on_weight_alarm(self, alarm_data: dict):
-        """Called by InventoryEngine when shelf weight changes and RFID is down.
-
+        """Slot for _weight_alarm_requested signal (runs on UI thread).
         Shows a full-screen alarm popup requesting barcode scan within 30s.
         """
-        from ui_qt.widgets.weight_alarm_popup import WeightAlarmPopup
-
         logger.warning(f"WEIGHT ALARM triggered: {alarm_data}")
 
         # Close any existing alarm popup
@@ -567,8 +572,8 @@ class SmartLockerWindow(QMainWindow):
             except Exception:
                 pass
 
-        # Use QTimer to show popup from main thread (alarm may fire from poll thread)
-        QTimer.singleShot(0, lambda: self._show_weight_alarm(alarm_data))
+        # Already on main thread via signal — call directly
+        self._show_weight_alarm(alarm_data)
 
     def _show_weight_alarm(self, alarm_data: dict):
         """Show weight alarm popup on main thread (NON-MODAL so barcode events still work)."""
