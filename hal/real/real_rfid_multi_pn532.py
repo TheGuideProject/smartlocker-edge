@@ -48,7 +48,8 @@ USER_PAGE_END = 129
 PRODUCT_SEPARATOR = "|"
 
 # Parallel polling threshold: use thread pool above this many readers
-PARALLEL_THRESHOLD = 6
+# Set to 2 to enable parallel for our 4-reader setup (each has own USB port)
+PARALLEL_THRESHOLD = 2
 
 
 @dataclass

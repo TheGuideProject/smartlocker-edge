@@ -71,7 +71,7 @@ class RealBuzzerDriverArduino(BuzzerDriverInterface):
             return
 
         arduino_pattern = _PATTERN_MAP.get(pattern, "tick")
-        self._weight_driver.send_command({
+        self._weight_driver.enqueue_command({
             "cmd": "buzz", "pattern": arduino_pattern,
         })
 
@@ -79,13 +79,13 @@ class RealBuzzerDriverArduino(BuzzerDriverInterface):
         """Play a custom tone (frequency in Hz, duration in ms)."""
         if not self._initialized or not self._weight_driver:
             return
-        self._weight_driver.send_command({
+        self._weight_driver.enqueue_command({
             "cmd": "buzz", "freq": frequency, "dur": duration_ms,
         })
 
     def stop(self) -> None:
         if self._weight_driver:
-            self._weight_driver.send_command({"cmd": "buzz_off"})
+            self._weight_driver.enqueue_command({"cmd": "buzz_off"})
 
     def shutdown(self) -> None:
         self.stop()

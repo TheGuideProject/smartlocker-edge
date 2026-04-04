@@ -35,6 +35,7 @@ Graceful fallback: if pyserial is not installed, all methods return safe default
 import logging
 import time
 import json
+import queue
 import threading
 from typing import List, Dict, Optional
 
@@ -112,6 +113,9 @@ class RealWeightDriver(WeightDriverInterface):
         self._tare_done = threading.Event()
         self._tare_result = False
         self._fw_version = "?"  # Populated after ping
+
+        # Async command queue for LED/buzzer (fire-and-forget)
+        self._cmd_queue: queue.Queue = queue.Queue(maxsize=32)
 
     def initialize(self) -> bool:
         """
@@ -461,6 +465,9 @@ class RealWeightDriver(WeightDriverInterface):
         logger.info("[ARDUINO WEIGHT] Background reader started")
         while self._reader_running:
             try:
+                # Drain queued LED/buzzer commands FIRST (fast, non-blocking)
+                self._drain_command_queue()
+
                 # Handle tare requests
                 tare_ch = self._tare_request
                 if tare_ch:
@@ -468,7 +475,7 @@ class RealWeightDriver(WeightDriverInterface):
                     arduino_ch = _to_arduino_ch(tare_ch)
                     with self._lock:
                         self._send({"cmd": "tare", "ch": arduino_ch})
-                        resp = self._recv(timeout=10.0)
+                        resp = self._recv(timeout=6.0)
                     self._tare_result = resp is not None and "ok" in resp
                     if self._tare_result:
                         logger.info(f"[ARDUINO WEIGHT] Tared '{tare_ch}'")
@@ -488,7 +495,7 @@ class RealWeightDriver(WeightDriverInterface):
                     cmd_name = "read_fast" if name in self._fast_read_channels else "read"
                     with self._lock:
                         self._send({"cmd": cmd_name, "ch": arduino_ch})
-                        resp = self._recv(timeout=5.0, expect_ch=arduino_ch)
+                        resp = self._recv(timeout=2.5, expect_ch=arduino_ch)
 
                     if resp and "g" in resp:
                         self._cached_readings[name] = WeightReading(
@@ -500,6 +507,9 @@ class RealWeightDriver(WeightDriverInterface):
                         )
                     elif resp and "err" in resp:
                         logger.debug(f"[ARDUINO WEIGHT] {name}: {resp['err']}")
+
+                    # Drain queued commands between channels too
+                    self._drain_command_queue()
 
             except Exception as e:
                 logger.error(f"[ARDUINO WEIGHT] Reader error: {e}")
@@ -644,12 +654,40 @@ class RealWeightDriver(WeightDriverInterface):
         return self._lock
 
     def send_command(self, cmd: dict) -> Optional[dict]:
-        """Send a command and get response (thread-safe). Used by LED driver."""
+        """Send a command and get response (SYNCHRONOUS, thread-safe).
+        Use ONLY for init/test where the response is needed.
+        For LED blink / buzzer, use enqueue_command() instead."""
         if not self._initialized:
             return None
         with self._lock:
             self._send(cmd)
             return self._recv(timeout=1.0)
+
+    def enqueue_command(self, cmd: dict) -> None:
+        """Fire-and-forget: put a command on the async queue.
+        The reader loop drains this queue between weight reads.
+        If queue is full, the command is silently dropped
+        (LED/buzzer tolerate missed commands)."""
+        try:
+            self._cmd_queue.put_nowait(cmd)
+        except queue.Full:
+            logger.debug("[ARDUINO WEIGHT] Command queue full, dropping: %s", cmd.get("cmd"))
+
+    def _drain_command_queue(self) -> None:
+        """Process up to 8 queued commands (LED/buzzer).
+        Called by _reader_loop between weight reads.
+        Each command holds the lock for ~50ms max."""
+        for _ in range(8):
+            try:
+                cmd = self._cmd_queue.get_nowait()
+            except queue.Empty:
+                break
+            try:
+                with self._lock:
+                    self._send(cmd)
+                    self._recv(timeout=0.2)  # Short timeout — response not critical
+            except Exception as e:
+                logger.debug(f"[ARDUINO WEIGHT] Queued cmd failed: {e}")
 
     # ---- Internal serial helpers ----
 

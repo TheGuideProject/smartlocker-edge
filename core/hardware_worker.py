@@ -54,7 +54,11 @@ class HardwareWorker(QThread):
 
         while self._running:
             try:
+                t0 = time.monotonic()
                 self._engine.poll()
+                poll_ms = (time.monotonic() - t0) * 1000
+                if poll_ms > 2000:
+                    logger.warning(f"[HW Worker] Slow poll: {poll_ms:.0f}ms")
             except Exception as e:
                 logger.debug(f"[HW Worker] Poll error: {e}")
 

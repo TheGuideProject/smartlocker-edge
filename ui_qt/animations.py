@@ -163,7 +163,8 @@ class AnimatedStackedWidget(QStackedWidget):
 # ════════════════════════════════════════════════════════════════
 
 class PulsingDot(QWidget):
-    """Small animated dot that pulses to indicate live status."""
+    """Small animated dot that pulses to indicate live status.
+    Timer auto-pauses when widget is hidden (e.g. screen not visible)."""
 
     def __init__(self, color: str = C.SUCCESS, size: int = 12, parent=None):
         super().__init__(parent)
@@ -173,15 +174,28 @@ class PulsingDot(QWidget):
         self._pulse_timer = QTimer(self)
         self._pulse_timer.timeout.connect(self._tick)
         self._phase = 0.0
+        self._wants_running = False
         self.setFixedSize(size + 4, size + 4)
 
     def start(self):
-        self._pulse_timer.start(50)
+        self._wants_running = True
+        if self.isVisible():
+            self._pulse_timer.start(50)
 
     def stop(self):
+        self._wants_running = False
         self._pulse_timer.stop()
         self._opacity = 1.0
         self.update()
+
+    def showEvent(self, event):
+        super().showEvent(event)
+        if self._wants_running and not self._pulse_timer.isActive():
+            self._pulse_timer.start(50)
+
+    def hideEvent(self, event):
+        super().hideEvent(event)
+        self._pulse_timer.stop()
 
     def set_color(self, color: str):
         self._color = QColor(color)

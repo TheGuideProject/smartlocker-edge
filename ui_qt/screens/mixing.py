@@ -1181,29 +1181,29 @@ class MixingScreen(QWidget):
         except Exception:
             pass  # Buzzer errors should never break weight display
 
-        # Update weight text color
-        self._lbl_weight_current.setStyleSheet(
-            f"font-size: {F.HERO}px; font-weight: bold; color: {color};"
-        )
-
-        # Update zone label color
+        # Update zone label text (always)
         self._lbl_weight_zone.setText(zone_text)
-        self._lbl_weight_zone.setStyleSheet(
-            f"font-size: {F.BODY}px; font-weight: bold; color: {color};"
-        )
 
-        # Update progress bar color
-        self._progress_weight.setStyleSheet(
-            f"QProgressBar {{"
-            f"  background-color: {C.BG_INPUT}; border: none;"
-            f"  border-radius: 8px; min-height: 16px; max-height: 16px;"
-            f"}}"
-            f"QProgressBar::chunk {{"
-            f"  background-color: {color}; border-radius: 8px;"
-            f"}}"
-        )
+        # Update styles ONLY when zone changes (CSS recompilation is expensive)
+        if zone != getattr(self, '_current_zone', None):
+            self._current_zone = zone
+            self._lbl_weight_current.setStyleSheet(
+                f"font-size: {F.HERO}px; font-weight: bold; color: {color};"
+            )
+            self._lbl_weight_zone.setStyleSheet(
+                f"font-size: {F.BODY}px; font-weight: bold; color: {color};"
+            )
+            self._progress_weight.setStyleSheet(
+                f"QProgressBar {{"
+                f"  background-color: {C.BG_INPUT}; border: none;"
+                f"  border-radius: 8px; min-height: 16px; max-height: 16px;"
+                f"}}"
+                f"QProgressBar::chunk {{"
+                f"  background-color: {color}; border-radius: 8px;"
+                f"}}"
+            )
 
-        # Update circular progress ring
+        # Update circular progress ring (value + color are cheap, no CSS)
         self._pour_ring.set_value(progress / 100.0)
         self._pour_ring.set_color(color)
 

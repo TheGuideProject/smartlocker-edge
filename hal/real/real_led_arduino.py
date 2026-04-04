@@ -159,11 +159,12 @@ class RealLEDDriverArduino(LEDDriverInterface):
                         self._send_hw(led_index, not current)
 
     def _send_hw(self, led_index: int, on: bool):
-        """Send a single slot command to Arduino. Updates hw_state."""
+        """Send a single slot command to Arduino. Updates hw_state.
+        Uses enqueue_command (fire-and-forget) to avoid blocking on serial lock."""
         self._hw_state[led_index] = on
         if self._weight_driver:
             try:
-                self._weight_driver.send_command({
+                self._weight_driver.enqueue_command({
                     "cmd": "slot", "idx": led_index, "on": 1 if on else 0,
                 })
             except Exception:
@@ -211,7 +212,7 @@ class RealLEDDriverArduino(LEDDriverInterface):
             self._slot_config.clear()
         self._hw_state.clear()
         if self._weight_driver:
-            self._weight_driver.send_command({"cmd": "led_off"})
+            self._weight_driver.enqueue_command({"cmd": "led_off"})
 
     def shutdown(self) -> None:
         """Stop blink thread and turn off all LEDs."""
@@ -239,19 +240,19 @@ class RealLEDDriverArduino(LEDDriverInterface):
             return
         self._last_bar_time = now
 
-        self._weight_driver.send_command({"cmd": "bar", "pct": pct})
+        self._weight_driver.enqueue_command({"cmd": "bar", "pct": pct})
 
     def set_balance_segments(self, count: int) -> None:
         """Set exact number of bar segments lit (0-10)."""
         if not self._weight_driver:
             return
         seg = max(0, min(count, 10))
-        self._weight_driver.send_command({"cmd": "bar", "seg": seg})
+        self._weight_driver.enqueue_command({"cmd": "bar", "seg": seg})
 
     def clear_balance_bar(self) -> None:
         """Turn off the bar graph."""
         if self._weight_driver:
-            self._weight_driver.send_command({"cmd": "bar_off"})
+            self._weight_driver.enqueue_command({"cmd": "bar_off"})
 
     # ============================================================
     # CONVENIENCE METHODS
@@ -275,4 +276,4 @@ class RealLEDDriverArduino(LEDDriverInterface):
             self._slot_config.clear()
         self._hw_state.clear()
         if self._weight_driver:
-            self._weight_driver.send_command({"cmd": "slot_all", "on": 0})
+            self._weight_driver.enqueue_command({"cmd": "slot_all", "on": 0})
