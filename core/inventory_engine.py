@@ -471,6 +471,39 @@ class InventoryEngine:
         # Look up product info from database (+ NFC memory fallback)
         tag_info = self._lookup_tag_info(reading.tag_id, reading=reading)
 
+        # ── Stock loading mode: ANY tag appearance → notify UI ──
+        # Must be checked BEFORE was_removed, because stock loading
+        # doesn't care whether the slot was empty or previously removed.
+        if self.stock_loading_mode:
+            notify_data = {
+                "reader_id": reading.reader_id,
+                "tag_uid": reading.tag_id,
+                "product_id": tag_info["product_id"],
+                "product_name": tag_info["product_name"],
+                "lot_number": tag_info["lot_number"],
+                "can_size_ml": tag_info["can_size_ml"],
+                "slot_id": slot.slot_id,
+                "shelf_id": slot.shelf_id,
+            }
+            # Update slot state so tag is tracked, but don't assign weight
+            slot.status = SlotStatus.OCCUPIED
+            slot.current_tag_id = reading.tag_id
+            slot.current_product_id = tag_info["product_id"]
+            slot.last_change_time = time.time()
+            self._removal_times.pop(slot.slot_id, None)
+            self._persist_slot_state(slot)
+            # Notify stock loading screen (no event published, no buzzer/LED)
+            if self.on_stock_can_detected:
+                try:
+                    self.on_stock_can_detected(notify_data)
+                except Exception as e:
+                    logger.error(f"Stock loading callback error: {e}")
+            logger.info(
+                f"Stock loading mode: tag {reading.tag_id} detected, "
+                f"product={tag_info['product_name']}, deferred to UI"
+            )
+            return
+
         # Update slot state
         old_tag = slot.current_tag_id
         slot.current_tag_id = reading.tag_id
@@ -508,37 +541,6 @@ class InventoryEngine:
             slot.weight_when_placed_g = current_weight_g
         else:
             # New can placed
-
-            # ── Stock loading mode: notify UI, skip normal processing ──
-            if self.stock_loading_mode:
-                notify_data = {
-                    "reader_id": reading.reader_id,
-                    "tag_uid": reading.tag_id,
-                    "product_id": tag_info["product_id"],
-                    "product_name": tag_info["product_name"],
-                    "lot_number": tag_info["lot_number"],
-                    "can_size_ml": tag_info["can_size_ml"],
-                    "slot_id": slot.slot_id,
-                    "shelf_id": slot.shelf_id,
-                }
-                # Update slot state so tag is tracked, but don't assign weight
-                slot.status = SlotStatus.OCCUPIED
-                slot.current_tag_id = reading.tag_id
-                slot.current_product_id = tag_info["product_id"]
-                slot.last_change_time = time.time()
-                self._persist_slot_state(slot)
-                # Notify stock loading screen (no event published, no buzzer/LED)
-                if self.on_stock_can_detected:
-                    try:
-                        self.on_stock_can_detected(notify_data)
-                    except Exception as e:
-                        logger.error(f"Stock loading callback error: {e}")
-                logger.info(
-                    f"Stock loading mode: tag {reading.tag_id} detected, "
-                    f"product={tag_info['product_name']}, deferred to UI"
-                )
-                return
-
             event_type = EventType.CAN_PLACED
             self.buzzer.play(BuzzerPattern.TICK)
             # Product on shelf → LED OFF (all good)

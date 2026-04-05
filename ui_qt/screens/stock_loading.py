@@ -1,17 +1,21 @@
 """
-SmartLocker Stock Loading Screen — CARICO STOCK
+SmartLocker Stock Loading Screen — LOAD STOCK
 
 Dedicated screen for loading new paint cans onto the shelf.
-Flow: RFID detected → 5s stabilization → weight saved → success → idle.
+Flow: RFID detected → 8s stabilization → weight saved → success → idle.
 One can at a time.
+
+Weight baseline: keeps a rolling buffer of recent shelf weights (last 4s).
+When RFID fires, uses the OLDEST reading as baseline (before can was placed),
+since the weight sensor updates faster than RFID.
 """
 
 import logging
-import time
+from collections import deque
 
 from PyQt6.QtWidgets import (
-    QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
-    QFrame, QStackedWidget, QProgressBar, QSizePolicy,
+    QWidget, QVBoxLayout, QLabel,
+    QFrame, QStackedWidget, QProgressBar,
 )
 from PyQt6.QtCore import Qt, QTimer, pyqtSignal
 
@@ -25,6 +29,9 @@ logger = logging.getLogger("smartlocker.ui.stock_loading")
 _IDLE = 0
 _STABILIZING = 1
 _SUCCESS = 2
+
+# Stabilization time in seconds
+_STABILIZE_SECONDS = 8
 
 
 class StockLoadingScreen(QWidget):
@@ -40,8 +47,13 @@ class StockLoadingScreen(QWidget):
         # State
         self._countdown = 0
         self._weight_before = 0.0
-        self._current_tag_data = None  # dict from inventory engine
-        self._busy = False  # True while stabilizing/showing success
+        self._current_tag_data = None
+        self._busy = False
+
+        # Rolling weight buffer: stores last 8 readings (4 seconds at 500ms).
+        # When RFID triggers, the oldest value is the weight BEFORE the can
+        # was placed (weight sensor updates every 500ms, RFID every 2000ms).
+        self._weight_history = deque(maxlen=8)
 
         # Timers
         self._tick_timer = QTimer(self)
@@ -63,7 +75,7 @@ class StockLoadingScreen(QWidget):
         root.setSpacing(0)
 
         # Header
-        header, _ = screen_header(self.app, "CARICO STOCK", Icon.ADD, C.SUCCESS)
+        header, _ = screen_header(self.app, "LOAD STOCK", Icon.ADD, C.SUCCESS)
         root.addWidget(header)
 
         # Stacked pages
@@ -86,13 +98,13 @@ class StockLoadingScreen(QWidget):
         layout.addSpacing(S.PAD)
 
         # Instructions
-        lbl = QLabel("Posiziona la latta sullo scaffale")
+        lbl = QLabel("Place the can on the shelf")
         lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
         lbl.setStyleSheet(f"color: {C.TEXT}; font-size: {F.H1}px; font-weight: bold;")
         lbl.setWordWrap(True)
         layout.addWidget(lbl)
 
-        sub = QLabel("Il sistema rileva automaticamente\nil prodotto tramite RFID")
+        sub = QLabel("The system automatically detects\nthe product via RFID")
         sub.setAlignment(Qt.AlignmentFlag.AlignCenter)
         sub.setStyleSheet(f"color: {C.TEXT_SEC}; font-size: {F.BODY}px;")
         sub.setWordWrap(True)
@@ -101,7 +113,7 @@ class StockLoadingScreen(QWidget):
         layout.addSpacing(S.PAD * 2)
 
         # Current shelf weight
-        self._weight_label = QLabel("Peso scaffale: --")
+        self._weight_label = QLabel("Shelf weight: --")
         self._weight_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self._weight_label.setStyleSheet(
             f"color: {C.TEXT_MUTED}; font-size: {F.SMALL}px;"
@@ -124,14 +136,14 @@ class StockLoadingScreen(QWidget):
         layout.addSpacing(S.GAP)
 
         # Title
-        title = QLabel("AGGIORNAMENTO INVENTARIO")
+        title = QLabel("INVENTORY UPDATE")
         title.setAlignment(Qt.AlignmentFlag.AlignCenter)
         title.setStyleSheet(
             f"color: {C.WARNING}; font-size: {F.H1}px; font-weight: bold;"
         )
         layout.addWidget(title)
 
-        subtitle = QLabel("NON TOCCARE LO SCAFFALE!")
+        subtitle = QLabel("DO NOT TOUCH THE SHELF!")
         subtitle.setAlignment(Qt.AlignmentFlag.AlignCenter)
         subtitle.setStyleSheet(
             f"color: {C.WARNING}; font-size: {F.H2}px; font-weight: bold;"
@@ -141,7 +153,7 @@ class StockLoadingScreen(QWidget):
         layout.addSpacing(S.PAD)
 
         # Countdown number
-        self._countdown_label = QLabel("5")
+        self._countdown_label = QLabel(str(_STABILIZE_SECONDS))
         self._countdown_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self._countdown_label.setStyleSheet(
             f"color: {C.TEXT}; font-size: {F.HERO + 12}px; font-weight: bold;"
@@ -150,7 +162,7 @@ class StockLoadingScreen(QWidget):
 
         # Progress bar
         self._progress = QProgressBar()
-        self._progress.setRange(0, 5)
+        self._progress.setRange(0, _STABILIZE_SECONDS)
         self._progress.setValue(0)
         self._progress.setTextVisible(False)
         self._progress.setFixedHeight(8)
@@ -206,7 +218,7 @@ class StockLoadingScreen(QWidget):
         layout.addWidget(badge, alignment=Qt.AlignmentFlag.AlignCenter)
         layout.addSpacing(S.PAD)
 
-        self._success_title = QLabel("CARICATA")
+        self._success_title = QLabel("LOADED")
         self._success_title.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self._success_title.setStyleSheet(
             f"color: {C.SUCCESS}; font-size: {F.H1}px; font-weight: bold;"
@@ -236,6 +248,7 @@ class StockLoadingScreen(QWidget):
     def on_enter(self):
         """Activate stock loading mode."""
         self._busy = False
+        self._weight_history.clear()
         self._pages.setCurrentIndex(_IDLE)
 
         # Set engine flag + callback
@@ -281,14 +294,24 @@ class StockLoadingScreen(QWidget):
             product_name = f"Tag: {tag_data.get('tag_uid', '???')}"
 
         logger.info(
-            f"Stock loading: can detected — {product_name}, lot={lot}, "
+            f"Stock loading: can detected - {product_name}, lot={lot}, "
             f"shelf={shelf_id}"
         )
 
-        # Snapshot weight baseline BEFORE can settles
-        self._weight_before = self.app.inventory_engine.get_shelf_weight_baseline(
-            shelf_id
-        )
+        # Use OLDEST weight in the buffer as baseline.
+        # The weight sensor updates every 500ms, RFID every 2s.
+        # By the time RFID fires, recent weight readings already include
+        # the can. The oldest reading (3-4s ago) is the clean baseline.
+        if len(self._weight_history) >= 2:
+            self._weight_before = self._weight_history[0]
+        else:
+            self._weight_before = self.app.inventory_engine.get_shelf_weight_baseline(
+                shelf_id
+            )
+
+        logger.info(f"Stock loading: baseline weight = {self._weight_before:.0f}g "
+                     f"(buffer size={len(self._weight_history)})")
+
         self._current_tag_data = tag_data
         self._busy = True
 
@@ -296,14 +319,14 @@ class StockLoadingScreen(QWidget):
         self._stab_product_name.setText(product_name)
         details = []
         if lot:
-            details.append(f"Lotto: {lot}")
+            details.append(f"Batch: {lot}")
         if tag_data.get("product_id"):
             details.append(f"ID: {tag_data['product_id'][:12]}...")
         self._stab_product_details.setText("  |  ".join(details) if details else "")
 
         # Start countdown
-        self._countdown = 5
-        self._countdown_label.setText("5")
+        self._countdown = _STABILIZE_SECONDS
+        self._countdown_label.setText(str(_STABILIZE_SECONDS))
         self._progress.setValue(0)
         self._pages.setCurrentIndex(_STABILIZING)
         self._countdown_timer.start(1000)
@@ -313,7 +336,7 @@ class StockLoadingScreen(QWidget):
     def _countdown_tick(self):
         self._countdown -= 1
         self._countdown_label.setText(str(max(0, self._countdown)))
-        self._progress.setValue(5 - self._countdown)
+        self._progress.setValue(_STABILIZE_SECONDS - self._countdown)
 
         if self._countdown <= 0:
             self._countdown_timer.stop()
@@ -349,8 +372,8 @@ class StockLoadingScreen(QWidget):
         slot_id = tag.get("slot_id", "")
 
         logger.info(
-            f"Stock loading: weight_before={self._weight_before:.0f}g, "
-            f"weight_after={weight_after:.0f}g, net={net_weight_g:.0f}g"
+            f"Stock loading: baseline={self._weight_before:.0f}g, "
+            f"after={weight_after:.0f}g, net={net_weight_g:.0f}g"
         )
 
         # Accept if delta > 100g (demo: any reasonable increase)
@@ -375,13 +398,15 @@ class StockLoadingScreen(QWidget):
             "product_id": product_id,
             "product_name": product_name,
             "ppg_code": tag.get("ppg_code", ""),
-            "product_type": "base_paint",  # default, resolved by DB method
-            "density_g_per_ml": 1.3,  # default, resolved by DB method
+            "product_type": "base_paint",
+            "density_g_per_ml": 1.3,
         }
 
         # Try to get accurate product info from catalog
-        if product_id and self.app.db:
-            prod = self.app.db.get_product_by_id(product_id)
+        if self.app.db:
+            prod = None
+            if product_id:
+                prod = self.app.db.get_product_by_id(product_id)
             if not prod and product_name:
                 prod = self.app.db.get_product_by_name(product_name)
             if prod:
@@ -398,7 +423,7 @@ class StockLoadingScreen(QWidget):
                 product_info, action="load", weight_g=net_weight_g
             )
             logger.info(
-                f"Stock loading: vessel_stock updated — "
+                f"Stock loading: vessel_stock updated - "
                 f"{product_name} +{net_weight_g:.0f}g"
             )
         except Exception as e:
@@ -414,7 +439,7 @@ class StockLoadingScreen(QWidget):
                 slot_id=slot_id,
                 tag_id=tag.get("tag_uid", ""),
                 data={
-                    "product_id": product_id,
+                    "product_id": product_info.get("product_id", product_id),
                     "product_name": product_name,
                     "ppg_code": product_info.get("ppg_code", ""),
                     "batch_number": lot,
@@ -441,55 +466,68 @@ class StockLoadingScreen(QWidget):
 
         # 5. Show success
         weight_kg = net_weight_g / 1000
-        self._success_title.setText(f"CARICATA")
-        self._success_weight.setText(f"{weight_kg:.1f} kg")
+        density = float(product_info.get("density_g_per_ml", 1.3) or 1.3)
+        liters = round(net_weight_g / (density * 1000), 2)
+        self._success_title.setText("LOADED")
+        self._success_title.setStyleSheet(
+            f"color: {C.SUCCESS}; font-size: {F.H1}px; font-weight: bold;"
+        )
+        self._success_weight.setText(f"{weight_kg:.1f} kg  ({liters:.2f} L)")
         self._success_product.setText(
-            f"{product_name}" + (f"\nLotto: {lot}" if lot else "")
+            f"{product_name}" + (f"\nBatch: {lot}" if lot else "")
         )
         self._pages.setCurrentIndex(_SUCCESS)
+
+        # 6. Clear weight buffer so next load gets a fresh baseline
+        #    (which will include THIS can's weight)
+        self._weight_history.clear()
 
         # Auto-return to idle after 3 seconds
         QTimer.singleShot(3000, self._return_to_idle)
 
     def _show_error(self):
         """Show brief error then return to idle."""
-        self._success_title.setText("ERRORE")
-        self._success_weight.setText("Nessun peso")
-        self._success_product.setText("Nessun cambiamento di peso rilevato")
+        self._success_title.setText("ERROR")
+        self._success_weight.setText("No weight")
+        self._success_product.setText("No weight change detected")
         self._success_title.setStyleSheet(
             f"color: {C.DANGER}; font-size: {F.H1}px; font-weight: bold;"
         )
         self._pages.setCurrentIndex(_SUCCESS)
+        # Clear buffer for retry
+        self._weight_history.clear()
         QTimer.singleShot(3000, self._return_to_idle)
 
     def _return_to_idle(self):
         """Reset to waiting state."""
+        # Save slot_id before clearing tag data (for LED clear)
+        slot_id = None
+        if self._current_tag_data:
+            slot_id = self._current_tag_data.get("slot_id")
+
         self._busy = False
         self._current_tag_data = None
         self._countdown_timer.stop()
 
-        # Reset success title style (may have been set to DANGER by error)
-        self._success_title.setStyleSheet(
-            f"color: {C.SUCCESS}; font-size: {F.H1}px; font-weight: bold;"
-        )
-
         # Clear LED
         try:
-            if self._current_tag_data and self._current_tag_data.get("slot_id"):
-                self.app.led.clear_slot(self._current_tag_data["slot_id"])
+            if slot_id:
+                self.app.led.clear_slot(slot_id)
         except Exception:
             pass
 
         self._pages.setCurrentIndex(_IDLE)
 
-    # ── Periodic tick (weight display in idle) ───────────────
+    # ── Periodic tick (weight display + buffer in idle) ──────
 
     def _tick(self):
-        """Update shelf weight display while idle."""
-        if self._pages.currentIndex() != _IDLE:
-            return
+        """Update shelf weight display and maintain weight buffer."""
         try:
             weight = self.app.inventory_engine.get_shelf_weight_baseline()
-            self._weight_label.setText(f"Peso scaffale: {weight:.0f} g")
+            # Only buffer weights while in IDLE (not during stabilization)
+            if self._pages.currentIndex() == _IDLE:
+                self._weight_history.append(weight)
+                self._weight_label.setText(f"Shelf weight: {weight:.0f} g")
         except Exception:
-            self._weight_label.setText("Peso scaffale: --")
+            if self._pages.currentIndex() == _IDLE:
+                self._weight_label.setText("Shelf weight: --")

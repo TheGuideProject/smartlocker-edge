@@ -310,7 +310,7 @@ class HomeScreen(QWidget):
              C.SECONDARY, "chart_viewer"),
             (Icon.INVENTORY, "INVENTORY", "Slot contents\n& stock levels",
              C.SUCCESS, "inventory"),
-            (Icon.ADD, "CARICO", "Carica latte\nsullo scaffale",
+            (Icon.ADD, "LOAD", "Load new cans\nonto shelf",
              C.PRIMARY, "stock_loading"),
             (Icon.SENSORS, "SENSORS", "Test RFID, weight\nLED & buzzer",
              C.ACCENT, "sensor_test"),
