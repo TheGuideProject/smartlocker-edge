@@ -251,19 +251,27 @@ class CloudClient:
                 }
 
                 # Check for out-of-range readings on each channel
+                # Threshold: -1000g to avoid false alarms from calibration drift
                 for ch in channels:
                     try:
                         reading = weight.read_weight(ch)
-                        if reading.grams < -100:
+                        if reading.grams < -1000:
                             health[f"weight_{ch}"] = {
                                 "status": "out_of_range",
-                                "message": f"Negative reading on {ch}: {reading.grams}g",
+                                "message": f"Negative reading on {ch}: {reading.grams:.0f}g",
                                 "last_value": round(reading.grams, 1),
                             }
                         elif reading.grams > 50000:
                             health[f"weight_{ch}"] = {
                                 "status": "out_of_range",
-                                "message": f"Excessive reading on {ch}: {reading.grams}g",
+                                "message": f"Excessive reading on {ch}: {reading.grams:.0f}g",
+                                "last_value": round(reading.grams, 1),
+                            }
+                        else:
+                            # Channel reading is normal — report OK
+                            health[f"weight_{ch}"] = {
+                                "status": "ok",
+                                "message": f"{ch}: {reading.grams:.0f}g",
                                 "last_value": round(reading.grams, 1),
                             }
                     except Exception:
