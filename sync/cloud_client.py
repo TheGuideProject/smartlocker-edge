@@ -338,8 +338,13 @@ class CloudClient:
     # HEARTBEAT
     # ============================================================
 
-    def send_heartbeat(self, uptime_hours: float = 0, sync_queue_depth: int = 0):
+    def send_heartbeat(self, uptime_hours: float = 0, sync_queue_depth: int = 0,
+                       vessel_stock: list = None):
         """Send a heartbeat with sensor health data to the cloud.
+
+        Args:
+            vessel_stock: Edge-measured inventory list from vessel_stock table.
+                          Included in system_info so cloud reflects edge truth.
 
         Returns:
             (success: bool, response_data: dict) — response may contain pending_commands.
@@ -352,6 +357,11 @@ class CloudClient:
         # Collect extended monitoring data
         health_data = self._collect_health_data()
         system_info = self._collect_system_info(sync_queue_depth)
+
+        # Include edge-measured vessel stock in system_info
+        # Cloud admin page reads this directly — edge is source of truth
+        if vessel_stock is not None:
+            system_info["vessel_stock"] = vessel_stock
 
         payload = {
             "software_version": _read_version(),

@@ -375,9 +375,27 @@ class SyncEngine:
             uptime_hours = (time.time() - self._start_time) / 3600
             unsynced = self.db.get_event_count(synced=False)
 
+            # Include edge-measured vessel stock in heartbeat
+            # so cloud dashboard always reflects edge truth
+            vessel_stock = []
+            try:
+                raw_stock = self.db.get_vessel_stock()
+                for item in raw_stock:
+                    vessel_stock.append({
+                        "product_id": item.get("product_id", ""),
+                        "product_name": item.get("product_name", ""),
+                        "product_type": item.get("product_type", "base_paint"),
+                        "current_liters": float(item.get("current_liters", 0) or 0),
+                        "density_g_per_ml": float(item.get("density_g_per_ml", 1.0) or 1.0),
+                        "colors_json": item.get("colors_json", "[]"),
+                    })
+            except Exception as e:
+                logger.debug(f"Could not collect vessel stock for heartbeat: {e}")
+
             success, hb_data = self.cloud.send_heartbeat(
                 uptime_hours=round(uptime_hours, 2),
                 sync_queue_depth=unsynced,
+                vessel_stock=vessel_stock,
             )
 
             # Process commands delivered via heartbeat response (fast delivery path)
