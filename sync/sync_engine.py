@@ -463,7 +463,7 @@ class SyncEngine:
             if vessel_inv is not None:
                 cloud_pids = set()
                 for item in vessel_inv:
-                    self.db.upsert_vessel_stock(item)
+                    self.db.upsert_vessel_stock_metadata(item)
                     pid = item.get("product_id", "")
                     if pid:
                         cloud_pids.add(pid)

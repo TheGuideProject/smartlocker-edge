@@ -547,6 +547,62 @@ class Database:
         )
         self.conn.commit()
 
+    def upsert_vessel_stock_metadata(self, stock: Dict[str, Any]) -> None:
+        """Update product metadata from cloud sync WITHOUT touching current_liters.
+
+        Edge is the source of truth for quantities (RFID + weight sensors).
+        Cloud sync should only update product name, type, density, and colors.
+        If the product doesn't exist locally yet, insert it with current_liters = 0.
+        """
+        product_id = stock["product_id"]
+        colors = stock.get("colors_json", [])
+        if isinstance(colors, str):
+            colors_str = colors
+        else:
+            colors_str = json.dumps(colors) if colors else "[]"
+
+        # Check if product already exists locally
+        cursor = self.conn.execute(
+            "SELECT product_id FROM vessel_stock WHERE product_id = ?",
+            (product_id,),
+        )
+        exists = cursor.fetchone()
+
+        if exists:
+            # Update metadata only — NEVER overwrite current_liters
+            self.conn.execute(
+                """UPDATE vessel_stock
+                   SET product_name = ?, product_type = ?,
+                       density_g_per_ml = ?, colors_json = ?,
+                       updated_at = CURRENT_TIMESTAMP
+                   WHERE product_id = ?""",
+                (
+                    stock["product_name"],
+                    stock.get("product_type", "base_paint"),
+                    stock.get("density_g_per_ml", 1.0),
+                    colors_str,
+                    product_id,
+                ),
+            )
+        else:
+            # New product from cloud — insert with current_liters = 0
+            # Edge will populate quantity when can is physically loaded
+            self.conn.execute(
+                """INSERT INTO vessel_stock
+                   (product_id, product_name, product_type,
+                    current_liters, initial_liters, density_g_per_ml,
+                    colors_json, updated_at)
+                   VALUES (?, ?, ?, 0.0, 0.0, ?, ?, CURRENT_TIMESTAMP)""",
+                (
+                    product_id,
+                    stock["product_name"],
+                    stock.get("product_type", "base_paint"),
+                    stock.get("density_g_per_ml", 1.0),
+                    colors_str,
+                ),
+            )
+        self.conn.commit()
+
     def get_vessel_stock(self) -> List[Dict[str, Any]]:
         """Get all vessel stock entries (from cloud sync + local barcode scans)."""
         cursor = self.conn.execute(

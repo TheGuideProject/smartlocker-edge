@@ -407,7 +407,7 @@ class InventoryScreen(QWidget):
         if qty > 0:
             density = float(item.get("density_g_per_ml", 1.0) or 1.0)
             weight_kg = qty * density
-            cloud_lbl = QLabel(f"{qty:.1f} L  |  {weight_kg:.1f} kg (cloud)")
+            cloud_lbl = QLabel(f"{qty:.1f} L  |  {weight_kg:.1f} kg")
             cloud_lbl.setStyleSheet(
                 f"font-size: {F.SMALL}px; color: {C.TEXT_SEC};"
             )

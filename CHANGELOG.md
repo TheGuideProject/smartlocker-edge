@@ -1,5 +1,20 @@
 # SmartLocker Edge — Changelog
 
+## [4.3.0] — 2026-04-06
+### Edge as Source of Truth
+- Cloud sync no longer overwrites edge-measured inventory quantities
+- New `upsert_vessel_stock_metadata()` — syncs product name, type, density, colors from cloud WITHOUT touching `current_liters`
+- Edge RFID + weight sensors are the single authoritative source for stock quantities
+- Removed "(cloud)" label from inventory screen — all data is edge-verified
+
+### Stock Loading (from previous sessions)
+- LOAD screen for onboard can loading via RFID + weight
+- 8s stabilization countdown with rolling weight buffer for accurate baseline
+- Fixed stuck screen (stock_loading_mode guard moved before was_removed check)
+- Fixed weight baseline drift on consecutive loads (deque buffer cleared after each)
+
+---
+
 ## [4.2.0] — 2026-04-02
 ### LED System
 - Rewrote LED driver with software blink thread (SOLID, BLINK_SLOW 1Hz, BLINK_FAST 2.5Hz)
